@@ -313,6 +313,7 @@
       target.push(tag);
     }
     renderStaging();
+    syncTagsToUrl();
     search(true);
   }
 
@@ -324,6 +325,7 @@
     }
     list.splice(index, 1);
     renderStaging();
+    syncTagsToUrl();
     search(true);
   }
 
@@ -347,6 +349,45 @@
     includeStageRow.hidden = includeTags.length === 0;
     excludeStageRow.hidden = excludeTags.length === 0;
     tagStaging.hidden = includeTags.length === 0 && excludeTags.length === 0;
+  }
+
+  // 从 URL 还原包含标签；详情页的标签链接带 tag/name/path 三个参数。
+  function restoreTagsFromUrl() {
+    const params = new URLSearchParams(window.location.search);
+    const ids = params.getAll("tag");
+    const names = params.getAll("name");
+    const paths = params.getAll("path");
+    for (let index = 0; index < ids.length; index += 1) {
+      const id = (ids[index] || "").trim().toLowerCase();
+      if (!UUID_PATTERN.test(id)) {
+        continue;
+      }
+      const path = paths[index] || "";
+      const name =
+        (names[index] || "").trim() ||
+        (path ? path.split("::").pop() : "") ||
+        "标签";
+      if (!includeTags.some((tag) => tag.id === id)) {
+        includeTags.push({ id, name, path });
+      }
+    }
+  }
+
+  // 让 URL 始终反映包含暂存区，刷新或分享后仍能还原。
+  function syncTagsToUrl() {
+    const params = new URLSearchParams();
+    for (const tag of includeTags) {
+      params.append("tag", tag.id);
+      params.append("name", tag.name);
+      if (tag.path) {
+        params.append("path", tag.path);
+      }
+    }
+    const query = params.toString();
+    const url = query
+      ? `${window.location.pathname}?${query}`
+      : window.location.pathname;
+    window.history.replaceState(null, "", url);
   }
 
   // 回车：把输入框里的完整路径加入包含或排除暂存区。
@@ -885,6 +926,8 @@
   addForm.addEventListener("submit", submitAdd);
   addEntities.addEventListener("input", updateEntityCount);
 
-  // 初次打开展示最近的 24 个作品。
+  // 初次打开展示最近的 24 个作品；URL 带标签时先还原包含条件。
+  restoreTagsFromUrl();
+  renderStaging();
   search(true);
 })();

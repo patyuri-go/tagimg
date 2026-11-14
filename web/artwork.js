@@ -98,27 +98,37 @@
 
     const fragment = document.createDocumentFragment();
     for (const tag of Array.isArray(tags) ? tags : []) {
-      const chip = document.createElement("span");
-      chip.className = "chip";
+      const path = pathById.get(tag.id);
+      // 标签 chip 直接跳到列表页，并把该标签作为包含条件。
+      const chip = document.createElement("a");
+      chip.className = "chip chip-link";
       chip.textContent = tag.name;
+      const params = new URLSearchParams();
+      params.set("tag", tag.id);
+      params.set("name", tag.name);
+      if (path) {
+        params.set("path", path);
+      }
+      chip.href = `/?${params.toString()}`;
 
       const detail = [];
       const aliases = Array.isArray(tag.aliases) ? tag.aliases : [];
       if (aliases.length > 0) {
         detail.push(`别名：${aliases[0]}`);
       }
-      const path = pathById.get(tag.id);
       if (path) {
         detail.push(`路径：${path}`);
       }
       if (tag.category) {
         detail.push(`分类：${tag.category}`);
       }
+      detail.push("点击搜索该标签");
       chip.title = detail.join("\n");
       fragment.appendChild(chip);
     }
     tagsEl.replaceChildren(fragment);
-    tagsSection.hidden = fragment.childNodes.length === 0;
+    // replaceChildren 会把 fragment 里的节点移走，必须看容器本身。
+    tagsSection.hidden = tagsEl.childElementCount === 0;
   }
 
   function renderArtists(artists) {
@@ -130,7 +140,7 @@
       fragment.appendChild(chip);
     }
     artistsEl.replaceChildren(fragment);
-    artistsSection.hidden = fragment.childNodes.length === 0;
+    artistsSection.hidden = artistsEl.childElementCount === 0;
   }
 
   function render(artwork) {
