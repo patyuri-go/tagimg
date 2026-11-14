@@ -1,0 +1,17 @@
+build/
+compile_commands.json
+vcpkg_installed/
+.venv/
+models/
+document/
+opencode.json
+config.json
+tmp/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.clang-format
+
+*.log
+.DS_Store

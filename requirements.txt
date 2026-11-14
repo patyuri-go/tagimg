@@ -1,0 +1,28 @@
+# Python 3.12 / CPU only
+# torch/torchvision 必须带 +cpu 后缀，从 PyTorch CPU 索引安装。
+# 若官方索引下载过慢，可从 https://mirrors.aliyun.com/pytorch-wheels/cpu/ 下载同名 wheel，
+# 并用 download.pytorch.org 索引页给出的 SHA-256 校验后再本地安装。
+--extra-index-url https://download.pytorch.org/whl/cpu
+
+torch==2.4.1+cpu
+torchvision==0.19.1+cpu
+
+numpy==1.26.4
+Pillow==10.4.0
+safetensors==0.4.5
+huggingface_hub==0.25.2
+timm==0.9.16
+onnxruntime==1.19.2
+
+fastapi==0.115.6
+uvicorn[standard]==0.32.1
+pydantic==2.9.2
+python-multipart==0.0.20
+
+six==1.16.0
+tqdm==4.66.5
+
+# cn_clip 单独安装（不使用 pip 依赖解析）：
+#   .venv/bin/pip install --no-deps cn_clip==1.6.0
+# 原因：cn_clip 硬钉 lmdb==1.3.0，而该版本只有 cp310 及更低版本 wheel，
+# 且推理链路 cn_clip.clip 不 import lmdb（lmdb 仅 training/eval/preprocess 使用）。

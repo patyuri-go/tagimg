@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>TagImg · 作品</title>
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%234f46e5'/%3E%3Ctext x='16' y='22' font-size='16' text-anchor='middle' fill='white' font-family='sans-serif'%3ET%3C/text%3E%3C/svg%3E"
+    />
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="topbar-inner">
+        <div class="brand">
+          <span class="brand-mark">T</span>
+          <span class="brand-name">TagImg</span>
+        </div>
+        <form id="search-form" class="search" role="search">
+          <label class="visually-hidden" for="search-input">按标题搜索</label>
+          <input
+            id="search-input"
+            type="search"
+            name="title"
+            placeholder="按标题搜索作品…"
+            autocomplete="off"
+            spellcheck="false"
+          />
+          <button type="submit">搜索</button>
+        </form>
+        <button
+          id="add-button"
+          class="add-button"
+          type="button"
+          aria-haspopup="dialog"
+        >
+          添加
+        </button>
+      </div>
+    </header>
+
+    <main class="page">
+      <div class="toolbar">
+        <p id="status" class="status" hidden></p>
+      </div>
+
+      <section id="results" class="grid" aria-live="polite"></section>
+
+      <div class="more">
+        <button id="load-more" class="load-more" type="button" hidden>
+          加载更多
+        </button>
+      </div>
+    </main>
+
+    <dialog id="add-dialog" class="dialog">
+      <form id="add-form" class="dialog-form">
+        <header class="dialog-head">
+          <h2>添加作品</h2>
+          <button
+            id="add-close"
+            class="icon-button"
+            type="button"
+            aria-label="关闭"
+          >
+            ×
+          </button>
+        </header>
+
+        <div class="dialog-body">
+          <label class="field">
+            <span class="field-label">标题</span>
+            <input
+              id="add-title"
+              type="text"
+              maxlength="500"
+              autocomplete="off"
+              placeholder="作品标题"
+            />
+          </label>
+
+          <label class="field">
+            <span class="field-label">
+              实体 ID
+              <span class="hint">一行一个，1–20 个</span>
+            </span>
+            <textarea
+              id="add-entities"
+              rows="5"
+              spellcheck="false"
+              placeholder="66102173-d129-4b65-b104-d5ac5e44f493&#10;5afd15d5-4202-4967-a1ac-7a42737746e4"
+            ></textarea>
+          </label>
+          <p id="entity-count" class="hint entity-count"></p>
+
+          <label class="field">
+            <span class="field-label">
+              描述
+              <span class="hint">可选</span>
+            </span>
+            <textarea id="add-description" rows="2"></textarea>
+          </label>
+
+          <label class="field">
+            <span class="field-label">
+              发布时间
+              <span class="hint">可选，如 2026-04-05T06:07:08Z</span>
+            </span>
+            <input
+              id="add-published"
+              type="text"
+              autocomplete="off"
+              spellcheck="false"
+              placeholder="2026-04-05T06:07:08Z"
+            />
+          </label>
+
+          <p id="add-error" class="form-error" hidden></p>
+        </div>
+
+        <footer class="dialog-foot">
+          <button id="add-cancel" class="button ghost" type="button">
+            取消
+          </button>
+          <button id="add-submit" class="button primary" type="submit">
+            添加
+          </button>
+        </footer>
+      </form>
+    </dialog>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,28 @@
+{
+  "name": "tagimg",
+  "version-string": "0.1.0",
+  "builtin-baseline": "320fc5d9fb666ebb1e76a08e63870e87a2063fe9",
+  "dependencies": [
+    {
+      "name": "cppgraphqlgen",
+      "default-features": false,
+      "features": [
+        "rapidjson",
+        "schemagen"
+      ]
+    },
+    "curl",
+    "drogon",
+    "nlohmann-json",
+    "pugixml",
+    {
+      "name": "soci",
+      "default-features": false,
+      "features": [
+        "postgresql"
+      ]
+    },
+    "spdlog",
+    "gtest"
+  ]
+}

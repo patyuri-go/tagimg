@@ -1,0 +1,183 @@
+schema {
+  query: Query
+  mutation: Mutation
+}
+
+"根查询类型。"
+type Query {
+  "服务健康检查，始终返回 ok。"
+  ping: String!
+
+  """
+  按作品 ID 查询单条作品。
+
+  ID 必须是合法 UUID，否则返回 INVALID_ARGUMENT 错误；
+  作品不存在时返回 null，而不是错误。
+  """
+  artwork(id: ID!): Artwork
+
+  """
+  分页查询已入库的作品。
+
+  所有过滤条件之间是 AND 关系；同一个数组内部是 OR 关系。
+  """
+  artworks(
+    "过滤条件，缺省时返回全部作品。"
+    filter: ArtworkFilter
+    "排序字段，默认按创建时间。"
+    orderBy: ArtworkOrderField = CREATED_AT
+    "排序方向，默认倒序。"
+    direction: SortDirection = DESC
+    "每页数量，1 到 100。"
+    limit: Int = 20
+    "跳过数量，0 到 10000。"
+    offset: Int = 0
+    "是否统计总数；为 true 时 total 才有值。"
+    includeTotal: Boolean = false
+  ): ArtworkConnection!
+}
+
+"作品过滤条件。"
+input ArtworkFilter {
+  "标题子串匹配，区分大小写按数据库默认排序规则，最多 500 个字符。"
+  title: String
+  "作品包含其中任一实体即命中。"
+  entityIds: [ID!]
+  "作品包含其中任一艺术家即命中。"
+  artistIds: [ID!]
+
+  "要求命中的标签 ID 集合。"
+  includeTagIds: [ID!]
+  "includeTagIds 的匹配方式，默认全部命中。"
+  includeMode: TagMatchMode = ALL
+  "includeTagIds 是否递归包含后代标签。"
+  expandIncludeTagDescendants: Boolean = false
+
+  "要求排除的标签 ID 集合，作品不能命中其中任何一个。"
+  excludeTagIds: [ID!]
+  "excludeTagIds 是否递归包含后代标签。"
+  expandExcludeTagDescendants: Boolean = false
+}
+
+"标签匹配方式。"
+enum TagMatchMode {
+  "每个请求的标签都至少命中一个。"
+  ALL
+  "命中任意一个请求的标签即可。"
+  ANY
+}
+
+"作品排序字段。"
+enum ArtworkOrderField {
+  CREATED_AT
+  PUBLISHED_AT
+  TITLE
+}
+
+"排序方向。"
+enum SortDirection {
+  ASC
+  DESC
+}
+
+"分页结果。"
+type ArtworkConnection {
+  "当前页的作品列表，没有结果时为空数组。"
+  items: [Artwork!]!
+  "是否还有下一页。"
+  hasMore: Boolean!
+  "总数量；includeTotal 为 false 时为 null，表示未统计。"
+  total: Int
+  "请求的每页数量。"
+  limit: Int!
+  "请求的跳过数量。"
+  offset: Int!
+}
+
+"已入库的作品。"
+type Artwork {
+  "作品 ID。"
+  id: ID!
+  "作品标题。"
+  title: String!
+  "作品描述，未填写时为 null。"
+  description: String
+  "原始发布时间，未知时为 null。"
+  publishedAt: String
+  "创建时间。"
+  createdAt: String!
+  "最后更新时间。"
+  updatedAt: String!
+
+  "图片数量。"
+  imageCount: Int!
+  "图片 ID 列表。"
+  imageIds: [ID!]!
+  "图片对应的实体 ID 列表。"
+  entityIds: [ID!]!
+
+  "标签 ID 列表。"
+  tagIds: [ID!]!
+  "标签列表，name 是该标签自身的标准名。"
+  tags: [Tag!]!
+  "标签路径列表，path 是从根标签到该标签自身、用 :: 连接的路径。"
+  tagPaths: [TagPath!]!
+
+  "艺术家 ID 列表。"
+  artistIds: [ID!]!
+  "艺术家列表。"
+  artists: [Artist!]!
+}
+
+"标签。"
+type Tag {
+  "标签 ID。"
+  id: ID!
+  "标签自身的标准名，例如 1girl。"
+  name: String!
+  "根标签的直接子节点名，例如 general；没有父标签时为 null。"
+  category: String
+}
+
+"标签路径。"
+type TagPath {
+  "对应的标签 ID。"
+  id: ID!
+  "从根标签到该标签自身的路径，例如 wd14scan::general::1girl。"
+  path: String!
+}
+
+"艺术家。"
+type Artist {
+  "艺术家 ID。"
+  id: ID!
+  "艺术家名称。"
+  name: String!
+}
+
+"提交一次图片扫描任务所需的参数。"
+input AddArtworkInput {
+  "图片实体 ID，1 到 20 个，不能重复。"
+  entityIds: [ID!]!
+  "作品标题，1 到 500 个字符。"
+  title: String!
+  "作品描述，缺省或 null 时写入 NULL。"
+  description: String
+  "RFC3339 格式的原始发布时间，缺省或 null 时写入 NULL。"
+  publishedAt: String
+  "已存在的标签 ID，直接挂到作品上。"
+  tagIds: [ID!]
+  "已存在的艺术家 ID，写入 artwork_artists。"
+  artistIds: [ID!]
+}
+
+"根变更类型。"
+type Mutation {
+  """
+  提交一个图片扫描任务，立即返回任务 ID。
+
+  任务完成瞬间即被丢弃，服务端不保存终态，也没有任务查询接口。
+  扫描结果只体现在后续的作品列表/搜索中，失败原因只写入服务端日志。
+  """
+  addArtwork(input: AddArtworkInput!): ID!
+}
