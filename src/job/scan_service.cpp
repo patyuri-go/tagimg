@@ -52,8 +52,8 @@ ScanService::~ScanService() {
   shutdown();
 }
 
-bool ScanService::submit(
-    AddRequest request,
+bool ScanService::submit_job(
+    std::unique_ptr<Job> job,
     std::function<void(const Result<JobOutcome, JobError> &)> on_done) {
   auto impl = impl_;
   {
@@ -63,21 +63,37 @@ bool ScanService::submit(
     }
   }
 
-  const JobId id = impl->add_worker->submit(
-      std::make_unique<AddJob>(std::move(request)), false,
-      [weak = std::weak_ptr<Impl>(impl),
-       on_done = std::move(on_done)](JobId job_id) {
-        auto locked = weak.lock();
-        if (!locked) {
-          return;
-        }
-        // 结果取走的同时删除记录；终态不会留在 worker 里。
-        const auto result = locked->add_worker->take_result(job_id);
-        if (on_done) {
-          on_done(result);
-        }
-      });
+  const JobId id =
+      impl->add_worker->submit(std::move(job), false,
+                               [weak = std::weak_ptr<Impl>(impl),
+                                on_done = std::move(on_done)](JobId job_id) {
+                                 auto locked = weak.lock();
+                                 if (!locked) {
+                                   return;
+                                 }
+                                 // 结果取走的同时删除记录；终态不会留在 worker
+                                 // 里。
+                                 const auto result =
+                                     locked->add_worker->take_result(job_id);
+                                 if (on_done) {
+                                   on_done(result);
+                                 }
+                               });
   return id != 0;
+}
+
+bool ScanService::submit(
+    AddRequest request,
+    std::function<void(const Result<JobOutcome, JobError> &)> on_done) {
+  return submit_job(std::make_unique<AddJob>(std::move(request)),
+                    std::move(on_done));
+}
+
+bool ScanService::submit(
+    ImageAddRequest request,
+    std::function<void(const Result<JobOutcome, JobError> &)> on_done) {
+  return submit_job(std::make_unique<AddJob>(std::move(request)),
+                    std::move(on_done));
 }
 
 void ScanService::shutdown() {

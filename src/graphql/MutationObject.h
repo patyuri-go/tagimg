@@ -26,6 +26,18 @@ concept applyAddArtwork = requires (TImpl impl, AddArtworkInput inputArg)
 };
 
 template <class TImpl>
+concept applyAddArtworkFromImagesWithParams = requires (TImpl impl, service::FieldParams params, AddArtworkFromImagesInput inputArg)
+{
+	{ service::AwaitableScalar<response::IdType> { impl.applyAddArtworkFromImages(std::move(params), std::move(inputArg)) } };
+};
+
+template <class TImpl>
+concept applyAddArtworkFromImages = requires (TImpl impl, AddArtworkFromImagesInput inputArg)
+{
+	{ service::AwaitableScalar<response::IdType> { impl.applyAddArtworkFromImages(std::move(inputArg)) } };
+};
+
+template <class TImpl>
 concept applyDeleteArtworkWithParams = requires (TImpl impl, service::FieldParams params, response::IdType idArg)
 {
 	{ service::AwaitableObject<std::shared_ptr<DeleteArtworkResult>> { impl.applyDeleteArtwork(std::move(params), std::move(idArg)) } };
@@ -35,6 +47,18 @@ template <class TImpl>
 concept applyDeleteArtwork = requires (TImpl impl, response::IdType idArg)
 {
 	{ service::AwaitableObject<std::shared_ptr<DeleteArtworkResult>> { impl.applyDeleteArtwork(std::move(idArg)) } };
+};
+
+template <class TImpl>
+concept applyUpdateArtworkWithParams = requires (TImpl impl, service::FieldParams params, response::IdType idArg, UpdateArtworkInput inputArg)
+{
+	{ service::AwaitableScalar<response::IdType> { impl.applyUpdateArtwork(std::move(params), std::move(idArg), std::move(inputArg)) } };
+};
+
+template <class TImpl>
+concept applyUpdateArtwork = requires (TImpl impl, response::IdType idArg, UpdateArtworkInput inputArg)
+{
+	{ service::AwaitableScalar<response::IdType> { impl.applyUpdateArtwork(std::move(idArg), std::move(inputArg)) } };
 };
 
 template <class TImpl>
@@ -56,7 +80,9 @@ class [[nodiscard("unnecessary construction")]] Mutation final
 {
 private:
 	[[nodiscard("unnecessary call")]] service::AwaitableResolver resolveAddArtwork(service::ResolverParams&& params) const;
+	[[nodiscard("unnecessary call")]] service::AwaitableResolver resolveAddArtworkFromImages(service::ResolverParams&& params) const;
 	[[nodiscard("unnecessary call")]] service::AwaitableResolver resolveDeleteArtwork(service::ResolverParams&& params) const;
+	[[nodiscard("unnecessary call")]] service::AwaitableResolver resolveUpdateArtwork(service::ResolverParams&& params) const;
 
 	[[nodiscard("unnecessary call")]] service::AwaitableResolver resolve_typename(service::ResolverParams&& params) const;
 
@@ -68,7 +94,9 @@ private:
 		virtual void endSelectionSet(const service::SelectionSetParams& params) const = 0;
 
 		[[nodiscard("unnecessary call")]] virtual service::AwaitableScalar<response::IdType> applyAddArtwork(service::FieldParams&& params, AddArtworkInput&& inputArg) const = 0;
+		[[nodiscard("unnecessary call")]] virtual service::AwaitableScalar<response::IdType> applyAddArtworkFromImages(service::FieldParams&& params, AddArtworkFromImagesInput&& inputArg) const = 0;
 		[[nodiscard("unnecessary call")]] virtual service::AwaitableObject<std::shared_ptr<DeleteArtworkResult>> applyDeleteArtwork(service::FieldParams&& params, response::IdType&& idArg) const = 0;
+		[[nodiscard("unnecessary call")]] virtual service::AwaitableScalar<response::IdType> applyUpdateArtwork(service::FieldParams&& params, response::IdType&& idArg, UpdateArtworkInput&& inputArg) const = 0;
 	};
 
 	template <class T>
@@ -93,6 +121,19 @@ private:
 			}
 		}
 
+		[[nodiscard("unnecessary call")]] service::AwaitableScalar<response::IdType> applyAddArtworkFromImages(service::FieldParams&& params, AddArtworkFromImagesInput&& inputArg) const override
+		{
+			if constexpr (methods::MutationHas::applyAddArtworkFromImagesWithParams<T>)
+			{
+				return { _pimpl->applyAddArtworkFromImages(std::move(params), std::move(inputArg)) };
+			}
+			else
+			{
+				static_assert(methods::MutationHas::applyAddArtworkFromImages<T>, R"msg(Mutation::applyAddArtworkFromImages is not implemented)msg");
+				return { _pimpl->applyAddArtworkFromImages(std::move(inputArg)) };
+			}
+		}
+
 		[[nodiscard("unnecessary call")]] service::AwaitableObject<std::shared_ptr<DeleteArtworkResult>> applyDeleteArtwork(service::FieldParams&& params, response::IdType&& idArg) const override
 		{
 			if constexpr (methods::MutationHas::applyDeleteArtworkWithParams<T>)
@@ -103,6 +144,19 @@ private:
 			{
 				static_assert(methods::MutationHas::applyDeleteArtwork<T>, R"msg(Mutation::applyDeleteArtwork is not implemented)msg");
 				return { _pimpl->applyDeleteArtwork(std::move(idArg)) };
+			}
+		}
+
+		[[nodiscard("unnecessary call")]] service::AwaitableScalar<response::IdType> applyUpdateArtwork(service::FieldParams&& params, response::IdType&& idArg, UpdateArtworkInput&& inputArg) const override
+		{
+			if constexpr (methods::MutationHas::applyUpdateArtworkWithParams<T>)
+			{
+				return { _pimpl->applyUpdateArtwork(std::move(params), std::move(idArg), std::move(inputArg)) };
+			}
+			else
+			{
+				static_assert(methods::MutationHas::applyUpdateArtwork<T>, R"msg(Mutation::applyUpdateArtwork is not implemented)msg");
+				return { _pimpl->applyUpdateArtwork(std::move(idArg), std::move(inputArg)) };
 			}
 		}
 

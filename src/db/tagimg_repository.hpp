@@ -58,9 +58,45 @@ struct ArtworkInput {
   std::vector<ArtworkTag> scanned_tags;
 };
 
+// 用已有图片新建作品的输入。
+//
+// image_ids 必须已经存在于 images 表；只建立 artwork_images 关联，
+// 不会插入新图片。rescan 为 true 时把扫描时间更新为当前时间。
+struct ImageArtworkInput {
+  std::string title;
+  std::vector<std::string> image_ids;
+
+  // 可选；std::nullopt 按 SQL NULL 写入。
+  std::optional<std::string> description;
+  std::optional<std::string> published_at;
+
+  // 调用方直接指定、不经过扫描的标签与艺术家 ID。
+  std::vector<std::string> tag_ids;
+  std::vector<std::string> artist_ids;
+
+  // 模型扫描得到、已按置信度过滤并去重的标签。
+  std::vector<ArtworkTag> scanned_tags;
+
+  // 是否更新图片的 scan_at。
+  bool rescan = false;
+};
+
 struct SavedArtwork {
   std::string artwork_id;
   std::vector<std::string> image_ids;
+};
+
+// 一次作品编辑的输入；至少要有一项实际变更。
+struct ArtworkUpdate {
+  // 为空表示不修改标题。
+  std::optional<std::string> title;
+  // 为空表示不修改发布时间。
+  std::optional<std::string> published_at;
+  // 为 true 时把发布时间清空；不能与 published_at 同时有值。
+  bool clear_published_at = false;
+  // 增量添加/移除的标签 ID；不存在的标签会报 UnknownTag。
+  std::vector<std::string> add_tag_ids;
+  std::vector<std::string> remove_tag_ids;
 };
 
 // 查询结果里的标签信息。
@@ -218,6 +254,14 @@ public:
   [[nodiscard]] Result<SavedArtwork, TagimgRepositoryError>
   save_artwork(const ArtworkInput &input) const;
 
+  // 用已有图片新建作品。图片不存在或 ID 重复时返回 InvalidArgument。
+  [[nodiscard]] Result<SavedArtwork, TagimgRepositoryError>
+  save_artwork_from_images(const ImageArtworkInput &input) const;
+
+  // 查询图片对应的实体 ID；图片不存在或 entity_id 为空时返回 std::nullopt。
+  [[nodiscard]] Result<std::optional<std::string>, TagimgRepositoryError>
+  find_image_entity_id(const std::string &image_id) const;
+
   // 按作品 ID 查询；不存在时返回 std::nullopt。
   [[nodiscard]] Result<std::optional<ArtworkSummary>, TagimgRepositoryError>
   find_artwork(const std::string &artwork_id) const;
@@ -234,6 +278,12 @@ public:
   // 作品不存在时 deleted=false，不视为错误。
   [[nodiscard]] Result<DeleteArtworkResult, TagimgRepositoryError>
   delete_artwork(const std::string &artwork_id) const;
+
+  // 更新作品的标题、发布时间和标签。
+  // 返回 true 表示找到并更新；false 表示作品不存在。
+  [[nodiscard]] Result<bool, TagimgRepositoryError>
+  update_artwork(const std::string &artwork_id,
+                 const ArtworkUpdate &update) const;
 
   // 分页列出不属于任何作品的图片，按入库时间倒序。
   [[nodiscard]] Result<OrphanImageResult, TagimgRepositoryError>

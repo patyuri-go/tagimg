@@ -11,6 +11,28 @@ bool is_digit(char value) {
   return value >= '0' && value <= '9';
 }
 
+// 检查 ID 列表的数量、UUID 形状与重复项，供 entityIds / imageIds 共用。
+std::optional<std::string> validate_id_list(const std::vector<std::string> &ids,
+                                            std::size_t max_items,
+                                            std::string_view field) {
+  if (ids.empty() || ids.size() > max_items) {
+    return std::string(field) + " must contain 1 to " +
+           std::to_string(max_items) + " items";
+  }
+  for (const std::string &id : ids) {
+    if (!is_uuid(id)) {
+      return std::string(field) + " contains an invalid uuid";
+    }
+  }
+
+  std::vector<std::string> sorted = ids;
+  std::sort(sorted.begin(), sorted.end());
+  if (std::adjacent_find(sorted.begin(), sorted.end()) != sorted.end()) {
+    return std::string(field) + " contains duplicate items";
+  }
+  return std::nullopt;
+}
+
 } // namespace
 
 std::size_t utf8_length(std::string_view text) {
@@ -43,22 +65,12 @@ bool has_timestamp_shape(std::string_view value) {
 
 std::optional<std::string>
 validate_entity_ids(const std::vector<std::string> &entity_ids) {
-  if (entity_ids.empty() || entity_ids.size() > kMaxEntityIds) {
-    return "entityIds must contain 1 to " + std::to_string(kMaxEntityIds) +
-           " items";
-  }
-  for (const std::string &entity_id : entity_ids) {
-    if (!is_uuid(entity_id)) {
-      return "entityIds contains an invalid uuid";
-    }
-  }
+  return validate_id_list(entity_ids, kMaxEntityIds, "entityIds");
+}
 
-  std::vector<std::string> sorted = entity_ids;
-  std::sort(sorted.begin(), sorted.end());
-  if (std::adjacent_find(sorted.begin(), sorted.end()) != sorted.end()) {
-    return "entityIds contains duplicate items";
-  }
-  return std::nullopt;
+std::optional<std::string>
+validate_image_ids(const std::vector<std::string> &image_ids) {
+  return validate_id_list(image_ids, kMaxImageIds, "imageIds");
 }
 
 std::optional<std::string> validate_title(const std::string &title) {
@@ -79,6 +91,27 @@ validate_uuid_list(const std::vector<std::string> &ids,
     if (!is_uuid(id)) {
       return std::string(field) + " contains an invalid uuid";
     }
+  }
+  return std::nullopt;
+}
+
+std::optional<std::string>
+validate_tag_update_ids(const std::vector<std::string> &ids,
+                        std::string_view field) {
+  if (ids.size() > kMaxArtworkEditTags) {
+    return std::string(field) + " must contain at most " +
+           std::to_string(kMaxArtworkEditTags) + " items";
+  }
+  for (const std::string &id : ids) {
+    if (!is_uuid(id)) {
+      return std::string(field) + " contains an invalid uuid";
+    }
+  }
+
+  std::vector<std::string> sorted = ids;
+  std::sort(sorted.begin(), sorted.end());
+  if (std::adjacent_find(sorted.begin(), sorted.end()) != sorted.end()) {
+    return std::string(field) + " contains duplicate items";
   }
   return std::nullopt;
 }

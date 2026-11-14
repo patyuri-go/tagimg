@@ -5,6 +5,7 @@
 #include <iostream>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -51,6 +52,35 @@ void log_line(std::string line) {
   static std::mutex mutex;
   std::lock_guard lock(mutex);
   std::cout << line << std::endl;
+}
+
+// add 任务结束时的统一日志；实体模式与图片模式共用。
+void log_add_outcome(const std::string &task_id,
+                     const Result<JobOutcome, JobError> &result) {
+  if (!result) {
+    log_line("[scan] task " + task_id +
+             " failed: " + std::string(to_string(result.error())));
+    return;
+  }
+  const auto *add = std::get_if<AddResult>(&*result);
+  if (add == nullptr) {
+    log_line("[scan] task " + task_id + " finished with an unexpected outcome");
+    return;
+  }
+  if (!add->failures.empty()) {
+    for (const ScanFailure &failure : add->failures) {
+      // 图片模式下 entity_id 可能为空，用 image_id 指代失败对象。
+      const std::string target = failure.image_id.empty()
+                                     ? "entity " + failure.entity_id
+                                     : "image " + failure.image_id;
+      log_line("[scan] task " + task_id + " failed for " + target + ": " +
+               std::string(to_string(failure.error)));
+    }
+    return;
+  }
+  log_line("[scan] task " + task_id + " finished: artwork " + add->artwork_id +
+           ", " + std::to_string(add->image_ids.size()) + " image(s), " +
+           std::to_string(add->tag_count) + " tag(s)");
 }
 
 std::string id_text(const IdType &id) {
@@ -104,6 +134,45 @@ AddRequest to_add_request(gql::tagimg::AddArtworkInput input) {
   if (const auto error = validate_uuid_list(request.artist_ids, "artistIds")) {
     fail("INVALID_ARGUMENT", *error);
   }
+  return request;
+}
+
+ImageAddRequest
+to_image_add_request(gql::tagimg::AddArtworkFromImagesInput input) {
+  ImageAddRequest request;
+  request.image_ids = id_list(input.imageIds);
+  if (const auto error = validate_image_ids(request.image_ids)) {
+    fail("INVALID_ARGUMENT", *error);
+  }
+
+  request.title = std::move(input.title);
+  if (const auto error = validate_title(request.title)) {
+    fail("INVALID_ARGUMENT", *error);
+  }
+
+  request.description = std::move(input.description);
+  if (input.publishedAt) {
+    if (const auto error = validate_published_at(*input.publishedAt)) {
+      fail("INVALID_ARGUMENT", *error);
+    }
+    request.published_at = std::move(*input.publishedAt);
+  }
+
+  if (input.tagIds) {
+    request.tag_ids = id_list(*input.tagIds);
+  }
+  if (const auto error = validate_uuid_list(request.tag_ids, "tagIds")) {
+    fail("INVALID_ARGUMENT", *error);
+  }
+
+  if (input.artistIds) {
+    request.artist_ids = id_list(*input.artistIds);
+  }
+  if (const auto error = validate_uuid_list(request.artist_ids, "artistIds")) {
+    fail("INVALID_ARGUMENT", *error);
+  }
+
+  request.rescan = input.rescan.value_or(false);
   return request;
 }
 
@@ -499,29 +568,30 @@ public:
     const bool accepted = scan_service_->submit(
         std::move(request),
         [task_id](const Result<JobOutcome, JobError> &result) {
-          if (!result) {
-            log_line("[scan] task " + task_id +
-                     " failed: " + std::string(to_string(result.error())));
-            return;
-          }
-          const auto *add = std::get_if<AddResult>(&*result);
-          if (add == nullptr) {
-            log_line("[scan] task " + task_id +
-                     " finished with an unexpected outcome");
-            return;
-          }
-          if (!add->failures.empty()) {
-            for (const ScanFailure &failure : add->failures) {
-              log_line("[scan] task " + task_id + " failed for entity " +
-                       failure.entity_id + ": " +
-                       std::string(to_string(failure.error)));
-            }
-            return;
-          }
-          log_line("[scan] task " + task_id + " finished: artwork " +
-                   add->artwork_id + ", " +
-                   std::to_string(add->image_ids.size()) + " image(s), " +
-                   std::to_string(add->tag_count) + " tag(s)");
+          log_add_outcome(task_id, result);
+        });
+
+    if (!accepted) {
+      fail("SERVICE_UNAVAILABLE", "job worker is not running");
+    }
+    return gql::service::AwaitableScalar<IdType>(
+        IdType(IdType::OpaqueString(task_id)));
+  }
+
+  gql::service::AwaitableScalar<IdType> applyAddArtworkFromImages(
+      gql::tagimg::AddArtworkFromImagesInput input) const {
+    ImageAddRequest request = to_image_add_request(std::move(input));
+    const std::string task_id = drogon::utils::getUuid();
+    const std::size_t image_count = request.image_ids.size();
+
+    log_line("[scan] task " + task_id +
+             " queued: " + std::to_string(image_count) +
+             " image(s), rescan=" + (request.rescan ? "true" : "false"));
+
+    const bool accepted = scan_service_->submit(
+        std::move(request),
+        [task_id](const Result<JobOutcome, JobError> &result) {
+          log_add_outcome(task_id, result);
         });
 
     if (!accepted) {
@@ -763,6 +833,89 @@ public:
             std::make_shared<DeleteArtworkResultModel>(*result)));
   }
 
+  gql::service::AwaitableScalar<IdType>
+  applyUpdateArtwork(IdType id, gql::tagimg::UpdateArtworkInput input) const {
+    const std::string text = id_text(id);
+    if (!is_uuid(text)) {
+      fail("INVALID_ARGUMENT", "id must be a uuid string");
+    }
+
+    ArtworkUpdate update;
+    bool has_change = false;
+
+    if (input.title) {
+      update.title = std::move(*input.title);
+      if (const auto error = validate_title(*update.title)) {
+        fail("INVALID_ARGUMENT", *error);
+      }
+      has_change = true;
+    }
+
+    if (input.publishedAt) {
+      if (const auto error = validate_published_at(*input.publishedAt)) {
+        fail("INVALID_ARGUMENT", *error);
+      }
+      update.published_at = std::move(*input.publishedAt);
+      has_change = true;
+    }
+
+    if (input.clearPublishedAt.value_or(false)) {
+      update.clear_published_at = true;
+      has_change = true;
+    }
+    if (update.clear_published_at && update.published_at) {
+      fail("INVALID_ARGUMENT",
+           "publishedAt and clearPublishedAt cannot be used together");
+    }
+
+    if (input.addTagIds) {
+      update.add_tag_ids = id_list(*input.addTagIds);
+      if (const auto error =
+              validate_tag_update_ids(update.add_tag_ids, "addTagIds")) {
+        fail("INVALID_ARGUMENT", *error);
+      }
+      has_change = has_change || !update.add_tag_ids.empty();
+    }
+    if (input.removeTagIds) {
+      update.remove_tag_ids = id_list(*input.removeTagIds);
+      if (const auto error =
+              validate_tag_update_ids(update.remove_tag_ids, "removeTagIds")) {
+        fail("INVALID_ARGUMENT", *error);
+      }
+      has_change = has_change || !update.remove_tag_ids.empty();
+    }
+
+    if (update.add_tag_ids.size() + update.remove_tag_ids.size() >
+        kMaxArtworkEditTags) {
+      fail("INVALID_ARGUMENT", "tag changes must contain at most " +
+                                   std::to_string(kMaxArtworkEditTags) +
+                                   " items");
+    }
+
+    // 同一个标签不能既添加又移除，否则结果取决于执行顺序。
+    const std::set<std::string> add_tags(update.add_tag_ids.begin(),
+                                         update.add_tag_ids.end());
+    for (const std::string &tag_id : update.remove_tag_ids) {
+      if (add_tags.count(tag_id) > 0) {
+        fail("INVALID_ARGUMENT", "addTagIds and removeTagIds must not overlap");
+      }
+    }
+
+    if (!has_change) {
+      fail("INVALID_ARGUMENT", "at least one change is required");
+    }
+
+    const auto result = repository_->update_artwork(text, update);
+    if (!result) {
+      fail_repository(result.error());
+    }
+    if (!*result) {
+      fail("NOT_FOUND", "artwork not found");
+    }
+
+    return id_scalar(text);
+  }
+
 private:
   std::shared_ptr<ScanService> scan_service_;
   std::shared_ptr<const TagimgRepository> repository_;
@@ -796,7 +949,8 @@ Value attach_error_codes(Value response) {
   static constexpr std::string_view kWrapper = "unknown error: ";
   static constexpr std::string_view kCodes[] = {
       "INVALID_ARGUMENT", "SERVICE_UNAVAILABLE", "INTERNAL_ERROR",
-      "QUERY_FAILED",     "UNKNOWN_TAG",         "UNKNOWN_ARTIST"};
+      "QUERY_FAILED",     "UNKNOWN_TAG",         "UNKNOWN_ARTIST",
+      "NOT_FOUND"};
 
   auto fields = response.release<MapType>();
   for (auto &[name, value] : fields) {

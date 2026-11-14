@@ -330,6 +330,88 @@ Argument<tagimg::AddArtworkInput>::convert(const response::Value &value) {
       std::move(valueTagIds),      std::move(valueArtistIds)};
 }
 
+template <>
+tagimg::AddArtworkFromImagesInput
+Argument<tagimg::AddArtworkFromImagesInput>::convert(
+    const response::Value &value) {
+  const auto defaultValue = []() {
+    response::Value values(response::Type::Map);
+    response::Value entry;
+
+    entry = response::Value(false);
+    values.emplace_back("rescan", std::move(entry));
+
+    return values;
+  }();
+
+  auto valueImageIds = service::ModifiedArgument<response::IdType>::require<
+      service::TypeModifier::List>("imageIds", value);
+  auto valueTitle =
+      service::ModifiedArgument<std::string>::require("title", value);
+  auto valueDescription = service::ModifiedArgument<std::string>::require<
+      service::TypeModifier::Nullable>("description", value);
+  auto valuePublishedAt = service::ModifiedArgument<std::string>::require<
+      service::TypeModifier::Nullable>("publishedAt", value);
+  auto valueTagIds = service::ModifiedArgument<response::IdType>::require<
+      service::TypeModifier::Nullable, service::TypeModifier::List>("tagIds",
+                                                                    value);
+  auto valueArtistIds = service::ModifiedArgument<response::IdType>::require<
+      service::TypeModifier::Nullable, service::TypeModifier::List>("artistIds",
+                                                                    value);
+  auto pairRescan =
+      service::ModifiedArgument<bool>::find<service::TypeModifier::Nullable>(
+          "rescan", value);
+  auto valueRescan =
+      (pairRescan.second
+           ? std::move(pairRescan.first)
+           : service::ModifiedArgument<bool>::require<
+                 service::TypeModifier::Nullable>("rescan", defaultValue));
+
+  return tagimg::AddArtworkFromImagesInput{
+      std::move(valueImageIds),    std::move(valueTitle),
+      std::move(valueDescription), std::move(valuePublishedAt),
+      std::move(valueTagIds),      std::move(valueArtistIds),
+      std::move(valueRescan)};
+}
+
+template <>
+tagimg::UpdateArtworkInput
+Argument<tagimg::UpdateArtworkInput>::convert(const response::Value &value) {
+  const auto defaultValue = []() {
+    response::Value values(response::Type::Map);
+    response::Value entry;
+
+    entry = response::Value(false);
+    values.emplace_back("clearPublishedAt", std::move(entry));
+
+    return values;
+  }();
+
+  auto valueTitle = service::ModifiedArgument<std::string>::require<
+      service::TypeModifier::Nullable>("title", value);
+  auto valuePublishedAt = service::ModifiedArgument<std::string>::require<
+      service::TypeModifier::Nullable>("publishedAt", value);
+  auto pairClearPublishedAt =
+      service::ModifiedArgument<bool>::find<service::TypeModifier::Nullable>(
+          "clearPublishedAt", value);
+  auto valueClearPublishedAt =
+      (pairClearPublishedAt.second ? std::move(pairClearPublishedAt.first)
+                                   : service::ModifiedArgument<bool>::require<
+                                         service::TypeModifier::Nullable>(
+                                         "clearPublishedAt", defaultValue));
+  auto valueAddTagIds = service::ModifiedArgument<response::IdType>::require<
+      service::TypeModifier::Nullable, service::TypeModifier::List>("addTagIds",
+                                                                    value);
+  auto valueRemoveTagIds = service::ModifiedArgument<response::IdType>::require<
+      service::TypeModifier::Nullable, service::TypeModifier::List>(
+      "removeTagIds", value);
+
+  return tagimg::UpdateArtworkInput{
+      std::move(valueTitle), std::move(valuePublishedAt),
+      std::move(valueClearPublishedAt), std::move(valueAddTagIds),
+      std::move(valueRemoveTagIds)};
+}
+
 } // namespace service
 
 namespace tagimg {
@@ -522,6 +604,142 @@ AddArtworkInput &AddArtworkInput::operator=(AddArtworkInput &&other) noexcept {
   return *this;
 }
 
+AddArtworkFromImagesInput::AddArtworkFromImagesInput() noexcept
+    : imageIds{}, title{}, description{}, publishedAt{}, tagIds{}, artistIds{},
+      rescan{} {
+  // Explicit definition to prevent ODR violations when LTO is enabled.
+}
+
+AddArtworkFromImagesInput::AddArtworkFromImagesInput(
+    std::vector<response::IdType> imageIdsArg, std::string titleArg,
+    std::optional<std::string> descriptionArg,
+    std::optional<std::string> publishedAtArg,
+    std::optional<std::vector<response::IdType>> tagIdsArg,
+    std::optional<std::vector<response::IdType>> artistIdsArg,
+    std::optional<bool> rescanArg) noexcept
+    : imageIds{std::move(imageIdsArg)}, title{std::move(titleArg)},
+      description{std::move(descriptionArg)},
+      publishedAt{std::move(publishedAtArg)}, tagIds{std::move(tagIdsArg)},
+      artistIds{std::move(artistIdsArg)}, rescan{std::move(rescanArg)} {
+}
+
+AddArtworkFromImagesInput::AddArtworkFromImagesInput(
+    const AddArtworkFromImagesInput &other)
+    : imageIds{service::ModifiedArgument<response::IdType>::duplicate<
+          service::TypeModifier::List>(other.imageIds)},
+      title{service::ModifiedArgument<std::string>::duplicate(other.title)},
+      description{service::ModifiedArgument<std::string>::duplicate<
+          service::TypeModifier::Nullable>(other.description)},
+      publishedAt{service::ModifiedArgument<std::string>::duplicate<
+          service::TypeModifier::Nullable>(other.publishedAt)},
+      tagIds{service::ModifiedArgument<response::IdType>::duplicate<
+          service::TypeModifier::Nullable, service::TypeModifier::List>(
+          other.tagIds)},
+      artistIds{service::ModifiedArgument<response::IdType>::duplicate<
+          service::TypeModifier::Nullable, service::TypeModifier::List>(
+          other.artistIds)},
+      rescan{service::ModifiedArgument<bool>::duplicate<
+          service::TypeModifier::Nullable>(other.rescan)} {
+}
+
+AddArtworkFromImagesInput::AddArtworkFromImagesInput(
+    AddArtworkFromImagesInput &&other) noexcept
+    : imageIds{std::move(other.imageIds)}, title{std::move(other.title)},
+      description{std::move(other.description)},
+      publishedAt{std::move(other.publishedAt)},
+      tagIds{std::move(other.tagIds)}, artistIds{std::move(other.artistIds)},
+      rescan{std::move(other.rescan)} {
+}
+
+AddArtworkFromImagesInput::~AddArtworkFromImagesInput() {
+  // Explicit definition to prevent ODR violations when LTO is enabled.
+}
+
+AddArtworkFromImagesInput &
+AddArtworkFromImagesInput::operator=(const AddArtworkFromImagesInput &other) {
+  AddArtworkFromImagesInput value{other};
+
+  std::swap(*this, value);
+
+  return *this;
+}
+
+AddArtworkFromImagesInput &AddArtworkFromImagesInput::operator=(
+    AddArtworkFromImagesInput &&other) noexcept {
+  imageIds = std::move(other.imageIds);
+  title = std::move(other.title);
+  description = std::move(other.description);
+  publishedAt = std::move(other.publishedAt);
+  tagIds = std::move(other.tagIds);
+  artistIds = std::move(other.artistIds);
+  rescan = std::move(other.rescan);
+
+  return *this;
+}
+
+UpdateArtworkInput::UpdateArtworkInput() noexcept
+    : title{}, publishedAt{}, clearPublishedAt{}, addTagIds{}, removeTagIds{} {
+  // Explicit definition to prevent ODR violations when LTO is enabled.
+}
+
+UpdateArtworkInput::UpdateArtworkInput(
+    std::optional<std::string> titleArg,
+    std::optional<std::string> publishedAtArg,
+    std::optional<bool> clearPublishedAtArg,
+    std::optional<std::vector<response::IdType>> addTagIdsArg,
+    std::optional<std::vector<response::IdType>> removeTagIdsArg) noexcept
+    : title{std::move(titleArg)}, publishedAt{std::move(publishedAtArg)},
+      clearPublishedAt{std::move(clearPublishedAtArg)},
+      addTagIds{std::move(addTagIdsArg)},
+      removeTagIds{std::move(removeTagIdsArg)} {
+}
+
+UpdateArtworkInput::UpdateArtworkInput(const UpdateArtworkInput &other)
+    : title{service::ModifiedArgument<std::string>::duplicate<
+          service::TypeModifier::Nullable>(other.title)},
+      publishedAt{service::ModifiedArgument<std::string>::duplicate<
+          service::TypeModifier::Nullable>(other.publishedAt)},
+      clearPublishedAt{service::ModifiedArgument<bool>::duplicate<
+          service::TypeModifier::Nullable>(other.clearPublishedAt)},
+      addTagIds{service::ModifiedArgument<response::IdType>::duplicate<
+          service::TypeModifier::Nullable, service::TypeModifier::List>(
+          other.addTagIds)},
+      removeTagIds{service::ModifiedArgument<response::IdType>::duplicate<
+          service::TypeModifier::Nullable, service::TypeModifier::List>(
+          other.removeTagIds)} {
+}
+
+UpdateArtworkInput::UpdateArtworkInput(UpdateArtworkInput &&other) noexcept
+    : title{std::move(other.title)}, publishedAt{std::move(other.publishedAt)},
+      clearPublishedAt{std::move(other.clearPublishedAt)},
+      addTagIds{std::move(other.addTagIds)},
+      removeTagIds{std::move(other.removeTagIds)} {
+}
+
+UpdateArtworkInput::~UpdateArtworkInput() {
+  // Explicit definition to prevent ODR violations when LTO is enabled.
+}
+
+UpdateArtworkInput &
+UpdateArtworkInput::operator=(const UpdateArtworkInput &other) {
+  UpdateArtworkInput value{other};
+
+  std::swap(*this, value);
+
+  return *this;
+}
+
+UpdateArtworkInput &
+UpdateArtworkInput::operator=(UpdateArtworkInput &&other) noexcept {
+  title = std::move(other.title);
+  publishedAt = std::move(other.publishedAt);
+  clearPublishedAt = std::move(other.clearPublishedAt);
+  addTagIds = std::move(other.addTagIds);
+  removeTagIds = std::move(other.removeTagIds);
+
+  return *this;
+}
+
 Operations::Operations(std::shared_ptr<object::Query> query,
                        std::shared_ptr<object::Mutation> mutation)
     : service::Request(
@@ -550,6 +768,15 @@ void AddTypesToSchema(const std::shared_ptr<schema::Schema> &schema) {
       R"gql(AddArtworkInput)gql"sv,
       R"md(提交一次图片扫描任务所需的参数。)md"sv);
   schema->AddType(R"gql(AddArtworkInput)gql"sv, typeAddArtworkInput);
+  auto typeAddArtworkFromImagesInput = schema::InputObjectType::Make(
+      R"gql(AddArtworkFromImagesInput)gql"sv,
+      R"md(用已入库的图片新建作品所需的参数。)md"sv);
+  schema->AddType(R"gql(AddArtworkFromImagesInput)gql"sv,
+                  typeAddArtworkFromImagesInput);
+  auto typeUpdateArtworkInput = schema::InputObjectType::Make(
+      R"gql(UpdateArtworkInput)gql"sv,
+      R"md(更新作品所需的参数；至少要提供一项变更。)md"sv);
+  schema->AddType(R"gql(UpdateArtworkInput)gql"sv, typeUpdateArtworkInput);
   auto typeQuery =
       schema::ObjectType::Make(R"gql(Query)gql"sv, R"md(根查询类型。)md"sv);
   schema->AddType(R"gql(Query)gql"sv, typeQuery);
@@ -698,6 +925,78 @@ void AddTypesToSchema(const std::shared_ptr<schema::Schema> &schema) {
        schema::InputValue::Make(
            R"gql(artistIds)gql"sv,
            R"md(已存在的艺术家 ID，写入 artwork_artists。)md"sv,
+           schema->WrapType(
+               introspection::TypeKind::LIST,
+               schema->WrapType(introspection::TypeKind::NON_NULL,
+                                schema->LookupType(R"gql(ID)gql"sv))),
+           R"gql()gql"sv)});
+  typeAddArtworkFromImagesInput->AddInputValues(
+      {schema::InputValue::Make(
+           R"gql(imageIds)gql"sv,
+           R"md(图片 ID，1 到 20 个，不能重复。图片可以已经属于其他作品。)md"sv,
+           schema->WrapType(
+               introspection::TypeKind::NON_NULL,
+               schema->WrapType(
+                   introspection::TypeKind::LIST,
+                   schema->WrapType(introspection::TypeKind::NON_NULL,
+                                    schema->LookupType(R"gql(ID)gql"sv)))),
+           R"gql()gql"sv),
+       schema::InputValue::Make(
+           R"gql(title)gql"sv, R"md(作品标题，1 到 500 个字符。)md"sv,
+           schema->WrapType(introspection::TypeKind::NON_NULL,
+                            schema->LookupType(R"gql(String)gql"sv)),
+           R"gql()gql"sv),
+       schema::InputValue::Make(R"gql(description)gql"sv,
+                                R"md(作品描述，缺省或 null 时写入 NULL。)md"sv,
+                                schema->LookupType(R"gql(String)gql"sv),
+                                R"gql()gql"sv),
+       schema::InputValue::Make(
+           R"gql(publishedAt)gql"sv,
+           R"md(RFC3339 格式的原始发布时间，缺省或 null 时写入 NULL。)md"sv,
+           schema->LookupType(R"gql(String)gql"sv), R"gql()gql"sv),
+       schema::InputValue::Make(
+           R"gql(tagIds)gql"sv, R"md(已存在的标签 ID，直接挂到作品上。)md"sv,
+           schema->WrapType(
+               introspection::TypeKind::LIST,
+               schema->WrapType(introspection::TypeKind::NON_NULL,
+                                schema->LookupType(R"gql(ID)gql"sv))),
+           R"gql()gql"sv),
+       schema::InputValue::Make(
+           R"gql(artistIds)gql"sv,
+           R"md(已存在的艺术家 ID，写入 artwork_artists。)md"sv,
+           schema->WrapType(
+               introspection::TypeKind::LIST,
+               schema->WrapType(introspection::TypeKind::NON_NULL,
+                                schema->LookupType(R"gql(ID)gql"sv))),
+           R"gql()gql"sv),
+       schema::InputValue::Make(
+           R"gql(rescan)gql"sv,
+           R"md(是否重新扫描这些图片；默认 false，只使用 tagIds。)md"sv,
+           schema->LookupType(R"gql(Boolean)gql"sv), R"gql(false)gql"sv)});
+  typeUpdateArtworkInput->AddInputValues(
+      {schema::InputValue::Make(
+           R"gql(title)gql"sv,
+           R"md(新标题；省略或 null 表示不修改，1 到 500 个字符。)md"sv,
+           schema->LookupType(R"gql(String)gql"sv), R"gql()gql"sv),
+       schema::InputValue::Make(
+           R"gql(publishedAt)gql"sv,
+           R"md(新发布时间，RFC3339；省略或 null 表示不修改。)md"sv,
+           schema->LookupType(R"gql(String)gql"sv), R"gql()gql"sv),
+       schema::InputValue::Make(
+           R"gql(clearPublishedAt)gql"sv,
+           R"md(为 true 时清空发布时间；不能与 publishedAt 同时提供。)md"sv,
+           schema->LookupType(R"gql(Boolean)gql"sv), R"gql(false)gql"sv),
+       schema::InputValue::Make(
+           R"gql(addTagIds)gql"sv,
+           R"md(要添加的标签 ID；已经挂在该作品上的会忽略。)md"sv,
+           schema->WrapType(
+               introspection::TypeKind::LIST,
+               schema->WrapType(introspection::TypeKind::NON_NULL,
+                                schema->LookupType(R"gql(ID)gql"sv))),
+           R"gql()gql"sv),
+       schema::InputValue::Make(
+           R"gql(removeTagIds)gql"sv,
+           R"md(要移除的标签 ID；没有挂在该作品上的会忽略。)md"sv,
            schema->WrapType(
                introspection::TypeKind::LIST,
                schema->WrapType(introspection::TypeKind::NON_NULL,

@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>TagImg · 游离图片</title>
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%234f46e5'/%3E%3Ctext x='16' y='22' font-size='16' text-anchor='middle' fill='white' font-family='sans-serif'%3ET%3C/text%3E%3C/svg%3E"
+    />
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="topbar-inner">
+        <a class="brand" href="/">
+          <span class="brand-mark">T</span>
+          <span class="brand-name">TagImg</span>
+        </a>
+        <div class="topbar-actions">
+          <a class="top-link" href="/">返回作品列表</a>
+          <button
+            id="orphan-add-button"
+            class="add-button"
+            type="button"
+            aria-haspopup="dialog"
+            disabled
+          >
+            添加
+          </button>
+        </div>
+      </div>
+    </header>
+
+    <main class="page">
+      <header class="orphan-head">
+        <h1 class="orphan-title">游离图片</h1>
+        <p class="orphan-subtitle">不属于任何作品的图片</p>
+      </header>
+
+      <p id="orphan-status" class="status" hidden></p>
+      <p id="orphan-notice" class="status" hidden></p>
+
+      <section
+        id="orphan-grid"
+        class="grid orphan-grid"
+        aria-live="polite"
+      ></section>
+
+      <p id="orphan-empty" class="status" hidden>还没有游离图片</p>
+      <p id="orphan-scroll-status" class="scroll-status" hidden></p>
+    </main>
+
+    <dialog id="orphan-add-dialog" class="dialog">
+      <form id="orphan-add-form" class="dialog-form">
+        <header class="dialog-head">
+          <h2>用游离图片创建作品</h2>
+          <button
+            id="orphan-add-close"
+            class="icon-button"
+            type="button"
+            aria-label="关闭"
+          >
+            ×
+          </button>
+        </header>
+
+        <div class="dialog-body">
+          <div class="field">
+            <span class="field-label">添加模式</span>
+            <div class="mode-options" role="radiogroup" aria-label="添加模式">
+              <label class="mode-option">
+                <input
+                  type="radio"
+                  name="orphan-add-mode"
+                  value="artwork"
+                  checked
+                />
+                <span>作品模式</span>
+              </label>
+              <label class="mode-option">
+                <input type="radio" name="orphan-add-mode" value="oneimg" />
+                <span>单图模式</span>
+              </label>
+            </div>
+            <span id="orphan-add-mode-hint" class="hint">
+              所有选中图片合成一个作品
+            </span>
+          </div>
+
+          <div class="field">
+            <span class="field-label">已选图片</span>
+            <p id="orphan-add-count" class="selection-summary">
+              已选择 0 张图片
+            </p>
+          </div>
+
+          <label class="field">
+            <span class="field-label">
+              统一标题
+              <span id="orphan-add-title-hint" class="hint">必填</span>
+            </span>
+            <input
+              id="orphan-add-title"
+              type="text"
+              maxlength="500"
+              autocomplete="off"
+              placeholder="作品标题"
+            />
+          </label>
+
+          <div class="field">
+            <label class="field-label" for="orphan-add-tag-input">
+              标签
+              <span class="hint">可选，应用到每个作品</span>
+            </label>
+            <div class="tag-search dialog-tag-search">
+              <input
+                id="orphan-add-tag-input"
+                type="search"
+                placeholder="输入标签名或路径…"
+                autocomplete="off"
+                spellcheck="false"
+                role="combobox"
+                aria-autocomplete="list"
+                aria-expanded="false"
+                aria-controls="orphan-add-tag-suggest"
+                title="回车加入标签列表"
+              />
+              <ul
+                id="orphan-add-tag-suggest"
+                class="tag-suggest"
+                role="listbox"
+                hidden
+              ></ul>
+            </div>
+            <div
+              id="orphan-add-tag-stage"
+              class="tag-stage-list dialog-tag-stage"
+              hidden
+            ></div>
+          </div>
+
+          <label class="field">
+            <span class="field-label">
+              描述
+              <span class="hint">可选</span>
+            </span>
+            <textarea id="orphan-add-description" rows="2"></textarea>
+          </label>
+
+          <label id="orphan-add-published-field" class="field">
+            <span class="field-label">
+              发布时间
+              <span class="hint">可选，如 2026-04-05T06:07:08Z</span>
+            </span>
+            <input
+              id="orphan-add-published"
+              type="text"
+              autocomplete="off"
+              spellcheck="false"
+              placeholder="2026-04-05T06:07:08Z"
+            />
+          </label>
+
+          <label class="field checkbox-field">
+            <input id="orphan-add-rescan" type="checkbox" />
+            <span class="checkbox-text">
+              <span class="field-label">重新扫描图片</span>
+              <span class="hint">
+                会更新扫描时间，不改宽高；任一图片失败则不创建作品
+              </span>
+            </span>
+          </label>
+
+          <p id="orphan-add-error" class="form-error" hidden></p>
+        </div>
+
+        <footer class="dialog-foot">
+          <button
+            id="orphan-add-cancel"
+            class="button ghost"
+            type="button"
+          >
+            取消
+          </button>
+          <button
+            id="orphan-add-submit"
+            class="button primary"
+            type="submit"
+          >
+            添加
+          </button>
+        </footer>
+      </form>
+    </dialog>
+
+    <script src="/tag-search.js"></script>
+    <script src="/orphans.js"></script>
+  </body>
+</html>

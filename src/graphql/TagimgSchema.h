@@ -174,6 +174,56 @@ struct [[nodiscard("unnecessary construction")]] AddArtworkInput
 	std::optional<std::vector<response::IdType>> artistIds;
 };
 
+struct [[nodiscard("unnecessary construction")]] AddArtworkFromImagesInput
+{
+	explicit AddArtworkFromImagesInput() noexcept;
+	explicit AddArtworkFromImagesInput(
+		std::vector<response::IdType> imageIdsArg,
+		std::string titleArg,
+		std::optional<std::string> descriptionArg,
+		std::optional<std::string> publishedAtArg,
+		std::optional<std::vector<response::IdType>> tagIdsArg,
+		std::optional<std::vector<response::IdType>> artistIdsArg,
+		std::optional<bool> rescanArg) noexcept;
+	AddArtworkFromImagesInput(const AddArtworkFromImagesInput& other);
+	AddArtworkFromImagesInput(AddArtworkFromImagesInput&& other) noexcept;
+	~AddArtworkFromImagesInput();
+
+	AddArtworkFromImagesInput& operator=(const AddArtworkFromImagesInput& other);
+	AddArtworkFromImagesInput& operator=(AddArtworkFromImagesInput&& other) noexcept;
+
+	std::vector<response::IdType> imageIds;
+	std::string title;
+	std::optional<std::string> description;
+	std::optional<std::string> publishedAt;
+	std::optional<std::vector<response::IdType>> tagIds;
+	std::optional<std::vector<response::IdType>> artistIds;
+	std::optional<bool> rescan;
+};
+
+struct [[nodiscard("unnecessary construction")]] UpdateArtworkInput
+{
+	explicit UpdateArtworkInput() noexcept;
+	explicit UpdateArtworkInput(
+		std::optional<std::string> titleArg,
+		std::optional<std::string> publishedAtArg,
+		std::optional<bool> clearPublishedAtArg,
+		std::optional<std::vector<response::IdType>> addTagIdsArg,
+		std::optional<std::vector<response::IdType>> removeTagIdsArg) noexcept;
+	UpdateArtworkInput(const UpdateArtworkInput& other);
+	UpdateArtworkInput(UpdateArtworkInput&& other) noexcept;
+	~UpdateArtworkInput();
+
+	UpdateArtworkInput& operator=(const UpdateArtworkInput& other);
+	UpdateArtworkInput& operator=(UpdateArtworkInput&& other) noexcept;
+
+	std::optional<std::string> title;
+	std::optional<std::string> publishedAt;
+	std::optional<bool> clearPublishedAt;
+	std::optional<std::vector<response::IdType>> addTagIds;
+	std::optional<std::vector<response::IdType>> removeTagIds;
+};
+
 namespace object {
 
 class Query;

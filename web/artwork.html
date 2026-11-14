@@ -42,6 +42,21 @@
       <article id="artwork" class="detail" hidden>
         <header class="detail-head">
           <h1 id="detail-title" class="detail-title"></h1>
+          <div id="edit-fields" class="edit-fields" hidden>
+            <label class="edit-field">
+              <span class="field-label">标题</span>
+              <input
+                id="edit-title"
+                type="text"
+                maxlength="500"
+                autocomplete="off"
+              />
+            </label>
+            <label class="edit-field">
+              <span class="field-label">发布时间</span>
+              <input id="edit-published" type="datetime-local" step="1" />
+            </label>
+          </div>
           <div id="detail-meta" class="meta detail-meta"></div>
         </header>
 
@@ -63,10 +78,40 @@
         <section id="tags-section" class="detail-section" hidden>
           <h2 class="section-title">标签</h2>
           <div id="detail-tags" class="tags"></div>
+          <div id="edit-tag-search" class="tag-search edit-tag-search" hidden>
+            <label class="visually-hidden" for="edit-tag-input">添加标签</label>
+            <input
+              id="edit-tag-input"
+              type="search"
+              placeholder="输入标签路径…"
+              autocomplete="off"
+              spellcheck="false"
+              role="combobox"
+              aria-autocomplete="list"
+              aria-expanded="false"
+              aria-controls="edit-tag-suggest"
+            />
+            <ul
+              id="edit-tag-suggest"
+              class="tag-suggest"
+              role="listbox"
+              hidden
+            ></ul>
+          </div>
+          <p id="edit-tag-hint" class="hint edit-tag-hint" hidden>
+            回车加入标签；点击已有标签标记删除。
+          </p>
         </section>
       </article>
+
+      <div id="edit-save-bar" class="edit-save-bar" hidden>
+        <button id="edit-save" class="button primary" type="button">
+          保存
+        </button>
+      </div>
     </main>
 
+    <script src="/tag-search.js"></script>
     <script src="/artwork.js"></script>
   </body>
 </html>

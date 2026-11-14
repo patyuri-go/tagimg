@@ -32,10 +32,20 @@ public:
   submit(AddRequest request,
          std::function<void(const Result<JobOutcome, JobError> &)> on_done);
 
+  // 用已有图片提交一次 add 任务，语义同 AddJob(ImageAddRequest)。
+  bool
+  submit(ImageAddRequest request,
+         std::function<void(const Result<JobOutcome, JobError> &)> on_done);
+
   // 停止接收新任务，等待正在执行的任务结束；未完成的直接丢弃。
   void shutdown();
 
 private:
+  // 把构造好的 job 交给 add worker，并挂上结果回调。
+  bool
+  submit_job(std::unique_ptr<Job> job,
+             std::function<void(const Result<JobOutcome, JobError> &)> on_done);
+
   struct Impl;
   std::shared_ptr<Impl> impl_;
 };

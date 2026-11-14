@@ -20,6 +20,8 @@ inline constexpr float kScanTagThreshold = 0.85F;
 class AddJob final : public Job {
 public:
   explicit AddJob(AddRequest request);
+  // 用已有图片新建作品；rescan 为 true 时逐张重新扫描。
+  explicit AddJob(ImageAddRequest request);
 
   [[nodiscard]] StepResult step(JobContext &context,
                                 const JobRun &run) override;
@@ -34,8 +36,12 @@ private:
   void finish(JobContext &context);
 
   AddRequest request_;
+  // 图片模式下有值；此时 request_ 不使用。
+  std::optional<ImageAddRequest> image_request_;
   std::size_t next_index_ = 0;
   std::string pending_entity_id_;
+  // 图片模式下当前扫描的图片 ID，用于失败记录。
+  std::string pending_image_id_;
   std::optional<JobId> pending_scan_;
   std::vector<ScanResult> scans_;
   std::vector<ScanFailure> failures_;

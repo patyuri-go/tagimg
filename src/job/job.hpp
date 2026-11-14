@@ -64,13 +64,34 @@ struct AddRequest {
   std::vector<std::string> artist_ids;
 };
 
+// 用已有图片新建一个作品的输入；image_ids 与 title 必填。
+//
+// 与 AddRequest 的区别是把实体 ID 换成图片 ID：图片行已经存在，
+// 只新建 artwork_images 关联，不会重新插入 images。
+// rescan 为 true 时重新扫描每张图片，并把扫描标签加入新作品；
+// 为 false 时新作品的标签只有 tag_ids。
+struct ImageAddRequest {
+  std::vector<std::string> image_ids;
+  std::string title;
+  std::optional<std::string> description;
+  std::optional<std::string> published_at;
+  std::vector<std::string> tag_ids;
+  std::vector<std::string> artist_ids;
+  bool rescan = false;
+};
+
 struct ScanFailure {
   std::string entity_id;
   JobError error = JobError::TaggingFailed;
+  // 图片模式下失败的图片 ID；实体模式为空。
+  std::string image_id;
 };
 
 struct AddResult {
+  // 实体模式下的原始请求。
   AddRequest request;
+  // 图片模式下的原始请求；实体模式为空。
+  std::optional<ImageAddRequest> image_request;
   std::vector<ScanResult> scans;
   std::vector<ScanFailure> failures;
   // 扫描失败或写库失败时为空。

@@ -260,6 +260,38 @@ input AddArtworkInput {
   artistIds: [ID!]
 }
 
+"用已入库的图片新建作品所需的参数。"
+input AddArtworkFromImagesInput {
+  "图片 ID，1 到 20 个，不能重复。图片可以已经属于其他作品。"
+  imageIds: [ID!]!
+  "作品标题，1 到 500 个字符。"
+  title: String!
+  "作品描述，缺省或 null 时写入 NULL。"
+  description: String
+  "RFC3339 格式的原始发布时间，缺省或 null 时写入 NULL。"
+  publishedAt: String
+  "已存在的标签 ID，直接挂到作品上。"
+  tagIds: [ID!]
+  "已存在的艺术家 ID，写入 artwork_artists。"
+  artistIds: [ID!]
+  "是否重新扫描这些图片；默认 false，只使用 tagIds。"
+  rescan: Boolean = false
+}
+
+"更新作品所需的参数；至少要提供一项变更。"
+input UpdateArtworkInput {
+  "新标题；省略或 null 表示不修改，1 到 500 个字符。"
+  title: String
+  "新发布时间，RFC3339；省略或 null 表示不修改。"
+  publishedAt: String
+  "为 true 时清空发布时间；不能与 publishedAt 同时提供。"
+  clearPublishedAt: Boolean = false
+  "要添加的标签 ID；已经挂在该作品上的会忽略。"
+  addTagIds: [ID!]
+  "要移除的标签 ID；没有挂在该作品上的会忽略。"
+  removeTagIds: [ID!]
+}
+
 "根变更类型。"
 type Mutation {
   """
@@ -271,10 +303,27 @@ type Mutation {
   addArtwork(input: AddArtworkInput!): ID!
 
   """
+  用已有图片 ID 新建作品，立即返回任务 ID。
+
+  rescan 为 false 时只建立图片关联，作品标签只来自 tagIds。
+  rescan 为 true 时逐张重新扫描并合并扫描标签；任一图片失败则整单不写库。
+  图片可以已经属于其他作品。
+  """
+  addArtworkFromImages(input: AddArtworkFromImagesInput!): ID!
+
+  """
   删除一个作品及其标签、画师关联。
 
   图片行本身保留；只属于这个作品的图片会变成游离图片。
   作品不存在时返回 deleted: false，不报错。
   """
   deleteArtwork(id: ID!): DeleteArtworkResult!
+
+  """
+  更新作品的标题、发布时间和标签，返回作品 ID。
+
+  标签按增量处理：addTagIds 添加、removeTagIds 移除，已经存在或未挂载的
+  标签会被忽略。删除发布时间时传 clearPublishedAt: true。
+  """
+  updateArtwork(id: ID!, input: UpdateArtworkInput!): ID!
 }
