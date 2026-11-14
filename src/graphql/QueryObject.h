@@ -62,6 +62,18 @@ concept getTags = requires (TImpl impl, std::string queryArg, std::unique_ptr<Ta
 };
 
 template <class TImpl>
+concept getOrphanImagesWithParams = requires (TImpl impl, service::FieldParams params, std::optional<int> limitArg, std::optional<int> offsetArg, std::optional<bool> includeTotalArg)
+{
+	{ service::AwaitableObject<std::shared_ptr<OrphanImageConnection>> { impl.getOrphanImages(std::move(params), std::move(limitArg), std::move(offsetArg), std::move(includeTotalArg)) } };
+};
+
+template <class TImpl>
+concept getOrphanImages = requires (TImpl impl, std::optional<int> limitArg, std::optional<int> offsetArg, std::optional<bool> includeTotalArg)
+{
+	{ service::AwaitableObject<std::shared_ptr<OrphanImageConnection>> { impl.getOrphanImages(std::move(limitArg), std::move(offsetArg), std::move(includeTotalArg)) } };
+};
+
+template <class TImpl>
 concept beginSelectionSet = requires (TImpl impl, const service::SelectionSetParams params)
 {
 	{ impl.beginSelectionSet(params) };
@@ -83,6 +95,7 @@ private:
 	[[nodiscard("unnecessary call")]] service::AwaitableResolver resolveArtwork(service::ResolverParams&& params) const;
 	[[nodiscard("unnecessary call")]] service::AwaitableResolver resolveArtworks(service::ResolverParams&& params) const;
 	[[nodiscard("unnecessary call")]] service::AwaitableResolver resolveTags(service::ResolverParams&& params) const;
+	[[nodiscard("unnecessary call")]] service::AwaitableResolver resolveOrphanImages(service::ResolverParams&& params) const;
 
 	[[nodiscard("unnecessary call")]] service::AwaitableResolver resolve_typename(service::ResolverParams&& params) const;
 	[[nodiscard("unnecessary call")]] service::AwaitableResolver resolve_schema(service::ResolverParams&& params) const;
@@ -101,6 +114,7 @@ private:
 		[[nodiscard("unnecessary call")]] virtual service::AwaitableObject<std::shared_ptr<Artwork>> getArtwork(service::FieldParams&& params, response::IdType&& idArg) const = 0;
 		[[nodiscard("unnecessary call")]] virtual service::AwaitableObject<std::shared_ptr<ArtworkConnection>> getArtworks(service::FieldParams&& params, std::unique_ptr<ArtworkFilter>&& filterArg, std::optional<ArtworkOrderField>&& orderByArg, std::optional<SortDirection>&& directionArg, std::optional<int>&& limitArg, std::optional<int>&& offsetArg, std::optional<bool>&& includeTotalArg) const = 0;
 		[[nodiscard("unnecessary call")]] virtual service::AwaitableObject<std::vector<std::shared_ptr<TagMatch>>> getTags(service::FieldParams&& params, std::string&& queryArg, std::unique_ptr<TagSearchScope>&& scopeArg, std::optional<int>&& limitArg) const = 0;
+		[[nodiscard("unnecessary call")]] virtual service::AwaitableObject<std::shared_ptr<OrphanImageConnection>> getOrphanImages(service::FieldParams&& params, std::optional<int>&& limitArg, std::optional<int>&& offsetArg, std::optional<bool>&& includeTotalArg) const = 0;
 	};
 
 	template <class T>
@@ -161,6 +175,19 @@ private:
 			{
 				static_assert(methods::QueryHas::getTags<T>, R"msg(Query::getTags is not implemented)msg");
 				return { _pimpl->getTags(std::move(queryArg), std::move(scopeArg), std::move(limitArg)) };
+			}
+		}
+
+		[[nodiscard("unnecessary call")]] service::AwaitableObject<std::shared_ptr<OrphanImageConnection>> getOrphanImages(service::FieldParams&& params, std::optional<int>&& limitArg, std::optional<int>&& offsetArg, std::optional<bool>&& includeTotalArg) const override
+		{
+			if constexpr (methods::QueryHas::getOrphanImagesWithParams<T>)
+			{
+				return { _pimpl->getOrphanImages(std::move(params), std::move(limitArg), std::move(offsetArg), std::move(includeTotalArg)) };
+			}
+			else
+			{
+				static_assert(methods::QueryHas::getOrphanImages<T>, R"msg(Query::getOrphanImages is not implemented)msg");
+				return { _pimpl->getOrphanImages(std::move(limitArg), std::move(offsetArg), std::move(includeTotalArg)) };
 			}
 		}
 

@@ -161,6 +161,37 @@ struct ArtworkSearchResult {
   std::optional<std::size_t> total;
 };
 
+// 一张不属于任何作品的图片。
+struct OrphanImage {
+  std::string id;
+  std::optional<std::string> entity_id;
+  std::optional<int> width;
+  std::optional<int> height;
+  std::optional<int> frame_count;
+  // RFC3339（UTC，精确到秒）。
+  std::string created_at;
+  std::optional<std::string> scan_at;
+};
+
+struct OrphanImageQuery {
+  std::size_t limit = 24;
+  std::size_t offset = 0;
+  bool include_total = false;
+};
+
+struct OrphanImageResult {
+  std::vector<OrphanImage> items;
+  bool has_more = false;
+  // 仅 include_total 为 true 时有值。
+  std::optional<std::size_t> total;
+};
+
+struct DeleteArtworkResult {
+  bool deleted = false;
+  // 本次删除后新变成游离的图片数量，不含删除前就已游离的图片。
+  std::size_t newly_orphaned_image_count = 0;
+};
+
 // 图片库（tagimg）的写入口。
 //
 // save_artwork() 在单个事务里写 artworks、images、artwork_images、
@@ -198,6 +229,15 @@ public:
   // 按标准名搜索标签，用于输入联想。
   [[nodiscard]] Result<std::vector<TagMatch>, TagimgRepositoryError>
   search_tags(const TagSearchQuery &query) const;
+
+  // 删除一个作品；关联表级联清理，图片行保留。
+  // 作品不存在时 deleted=false，不视为错误。
+  [[nodiscard]] Result<DeleteArtworkResult, TagimgRepositoryError>
+  delete_artwork(const std::string &artwork_id) const;
+
+  // 分页列出不属于任何作品的图片，按入库时间倒序。
+  [[nodiscard]] Result<OrphanImageResult, TagimgRepositoryError>
+  list_orphan_images(const OrphanImageQuery &query) const;
 
 private:
   struct Impl;

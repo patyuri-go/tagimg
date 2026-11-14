@@ -6,6 +6,7 @@
 #include "QueryObject.h"
 #include "ArtworkConnectionObject.h"
 #include "ArtworkObject.h"
+#include "OrphanImageConnectionObject.h"
 #include "TagMatchObject.h"
 
 #include "graphqlservice/internal/Introspection.h"
@@ -58,8 +59,12 @@ service::ResolverMap Query::getResolvers() const noexcept {
            [this](service::ResolverParams &&params) {
              return resolveArtworks(std::move(params));
            }},
-          {R"gql(__typename)gql"sv, [this](service::ResolverParams &&params) {
+          {R"gql(__typename)gql"sv,
+           [this](service::ResolverParams &&params) {
              return resolve_typename(std::move(params));
+           }},
+          {R"gql(orphanImages)gql"sv, [this](service::ResolverParams &&params) {
+             return resolveOrphanImages(std::move(params));
            }}};
 }
 
@@ -220,6 +225,60 @@ Query::resolveTags(service::ResolverParams &&params) const {
 }
 
 service::AwaitableResolver
+Query::resolveOrphanImages(service::ResolverParams &&params) const {
+  static const auto defaultArguments = []() {
+    response::Value values(response::Type::Map);
+    response::Value entry;
+
+    entry = response::Value(static_cast<int>(24));
+    values.emplace_back("limit", std::move(entry));
+    entry = response::Value(static_cast<int>(0));
+    values.emplace_back("offset", std::move(entry));
+    entry = response::Value(false);
+    values.emplace_back("includeTotal", std::move(entry));
+
+    return values;
+  }();
+
+  auto pairLimit =
+      service::ModifiedArgument<int>::find<service::TypeModifier::Nullable>(
+          "limit", params.arguments);
+  auto argLimit =
+      (pairLimit.second
+           ? std::move(pairLimit.first)
+           : service::ModifiedArgument<int>::require<
+                 service::TypeModifier::Nullable>("limit", defaultArguments));
+  auto pairOffset =
+      service::ModifiedArgument<int>::find<service::TypeModifier::Nullable>(
+          "offset", params.arguments);
+  auto argOffset =
+      (pairOffset.second
+           ? std::move(pairOffset.first)
+           : service::ModifiedArgument<int>::require<
+                 service::TypeModifier::Nullable>("offset", defaultArguments));
+  auto pairIncludeTotal =
+      service::ModifiedArgument<bool>::find<service::TypeModifier::Nullable>(
+          "includeTotal", params.arguments);
+  auto argIncludeTotal =
+      (pairIncludeTotal.second ? std::move(pairIncludeTotal.first)
+                               : service::ModifiedArgument<bool>::require<
+                                     service::TypeModifier::Nullable>(
+                                     "includeTotal", defaultArguments));
+  std::unique_lock resolverLock(_resolverMutex);
+  service::SelectionSetParams selectionSetParams{
+      static_cast<const service::SelectionSetParams &>(params)};
+  auto directives = std::move(params.fieldDirectives);
+  auto result = _pimpl->getOrphanImages(
+      service::FieldParams{std::move(selectionSetParams),
+                           std::move(directives)},
+      std::move(argLimit), std::move(argOffset), std::move(argIncludeTotal));
+  resolverLock.unlock();
+
+  return service::ModifiedResult<OrphanImageConnection>::convert(
+      std::move(result), std::move(params));
+}
+
+service::AwaitableResolver
 Query::resolve_typename(service::ResolverParams &&params) const {
   return service::Result<std::string>::convert(std::string{R"gql(Query)gql"},
                                                std::move(params));
@@ -321,7 +380,28 @@ scope 不传时在全部标签中搜索；scope.parentId 为 null 时只搜索�
                 schema->LookupType(R"gql(TagSearchScope)gql"sv), R"gql()gql"sv),
             schema::InputValue::Make(
                 R"gql(limit)gql"sv, R"md(返回条数，1 到 50，默认 10。)md"sv,
-                schema->LookupType(R"gql(Int)gql"sv), R"gql(10)gql"sv)})});
+                schema->LookupType(R"gql(Int)gql"sv), R"gql(10)gql"sv)}),
+       schema::Field::Make(
+           R"gql(orphanImages)gql"sv,
+           R"md(分页列出不属于任何作品的游离图片，按入库时间倒序。
+
+游离图片只会在删除作品后产生；删除前就已游离的图片同样会出现在列表里。)md"sv,
+           std::nullopt,
+           schema->WrapType(
+               introspection::TypeKind::NON_NULL,
+               schema->LookupType(R"gql(OrphanImageConnection)gql"sv)),
+           {schema::InputValue::Make(
+                R"gql(limit)gql"sv, R"md(每页数量，1 到 100。)md"sv,
+                schema->LookupType(R"gql(Int)gql"sv), R"gql(24)gql"sv),
+            schema::InputValue::Make(R"gql(offset)gql"sv,
+                                     R"md(跳过数量，0 到 10000。)md"sv,
+                                     schema->LookupType(R"gql(Int)gql"sv),
+                                     R"gql(0)gql"sv),
+            schema::InputValue::Make(
+                R"gql(includeTotal)gql"sv,
+                R"md(是否统计总数；为 true 时 total 才有值。)md"sv,
+                schema->LookupType(R"gql(Boolean)gql"sv),
+                R"gql(false)gql"sv)})});
 }
 
 } // namespace graphql::tagimg

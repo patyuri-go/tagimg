@@ -59,6 +59,61 @@ FROM artists
 WHERE id = :artist_id
 )sql";
 
+// 删除前先记下这个作品的图片，删除后再统计其中有哪些失去了全部引用。
+constexpr const char *kArtworkImageIdsSql = R"sql(
+SELECT image_id::text
+FROM artwork_images
+WHERE artwork_id = :artwork_id
+)sql";
+
+constexpr const char *kDeleteArtworkSql = R"sql(
+DELETE FROM artworks
+WHERE id = :artwork_id
+RETURNING id::text
+)sql";
+
+constexpr const char *kCountOrphanAmongSql = R"sql(
+SELECT count(*)
+FROM images i
+WHERE i.id = ANY(CAST(:image_ids AS uuid[]))
+  AND NOT EXISTS (
+    SELECT 1
+    FROM artwork_images ai
+    WHERE ai.image_id = i.id
+  )
+)sql";
+
+constexpr const char *kOrphanImagesSql = R"sql(
+SELECT i.id::text,
+       i.entity_id::text,
+       i.width,
+       i.height,
+       i.frame_count,
+       to_char(i.created_at AT TIME ZONE 'UTC',
+               'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
+       CASE WHEN i.scan_at IS NULL THEN NULL
+            ELSE to_char(i.scan_at AT TIME ZONE 'UTC',
+                         'YYYY-MM-DD"T"HH24:MI:SS"Z"') END
+FROM images i
+WHERE NOT EXISTS (
+  SELECT 1
+  FROM artwork_images ai
+  WHERE ai.image_id = i.id
+)
+ORDER BY i.created_at DESC, i.id DESC
+LIMIT :limit OFFSET :offset
+)sql";
+
+constexpr const char *kCountOrphanImagesSql = R"sql(
+SELECT count(*)
+FROM images i
+WHERE NOT EXISTS (
+  SELECT 1
+  FROM artwork_images ai
+  WHERE ai.image_id = i.id
+)
+)sql";
+
 constexpr const char *kInsertArtworkSql = R"sql(
 INSERT INTO artworks (title, description, published_at)
 VALUES (:title, :description, CAST(:published_at AS timestamptz))
@@ -951,6 +1006,118 @@ ORDER BY c.rn)sql";
       }
     }
     return matches;
+  } catch (const std::exception &) {
+    return TagimgRepositoryError::QueryFailed;
+  }
+}
+
+Result<DeleteArtworkResult, TagimgRepositoryError>
+TagimgRepository::delete_artwork(const std::string &artwork_id) const {
+  if (!is_uuid(artwork_id)) {
+    return TagimgRepositoryError::InvalidArgument;
+  }
+  if (!impl_ || !impl_->pool) {
+    return TagimgRepositoryError::ConnectionFailed;
+  }
+
+  try {
+    db_detail::PoolLease lease(*impl_->pool);
+    soci::session &sql = impl_->pool->at(lease.position());
+    soci::transaction transaction(sql);
+
+    // 先记下这个作品的图片，删除后再判断哪些失去了全部引用。
+    std::vector<std::string> image_ids;
+    std::string id_value = artwork_id;
+    {
+      soci::rowset<soci::row> image_rows =
+          (sql.prepare << kArtworkImageIdsSql, soci::use(id_value));
+      for (const soci::row &row : image_rows) {
+        image_ids.push_back(row.get<std::string>(0));
+      }
+    }
+
+    // rowset 用完即销毁，避免提交事务时还留着未关闭的游标。
+    bool deleted = false;
+    {
+      soci::rowset<soci::row> deleted_rows =
+          (sql.prepare << kDeleteArtworkSql, soci::use(id_value));
+      for (const soci::row &row : deleted_rows) {
+        (void)row;
+        deleted = true;
+      }
+    }
+
+    DeleteArtworkResult result;
+    result.deleted = deleted;
+    if (deleted && !image_ids.empty()) {
+      const std::string image_array = uuid_array_literal(image_ids);
+      long long orphaned = 0;
+      sql << kCountOrphanAmongSql, soci::use(image_array), soci::into(orphaned);
+      result.newly_orphaned_image_count = static_cast<std::size_t>(orphaned);
+    }
+
+    transaction.commit();
+    return result;
+  } catch (const std::exception &) {
+    return TagimgRepositoryError::QueryFailed;
+  }
+}
+
+Result<OrphanImageResult, TagimgRepositoryError>
+TagimgRepository::list_orphan_images(const OrphanImageQuery &query) const {
+  if (query.limit == 0 || query.limit > 100 || query.offset > 10000) {
+    return TagimgRepositoryError::InvalidArgument;
+  }
+  if (!impl_ || !impl_->pool) {
+    return TagimgRepositoryError::ConnectionFailed;
+  }
+
+  try {
+    db_detail::PoolLease lease(*impl_->pool);
+    soci::session &sql = impl_->pool->at(lease.position());
+
+    // 多取一条用来判断是否还有下一页。
+    const int fetch_limit = static_cast<int>(query.limit) + 1;
+    const int offset_value = static_cast<int>(query.offset);
+
+    OrphanImageResult result;
+    soci::rowset<soci::row> rows =
+        (sql.prepare << kOrphanImagesSql, soci::use(fetch_limit),
+         soci::use(offset_value));
+    for (const soci::row &row : rows) {
+      OrphanImage image;
+      image.id = row.get<std::string>(0);
+      if (row.get_indicator(1) != soci::i_null) {
+        image.entity_id = row.get<std::string>(1);
+      }
+      if (row.get_indicator(2) != soci::i_null) {
+        image.width = row.get<int>(2);
+      }
+      if (row.get_indicator(3) != soci::i_null) {
+        image.height = row.get<int>(3);
+      }
+      if (row.get_indicator(4) != soci::i_null) {
+        image.frame_count = row.get<int>(4);
+      }
+      image.created_at = row.get<std::string>(5);
+      if (row.get_indicator(6) != soci::i_null) {
+        image.scan_at = row.get<std::string>(6);
+      }
+      result.items.push_back(std::move(image));
+    }
+
+    if (result.items.size() > query.limit) {
+      result.has_more = true;
+      result.items.resize(query.limit);
+    }
+
+    if (query.include_total) {
+      long long total = 0;
+      sql << kCountOrphanImagesSql, soci::into(total);
+      result.total = static_cast<std::size_t>(total);
+    }
+
+    return result;
   } catch (const std::exception &) {
     return TagimgRepositoryError::QueryFailed;
   }

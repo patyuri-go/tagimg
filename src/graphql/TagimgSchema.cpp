@@ -556,6 +556,16 @@ void AddTypesToSchema(const std::shared_ptr<schema::Schema> &schema) {
   auto typeArtworkConnection = schema::ObjectType::Make(
       R"gql(ArtworkConnection)gql"sv, R"md(分页结果。)md"sv);
   schema->AddType(R"gql(ArtworkConnection)gql"sv, typeArtworkConnection);
+  auto typeOrphanImageConnection = schema::ObjectType::Make(
+      R"gql(OrphanImageConnection)gql"sv, R"md(游离图片分页结果。)md"sv);
+  schema->AddType(R"gql(OrphanImageConnection)gql"sv,
+                  typeOrphanImageConnection);
+  auto typeOrphanImage = schema::ObjectType::Make(
+      R"gql(OrphanImage)gql"sv, R"md(不属于任何作品的图片。)md"sv);
+  schema->AddType(R"gql(OrphanImage)gql"sv, typeOrphanImage);
+  auto typeDeleteArtworkResult = schema::ObjectType::Make(
+      R"gql(DeleteArtworkResult)gql"sv, R"md(删除作品的结果。)md"sv);
+  schema->AddType(R"gql(DeleteArtworkResult)gql"sv, typeDeleteArtworkResult);
   auto typeArtwork =
       schema::ObjectType::Make(R"gql(Artwork)gql"sv, R"md(已入库的作品。)md"sv);
   schema->AddType(R"gql(Artwork)gql"sv, typeArtwork);
@@ -696,6 +706,9 @@ void AddTypesToSchema(const std::shared_ptr<schema::Schema> &schema) {
 
   AddQueryDetails(typeQuery, schema);
   AddArtworkConnectionDetails(typeArtworkConnection, schema);
+  AddOrphanImageConnectionDetails(typeOrphanImageConnection, schema);
+  AddOrphanImageDetails(typeOrphanImage, schema);
+  AddDeleteArtworkResultDetails(typeDeleteArtworkResult, schema);
   AddArtworkDetails(typeArtwork, schema);
   AddTagDetails(typeTag, schema);
   AddTagMatchDetails(typeTagMatch, schema);

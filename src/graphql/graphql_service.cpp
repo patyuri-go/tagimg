@@ -19,7 +19,10 @@
 #include "graphql/ArtistObject.h"
 #include "graphql/ArtworkConnectionObject.h"
 #include "graphql/ArtworkObject.h"
+#include "graphql/DeleteArtworkResultObject.h"
 #include "graphql/MutationObject.h"
+#include "graphql/OrphanImageConnectionObject.h"
+#include "graphql/OrphanImageObject.h"
 #include "graphql/QueryObject.h"
 #include "graphql/TagMatchObject.h"
 #include "graphql/TagObject.h"
@@ -350,6 +353,107 @@ private:
   int offset_;
 };
 
+class OrphanImageModel {
+public:
+  explicit OrphanImageModel(OrphanImage info) : info_(std::move(info)) {
+  }
+
+  gql::service::AwaitableScalar<IdType> getId() const {
+    return id_scalar(info_.id);
+  }
+
+  gql::service::AwaitableScalar<std::optional<IdType>> getEntityId() const {
+    if (!info_.entity_id) {
+      return gql::service::AwaitableScalar<std::optional<IdType>>(std::nullopt);
+    }
+    return gql::service::AwaitableScalar<std::optional<IdType>>(
+        IdType(IdType::OpaqueString(*info_.entity_id)));
+  }
+
+  gql::service::AwaitableScalar<std::optional<int>> getWidth() const {
+    return gql::service::AwaitableScalar<std::optional<int>>(info_.width);
+  }
+
+  gql::service::AwaitableScalar<std::optional<int>> getHeight() const {
+    return gql::service::AwaitableScalar<std::optional<int>>(info_.height);
+  }
+
+  gql::service::AwaitableScalar<std::optional<int>> getFrameCount() const {
+    return gql::service::AwaitableScalar<std::optional<int>>(info_.frame_count);
+  }
+
+  gql::service::AwaitableScalar<std::string> getCreatedAt() const {
+    return gql::service::AwaitableScalar<std::string>(info_.created_at);
+  }
+
+  gql::service::AwaitableScalar<std::optional<std::string>> getScanAt() const {
+    return gql::service::AwaitableScalar<std::optional<std::string>>(
+        info_.scan_at);
+  }
+
+private:
+  OrphanImage info_;
+};
+
+class OrphanImageConnectionModel {
+public:
+  OrphanImageConnectionModel(
+      std::vector<std::shared_ptr<gql::tagimg::object::OrphanImage>> items,
+      bool has_more, std::optional<int> total, int limit, int offset)
+      : items_(std::move(items)), has_more_(has_more), total_(total),
+        limit_(limit), offset_(offset) {
+  }
+
+  gql::service::AwaitableObject<
+      std::vector<std::shared_ptr<gql::tagimg::object::OrphanImage>>>
+  getItems() const {
+    return gql::service::AwaitableObject<
+        std::vector<std::shared_ptr<gql::tagimg::object::OrphanImage>>>(items_);
+  }
+
+  gql::service::AwaitableScalar<bool> getHasMore() const {
+    return gql::service::AwaitableScalar<bool>(has_more_);
+  }
+
+  gql::service::AwaitableScalar<std::optional<int>> getTotal() const {
+    return gql::service::AwaitableScalar<std::optional<int>>(total_);
+  }
+
+  gql::service::AwaitableScalar<int> getLimit() const {
+    return gql::service::AwaitableScalar<int>(limit_);
+  }
+
+  gql::service::AwaitableScalar<int> getOffset() const {
+    return gql::service::AwaitableScalar<int>(offset_);
+  }
+
+private:
+  std::vector<std::shared_ptr<gql::tagimg::object::OrphanImage>> items_;
+  bool has_more_;
+  std::optional<int> total_;
+  int limit_;
+  int offset_;
+};
+
+class DeleteArtworkResultModel {
+public:
+  explicit DeleteArtworkResultModel(DeleteArtworkResult result)
+      : result_(result) {
+  }
+
+  gql::service::AwaitableScalar<bool> getDeleted() const {
+    return gql::service::AwaitableScalar<bool>(result_.deleted);
+  }
+
+  gql::service::AwaitableScalar<int> getNewlyOrphanedImageCount() const {
+    return gql::service::AwaitableScalar<int>(
+        static_cast<int>(result_.newly_orphaned_image_count));
+  }
+
+private:
+  DeleteArtworkResult result_;
+};
+
 [[noreturn]] void fail_repository(TagimgRepositoryError error) {
   switch (error) {
   case TagimgRepositoryError::InvalidArgument:
@@ -594,6 +698,69 @@ public:
     return gql::service::AwaitableObject<
         std::vector<std::shared_ptr<gql::tagimg::object::TagMatch>>>(
         std::move(items));
+  }
+
+  gql::service::AwaitableObject<
+      std::shared_ptr<gql::tagimg::object::OrphanImageConnection>>
+  getOrphanImages(std::optional<int> limit, std::optional<int> offset,
+                  std::optional<bool> include_total) const {
+    OrphanImageQuery query;
+    if (limit) {
+      if (*limit < 1 || *limit > 100) {
+        fail("INVALID_ARGUMENT", "limit must be between 1 and 100");
+      }
+      query.limit = static_cast<std::size_t>(*limit);
+    }
+    if (offset) {
+      if (*offset < 0 || *offset > 10000) {
+        fail("INVALID_ARGUMENT", "offset must be between 0 and 10000");
+      }
+      query.offset = static_cast<std::size_t>(*offset);
+    }
+    query.include_total = include_total.value_or(false);
+
+    const auto result = repository_->list_orphan_images(query);
+    if (!result) {
+      fail_repository(result.error());
+    }
+
+    std::vector<std::shared_ptr<gql::tagimg::object::OrphanImage>> items;
+    items.reserve(result->items.size());
+    for (const OrphanImage &image : result->items) {
+      items.push_back(std::make_shared<gql::tagimg::object::OrphanImage>(
+          std::make_shared<OrphanImageModel>(image)));
+    }
+    std::optional<int> total;
+    if (result->total) {
+      total = static_cast<int>(*result->total);
+    }
+
+    return gql::service::AwaitableObject<
+        std::shared_ptr<gql::tagimg::object::OrphanImageConnection>>(
+        std::make_shared<gql::tagimg::object::OrphanImageConnection>(
+            std::make_shared<OrphanImageConnectionModel>(
+                std::move(items), result->has_more, total,
+                static_cast<int>(query.limit),
+                static_cast<int>(query.offset))));
+  }
+
+  gql::service::AwaitableObject<
+      std::shared_ptr<gql::tagimg::object::DeleteArtworkResult>>
+  applyDeleteArtwork(IdType id) const {
+    const std::string text = id_text(id);
+    if (!is_uuid(text)) {
+      fail("INVALID_ARGUMENT", "id must be a uuid string");
+    }
+
+    const auto result = repository_->delete_artwork(text);
+    if (!result) {
+      fail_repository(result.error());
+    }
+
+    return gql::service::AwaitableObject<
+        std::shared_ptr<gql::tagimg::object::DeleteArtworkResult>>(
+        std::make_shared<gql::tagimg::object::DeleteArtworkResult>(
+            std::make_shared<DeleteArtworkResultModel>(*result)));
   }
 
 private:

@@ -26,6 +26,18 @@ concept applyAddArtwork = requires (TImpl impl, AddArtworkInput inputArg)
 };
 
 template <class TImpl>
+concept applyDeleteArtworkWithParams = requires (TImpl impl, service::FieldParams params, response::IdType idArg)
+{
+	{ service::AwaitableObject<std::shared_ptr<DeleteArtworkResult>> { impl.applyDeleteArtwork(std::move(params), std::move(idArg)) } };
+};
+
+template <class TImpl>
+concept applyDeleteArtwork = requires (TImpl impl, response::IdType idArg)
+{
+	{ service::AwaitableObject<std::shared_ptr<DeleteArtworkResult>> { impl.applyDeleteArtwork(std::move(idArg)) } };
+};
+
+template <class TImpl>
 concept beginSelectionSet = requires (TImpl impl, const service::SelectionSetParams params)
 {
 	{ impl.beginSelectionSet(params) };
@@ -44,6 +56,7 @@ class [[nodiscard("unnecessary construction")]] Mutation final
 {
 private:
 	[[nodiscard("unnecessary call")]] service::AwaitableResolver resolveAddArtwork(service::ResolverParams&& params) const;
+	[[nodiscard("unnecessary call")]] service::AwaitableResolver resolveDeleteArtwork(service::ResolverParams&& params) const;
 
 	[[nodiscard("unnecessary call")]] service::AwaitableResolver resolve_typename(service::ResolverParams&& params) const;
 
@@ -55,6 +68,7 @@ private:
 		virtual void endSelectionSet(const service::SelectionSetParams& params) const = 0;
 
 		[[nodiscard("unnecessary call")]] virtual service::AwaitableScalar<response::IdType> applyAddArtwork(service::FieldParams&& params, AddArtworkInput&& inputArg) const = 0;
+		[[nodiscard("unnecessary call")]] virtual service::AwaitableObject<std::shared_ptr<DeleteArtworkResult>> applyDeleteArtwork(service::FieldParams&& params, response::IdType&& idArg) const = 0;
 	};
 
 	template <class T>
@@ -76,6 +90,19 @@ private:
 			{
 				static_assert(methods::MutationHas::applyAddArtwork<T>, R"msg(Mutation::applyAddArtwork is not implemented)msg");
 				return { _pimpl->applyAddArtwork(std::move(inputArg)) };
+			}
+		}
+
+		[[nodiscard("unnecessary call")]] service::AwaitableObject<std::shared_ptr<DeleteArtworkResult>> applyDeleteArtwork(service::FieldParams&& params, response::IdType&& idArg) const override
+		{
+			if constexpr (methods::MutationHas::applyDeleteArtworkWithParams<T>)
+			{
+				return { _pimpl->applyDeleteArtwork(std::move(params), std::move(idArg)) };
+			}
+			else
+			{
+				static_assert(methods::MutationHas::applyDeleteArtwork<T>, R"msg(Mutation::applyDeleteArtwork is not implemented)msg");
+				return { _pimpl->applyDeleteArtwork(std::move(idArg)) };
 			}
 		}
 

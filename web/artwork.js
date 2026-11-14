@@ -26,6 +26,15 @@
     }
   `;
 
+  const DELETE_MUTATION = `
+    mutation DeleteArtwork($id: ID!) {
+      deleteArtwork(id: $id) {
+        deleted
+        newlyOrphanedImageCount
+      }
+    }
+  `;
+
   const statusEl = document.getElementById("status");
   const artworkEl = document.getElementById("artwork");
   const titleEl = document.getElementById("detail-title");
@@ -38,6 +47,12 @@
   const tagsEl = document.getElementById("detail-tags");
   const artistsSection = document.getElementById("artists-section");
   const artistsEl = document.getElementById("detail-artists");
+  const editButton = document.getElementById("edit-button");
+  const deleteButton = document.getElementById("delete-button");
+
+  let currentArtworkId = "";
+  let editing = false;
+  let deleting = false;
 
   function setStatus(text, kind) {
     statusEl.textContent = text;
@@ -184,6 +199,88 @@
     artworkEl.hidden = false;
   }
 
+  function setEditing(enabled) {
+    editing = enabled;
+    editButton.textContent = enabled ? "退出编辑" : "编辑";
+    editButton.setAttribute("aria-pressed", String(enabled));
+    // 删除属于编辑模式里的破坏性操作，退出编辑时一并收起。
+    deleteButton.hidden = !enabled;
+  }
+
+  function finishDelete(message, kind) {
+    artworkEl.hidden = true;
+    editButton.hidden = true;
+    deleteButton.hidden = true;
+    setStatus(message, kind);
+    // 留一点时间让用户看到游离图片数量，再回到列表。
+    window.setTimeout(() => {
+      window.location.assign("/");
+    }, 1200);
+  }
+
+  async function deleteCurrentArtwork() {
+    if (deleting || !currentArtworkId) {
+      return;
+    }
+    if (
+      !window.confirm(
+        "确定删除这个作品吗？\n作品会被永久删除，只属于它的图片会变成游离图片。",
+      )
+    ) {
+      return;
+    }
+
+    deleting = true;
+    editButton.disabled = true;
+    deleteButton.disabled = true;
+    setStatus("删除中…");
+
+    let payload;
+    try {
+      const response = await fetch("/graphql", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          query: DELETE_MUTATION,
+          variables: { id: currentArtworkId },
+        }),
+      });
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      payload = await response.json();
+    } catch (error) {
+      deleting = false;
+      editButton.disabled = false;
+      deleteButton.disabled = false;
+      setStatus(`删除失败：${error.message}`, "error");
+      return;
+    }
+
+    if (Array.isArray(payload.errors) && payload.errors.length > 0) {
+      deleting = false;
+      editButton.disabled = false;
+      deleteButton.disabled = false;
+      const message = payload.errors[0].message || "未知错误";
+      setStatus(`删除失败：${message}`, "error");
+      return;
+    }
+
+    const result = payload.data && payload.data.deleteArtwork;
+    if (!result || !result.deleted) {
+      // 作品已被其他人删掉：按已删除处理，避免按钮停在禁用状态。
+      finishDelete("作品不存在或已被删除", "error");
+      return;
+    }
+
+    const orphaned = Number(result.newlyOrphanedImageCount) || 0;
+    finishDelete(
+      orphaned > 0
+        ? `已删除作品，${orphaned} 张图片变为游离图片`
+        : "已删除作品",
+    );
+  }
+
   async function load() {
     const params = new URLSearchParams(window.location.search);
     const artworkId = (params.get("id") || "").trim().toLowerCase();
@@ -228,7 +325,14 @@
 
     setStatus("");
     render(artwork);
+    currentArtworkId = artwork.id;
+    editButton.hidden = false;
   }
+
+  editButton.addEventListener("click", () => {
+    setEditing(!editing);
+  });
+  deleteButton.addEventListener("click", deleteCurrentArtwork);
 
   load();
 })();

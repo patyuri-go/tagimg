@@ -178,6 +178,9 @@ namespace object {
 
 class Query;
 class ArtworkConnection;
+class OrphanImageConnection;
+class OrphanImage;
+class DeleteArtworkResult;
 class Artwork;
 class Tag;
 class TagMatch;
@@ -209,6 +212,9 @@ private:
 
 void AddQueryDetails(const std::shared_ptr<schema::ObjectType>& typeQuery, const std::shared_ptr<schema::Schema>& schema);
 void AddArtworkConnectionDetails(const std::shared_ptr<schema::ObjectType>& typeArtworkConnection, const std::shared_ptr<schema::Schema>& schema);
+void AddOrphanImageConnectionDetails(const std::shared_ptr<schema::ObjectType>& typeOrphanImageConnection, const std::shared_ptr<schema::Schema>& schema);
+void AddOrphanImageDetails(const std::shared_ptr<schema::ObjectType>& typeOrphanImage, const std::shared_ptr<schema::Schema>& schema);
+void AddDeleteArtworkResultDetails(const std::shared_ptr<schema::ObjectType>& typeDeleteArtworkResult, const std::shared_ptr<schema::Schema>& schema);
 void AddArtworkDetails(const std::shared_ptr<schema::ObjectType>& typeArtwork, const std::shared_ptr<schema::Schema>& schema);
 void AddTagDetails(const std::shared_ptr<schema::ObjectType>& typeTag, const std::shared_ptr<schema::Schema>& schema);
 void AddTagMatchDetails(const std::shared_ptr<schema::ObjectType>& typeTagMatch, const std::shared_ptr<schema::Schema>& schema);

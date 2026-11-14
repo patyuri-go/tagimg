@@ -691,6 +691,29 @@ a.chip:focus-visible {
   cursor: progress;
 }
 
+.button.danger {
+  border: 1px solid color-mix(in srgb, #dc2626 45%, var(--border));
+  background: transparent;
+  color: #dc2626;
+}
+
+.button.danger:hover {
+  border-color: #dc2626;
+  background: color-mix(in srgb, #dc2626 10%, transparent);
+}
+
+.button.danger:disabled,
+.button.ghost:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+.button.ghost[aria-pressed="true"] {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
 /* 卡片本身就是详情页链接 */
 a.card {
   color: inherit;
@@ -702,8 +725,19 @@ a.card:focus-visible {
   outline-offset: 2px;
 }
 
-.top-link {
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   margin-left: auto;
+}
+
+.topbar-actions .button {
+  height: 34px;
+  padding: 0 14px;
+}
+
+.top-link {
   color: var(--muted);
   font-size: 14px;
   text-decoration: none;
