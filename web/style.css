@@ -31,6 +31,10 @@
   box-sizing: border-box;
 }
 
+[hidden] {
+  display: none !important;
+}
+
 html,
 body {
   margin: 0;
@@ -260,6 +264,51 @@ body {
   gap: 6px;
 }
 
+/* 弹窗里的添加模式 */
+.mode-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.mode-option {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.mode-option:has(input:checked) {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.dialog .mode-option input {
+  width: auto;
+  margin: 0;
+  padding: 0;
+  accent-color: var(--accent);
+}
+
+/* 弹窗里的标签输入：占满整行，沿用主搜索框的下拉样式。 */
+.dialog-tag-search {
+  flex: 0 0 auto;
+  max-width: none;
+}
+
+.dialog .dialog-tag-search input {
+  height: 38px;
+  padding: 0 12px;
+}
+
+.dialog-tag-stage {
+  margin-top: -2px;
+}
+
 .chip-filter {
   padding: 3px 10px;
   border: 1px solid var(--border);
@@ -474,6 +523,8 @@ a.chip:focus-visible {
 
 .dialog {
   width: min(560px, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
   padding: 0;
   border: 1px solid var(--border);
   border-radius: 16px;

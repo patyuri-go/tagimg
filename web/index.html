@@ -96,8 +96,33 @@
         </header>
 
         <div class="dialog-body">
+          <div class="field">
+            <span class="field-label">添加模式</span>
+            <div class="mode-options" role="radiogroup" aria-label="添加模式">
+              <label class="mode-option">
+                <input
+                  type="radio"
+                  name="add-mode"
+                  value="artwork"
+                  checked
+                />
+                <span>作品模式</span>
+              </label>
+              <label class="mode-option">
+                <input type="radio" name="add-mode" value="oneimg" />
+                <span>单图模式</span>
+              </label>
+            </div>
+            <span id="add-mode-hint" class="hint">
+              所有实体合成一个作品
+            </span>
+          </div>
+
           <label class="field">
-            <span class="field-label">标题</span>
+            <span class="field-label">
+              统一标题
+              <span id="add-title-hint" class="hint">必填</span>
+            </span>
             <input
               id="add-title"
               type="text"
@@ -121,6 +146,38 @@
           </label>
           <p id="entity-count" class="hint entity-count"></p>
 
+          <div class="field">
+            <label class="field-label" for="add-tag-input">
+              标签
+              <span class="hint">可选，应用到每个作品</span>
+            </label>
+            <div class="tag-search dialog-tag-search">
+              <input
+                id="add-tag-input"
+                type="search"
+                placeholder="输入标签名或路径…"
+                autocomplete="off"
+                spellcheck="false"
+                role="combobox"
+                aria-autocomplete="list"
+                aria-expanded="false"
+                aria-controls="add-tag-suggest"
+                title="回车加入标签列表"
+              />
+              <ul
+                id="add-tag-suggest"
+                class="tag-suggest"
+                role="listbox"
+                hidden
+              ></ul>
+            </div>
+            <div
+              id="add-tag-stage"
+              class="tag-stage-list dialog-tag-stage"
+              hidden
+            ></div>
+          </div>
+
           <label class="field">
             <span class="field-label">
               描述
@@ -129,7 +186,7 @@
             <textarea id="add-description" rows="2"></textarea>
           </label>
 
-          <label class="field">
+          <label id="add-published-field" class="field">
             <span class="field-label">
               发布时间
               <span class="hint">可选，如 2026-04-05T06:07:08Z</span>

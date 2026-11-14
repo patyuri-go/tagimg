@@ -38,6 +38,15 @@
     }
   `;
 
+  // 单图模式提交后只轮询总数，避免每轮把所有作品字段都取回来。
+  const COUNT_QUERY = `
+    query CountArtworks($filter: ArtworkFilter) {
+      artworks(filter: $filter, limit: 1, offset: 0, includeTotal: true) {
+        total
+      }
+    }
+  `;
+
   // 标签输入联想：按路径逐段解析，返回 tagId、name 和完整路径。
   const TAG_SEARCH_QUERY = `
     query SearchTags($query: String!, $scope: TagSearchScope, $limit: Int!) {
@@ -79,6 +88,15 @@
   const addCancel = document.getElementById("add-cancel");
   const addClose = document.getElementById("add-close");
   const entityCount = document.getElementById("entity-count");
+  const addModeInputs = Array.from(
+    document.querySelectorAll('input[name="add-mode"]'),
+  );
+  const addModeHint = document.getElementById("add-mode-hint");
+  const addTitleHint = document.getElementById("add-title-hint");
+  const addPublishedField = document.getElementById("add-published-field");
+  const addTagInput = document.getElementById("add-tag-input");
+  const addTagSuggest = document.getElementById("add-tag-suggest");
+  const addTagStage = document.getElementById("add-tag-stage");
 
   let offset = 0;
   let inFlight = null;
@@ -99,6 +117,15 @@
   // 暂存区，元素为 { id, name, path }。
   const includeTags = [];
   const excludeTags = [];
+
+  // 弹窗里的标签选择状态，与主搜索框互相独立。
+  let addTagTimer = 0;
+  let addTagAbortController = null;
+  let addTagComposing = false;
+  let addTagSuggestions = [];
+  let addTagActive = -1;
+  let addChosenTag = null;
+  const addTags = [];
 
   function setStatus(text, kind) {
     status.textContent = text || "";
@@ -299,6 +326,181 @@
       return;
     }
     renderTagSuggest(items);
+  }
+
+  // 弹窗里的标签选择：与主搜索框同样的路径补全，只做包含。
+  function closeAddTagSuggest() {
+    addTagSuggest.hidden = true;
+    addTagSuggest.replaceChildren();
+    addTagSuggestions = [];
+    addTagActive = -1;
+    addTagInput.setAttribute("aria-expanded", "false");
+    addTagInput.removeAttribute("aria-activedescendant");
+  }
+
+  function setAddTagActive(index) {
+    const options = addTagSuggest.querySelectorAll('[role="option"]');
+    if (index < 0 || index >= options.length) {
+      return;
+    }
+    addTagActive = index;
+    options.forEach((option, position) => {
+      const selected = position === index;
+      option.classList.toggle("active", selected);
+      option.setAttribute("aria-selected", selected ? "true" : "false");
+      if (selected) {
+        option.scrollIntoView({ block: "nearest" });
+      }
+    });
+    addTagInput.setAttribute("aria-activedescendant", options[index].id);
+  }
+
+  function chooseAddTag(index) {
+    const item = addTagSuggestions[index];
+    if (!item) {
+      return;
+    }
+    addTagInput.value = `${item.tagPath}::`;
+    addChosenTag = {
+      id: item.tagId,
+      name: item.name,
+      path: item.tagPath,
+    };
+    closeAddTagSuggest();
+    addTagInput.focus();
+    addTagInput.setSelectionRange(
+      addTagInput.value.length,
+      addTagInput.value.length,
+    );
+  }
+
+  function renderAddTagSuggest(items, emptyText) {
+    addTagSuggestions = items;
+    addTagActive = -1;
+
+    const fragment = document.createDocumentFragment();
+    items.forEach((item, index) => {
+      const option = document.createElement("li");
+      option.id = `add-tag-option-${index}`;
+      option.className = "tag-option";
+      option.setAttribute("role", "option");
+      option.setAttribute("aria-selected", "false");
+
+      const name = document.createElement("span");
+      name.className = "tag-option-name";
+      name.textContent = item.name || "（无名称）";
+
+      const path = document.createElement("span");
+      path.className = "tag-option-path";
+      path.textContent = item.tagPath || "";
+
+      option.append(name, path);
+      option.addEventListener("pointerdown", (event) => {
+        event.preventDefault();
+        chooseAddTag(index);
+      });
+      fragment.appendChild(option);
+    });
+
+    if (items.length === 0) {
+      const empty = document.createElement("li");
+      empty.className = "tag-empty";
+      empty.textContent = emptyText || "没有匹配的标签";
+      fragment.appendChild(empty);
+    }
+
+    addTagSuggest.replaceChildren(fragment);
+    addTagSuggest.hidden = false;
+    addTagInput.setAttribute("aria-expanded", "true");
+  }
+
+  async function refreshAddTagSuggest(text, signal) {
+    const { parentText, partial } = splitTagInput(text);
+    if (partial === "") {
+      closeAddTagSuggest();
+      return;
+    }
+
+    // 没有父路径时全库搜索；有父路径时在该标签的整棵子树里搜索。
+    let parent = { id: null, path: "" };
+    if (parentText) {
+      parent = await resolveTagPath(parentText, signal);
+      if (signal.aborted) {
+        return;
+      }
+      if (!parent) {
+        renderAddTagSuggest([], "路径不存在");
+        return;
+      }
+    }
+
+    const scope = parent.id ? { parentId: parent.id } : undefined;
+    const items = await fetchTagSearch(partial, scope, 10, signal);
+    if (signal.aborted) {
+      return;
+    }
+    renderAddTagSuggest(items);
+  }
+
+  function renderAddTags() {
+    const fragment = document.createDocumentFragment();
+    for (const tag of addTags) {
+      const chip = document.createElement("button");
+      chip.type = "button";
+      chip.className = "chip chip-filter";
+      chip.textContent = tag.name;
+      chip.title = `${tag.path}\n点击移除`;
+      chip.addEventListener("click", () => {
+        const index = addTags.findIndex((item) => item.id === tag.id);
+        if (index >= 0) {
+          addTags.splice(index, 1);
+          renderAddTags();
+        }
+      });
+      fragment.appendChild(chip);
+    }
+    addTagStage.replaceChildren(fragment);
+    addTagStage.hidden = addTags.length === 0;
+  }
+
+  async function addTagFromDialogInput() {
+    const normalized = trimPathSuffix(addTagInput.value);
+    if (normalized === "") {
+      return;
+    }
+    showAddError("");
+
+    let tag = null;
+    if (addChosenTag && normalized === addChosenTag.path) {
+      tag = addChosenTag;
+    } else {
+      try {
+        tag = await resolveTagPath(normalized, null);
+      } catch (error) {
+        showAddError(error.message || "标签解析失败");
+        return;
+      }
+    }
+
+    if (!tag) {
+      showAddError(`找不到标签路径：${normalized}`);
+      return;
+    }
+
+    if (!addTags.some((item) => item.id === tag.id)) {
+      addTags.push({ id: tag.id, name: tag.name, path: tag.path });
+    }
+    renderAddTags();
+
+    // 与主搜索框一致：保留完整路径并补上 ::，方便继续补全。
+    addTagInput.value = `${tag.path}::`;
+    addChosenTag = null;
+    closeAddTagSuggest();
+    addTagInput.focus();
+    addTagInput.setSelectionRange(
+      addTagInput.value.length,
+      addTagInput.value.length,
+    );
   }
 
   // 暂存区：只显示标签名，点击移除；包含与不包含互斥，后加覆盖。
@@ -696,12 +898,74 @@
     return { ids };
   }
 
+  function currentAddMode() {
+    const checked = addModeInputs.find((item) => item.checked);
+    return checked ? checked.value : "artwork";
+  }
+
+  function updateAddMode() {
+    const oneImage = currentAddMode() === "oneimg";
+    addModeHint.textContent = oneImage
+      ? "每个实体生成一个独立作品"
+      : "所有实体合成一个作品";
+    addTitleHint.textContent = oneImage ? "可选，留空则用实体 ID" : "必填";
+    addTitle.placeholder = oneImage ? "留空则每个作品用实体 ID" : "作品标题";
+    addPublishedField.hidden = oneImage;
+  }
+
+  // 重置弹窗里除输入框以外的选择状态。
+  function resetAddForm() {
+    addForm.reset();
+    addTags.length = 0;
+    renderAddTags();
+    addChosenTag = null;
+    closeAddTagSuggest();
+    updateEntityCount();
+    updateAddMode();
+  }
+
+  async function requestAddArtwork(inputVariables) {
+    const response = await fetch("/graphql", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        query: ADD_MUTATION,
+        variables: { input: inputVariables },
+      }),
+    });
+
+    let payload = null;
+    try {
+      payload = await response.json();
+    } catch {
+      payload = null;
+    }
+
+    if (!response.ok) {
+      const message =
+        payload && payload.errors && payload.errors.length
+          ? payload.errors[0].message
+          : `请求失败（HTTP ${response.status}）`;
+      throw new Error(message);
+    }
+    if (Array.isArray(payload?.errors) && payload.errors.length > 0) {
+      throw new Error(payload.errors[0].message || "添加失败");
+    }
+
+    const taskId = payload?.data?.addArtwork;
+    if (!taskId) {
+      throw new Error("服务端没有返回 taskId");
+    }
+    return taskId;
+  }
+
   async function submitAdd(event) {
     event.preventDefault();
     showAddError("");
 
+    const mode = currentAddMode();
     const title = addTitle.value.trim();
-    if (title === "") {
+    if (mode === "artwork" && title === "") {
       showAddError("请填写标题");
       addTitle.focus();
       return;
@@ -715,59 +979,76 @@
     }
 
     const published = addPublished.value.trim();
-    if (published !== "" && !TIMESTAMP_PATTERN.test(published)) {
+    if (mode === "artwork" && published !== "" && !TIMESTAMP_PATTERN.test(published)) {
       showAddError("发布时间格式应为 RFC3339，例如 2026-04-05T06:07:08Z");
       addPublished.focus();
       return;
     }
 
-    const inputVariables = { entityIds: parsed.ids, title };
     const description = addDescription.value.trim();
+    const tagIds = addTags.map((tag) => tag.id);
+    const shared = {};
     if (description !== "") {
-      inputVariables.description = description;
+      shared.description = description;
     }
-    if (published !== "") {
-      inputVariables.publishedAt = published;
+    if (tagIds.length > 0) {
+      shared.tagIds = tagIds;
+    }
+    // 单图模式不写发布时间。
+    if (mode === "artwork" && published !== "") {
+      shared.publishedAt = published;
     }
 
     addSubmit.disabled = true;
     addSubmit.textContent = "提交中…";
     try {
-      const response = await fetch("/graphql", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          query: ADD_MUTATION,
-          variables: { input: inputVariables },
-        }),
+      if (mode === "oneimg") {
+        const submitted = [];
+        let failure = null;
+        for (let index = 0; index < parsed.ids.length; index += 1) {
+          const entityId = parsed.ids[index];
+          addSubmit.textContent = `提交中… ${index + 1}/${parsed.ids.length}`;
+          const input = {
+            entityIds: [entityId],
+            title: title || entityId,
+            ...shared,
+          };
+          try {
+            await requestAddArtwork(input);
+            submitted.push(entityId);
+          } catch (error) {
+            failure = error;
+            break;
+          }
+        }
+
+        if (submitted.length === 0) {
+          showAddError(failure ? failure.message : "添加失败");
+          return;
+        }
+
+        addDialog.close();
+        resetAddForm();
+        if (failure) {
+          setStatus(
+            `已提交 ${submitted.length} 个，后续提交失败：${failure.message}`,
+            "error",
+          );
+        } else {
+          setStatus(`已提交 ${submitted.length} 个扫描任务，正在处理…`);
+        }
+        watchOneImage(submitted);
+        return;
+      }
+
+      await requestAddArtwork({
+        entityIds: parsed.ids,
+        title,
+        ...shared,
       });
 
-      let payload = null;
-      try {
-        payload = await response.json();
-      } catch {
-        payload = null;
-      }
-
-      if (!response.ok) {
-        const message =
-          payload && payload.errors && payload.errors.length
-            ? payload.errors[0].message
-            : `请求失败（HTTP ${response.status}）`;
-        throw new Error(message);
-      }
-      if (Array.isArray(payload?.errors) && payload.errors.length > 0) {
-        throw new Error(payload.errors[0].message || "添加失败");
-      }
-
-      const taskId = payload?.data?.addArtwork;
-      if (!taskId) {
-        throw new Error("服务端没有返回 taskId");
-      }
-
       addDialog.close();
-      addForm.reset();
-      updateEntityCount();
+      resetAddForm();
       setStatus("已提交扫描任务，正在处理…");
       watchScan(parsed.ids);
     } catch (error) {
@@ -810,6 +1091,50 @@
           setStatus("扫描完成，作品已入库");
         }
         return;
+      }
+    }
+    if (token === scanToken) {
+      setStatus("扫描仍在进行，稍后可点搜索刷新", "error");
+    }
+  }
+
+  async function countArtworksByEntities(entityIds) {
+    const response = await fetch("/graphql", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        query: COUNT_QUERY,
+        variables: { filter: { entityIds } },
+      }),
+    });
+    const payload = await response.json();
+    if (!response.ok || (Array.isArray(payload.errors) && payload.errors.length)) {
+      return 0;
+    }
+    return Number(payload?.data?.artworks?.total) || 0;
+  }
+
+  // 单图模式每个实体是一个独立任务，等它们全部出现再刷新列表。
+  async function watchOneImage(entityIds) {
+    const token = ++scanToken;
+    for (let attempt = 0; attempt < SCAN_POLL_ATTEMPTS; attempt += 1) {
+      await delay(SCAN_POLL_INTERVAL);
+      if (token !== scanToken) {
+        return;
+      }
+      const total = await countArtworksByEntities(entityIds).catch(() => 0);
+      if (token !== scanToken) {
+        return;
+      }
+      if (total >= entityIds.length) {
+        await search(true);
+        if (token === scanToken && !status.classList.contains("error")) {
+          setStatus("扫描完成，作品已入库");
+        }
+        return;
+      }
+      if (total > 0) {
+        setStatus(`扫描中… 已入库 ${total}/${entityIds.length}`);
       }
     }
     if (token === scanToken) {
@@ -903,12 +1228,88 @@
 
   tagInput.addEventListener("blur", () => closeTagSuggest());
 
+  // 弹窗标签输入：行为与主搜索框一致，但只加入包含列表。
+  addTagInput.addEventListener("compositionstart", () => {
+    addTagComposing = true;
+  });
+
+  addTagInput.addEventListener("compositionend", () => {
+    addTagComposing = false;
+  });
+
+  addTagInput.addEventListener("input", () => {
+    if (addTagComposing) {
+      return;
+    }
+    addChosenTag = null;
+    clearTimeout(addTagTimer);
+    if (addTagAbortController) {
+      addTagAbortController.abort();
+      addTagAbortController = null;
+    }
+
+    const text = addTagInput.value.trim();
+    if (!text) {
+      closeAddTagSuggest();
+      return;
+    }
+
+    addTagTimer = setTimeout(() => {
+      const controller = new AbortController();
+      addTagAbortController = controller;
+      refreshAddTagSuggest(text, controller.signal).catch((error) => {
+        if (error.name === "AbortError") {
+          return;
+        }
+        renderAddTagSuggest([], "标签查询失败");
+      });
+    }, 200);
+  });
+
+  addTagInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      if (!addTagSuggest.hidden && addTagActive >= 0) {
+        chooseAddTag(addTagActive);
+      } else {
+        addTagFromDialogInput();
+      }
+      return;
+    }
+
+    if (addTagSuggest.hidden) {
+      return;
+    }
+    const count = addTagSuggestions.length;
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      if (count > 0) {
+        setAddTagActive((addTagActive + 1) % count);
+      }
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      if (count > 0) {
+        setAddTagActive(addTagActive <= 0 ? count - 1 : addTagActive - 1);
+      }
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      closeAddTagSuggest();
+    }
+  });
+
+  addTagInput.addEventListener("blur", () => closeAddTagSuggest());
+
+  for (const modeInput of addModeInputs) {
+    modeInput.addEventListener("change", updateAddMode);
+  }
+
   loadMore.addEventListener("click", () => {
     search(false);
   });
 
   addButton.addEventListener("click", () => {
     showAddError("");
+    updateAddMode();
     addDialog.showModal();
     addTitle.focus();
   });
@@ -929,5 +1330,7 @@
   // 初次打开展示最近的 24 个作品；URL 带标签时先还原包含条件。
   restoreTagsFromUrl();
   renderStaging();
+  renderAddTags();
+  updateAddMode();
   search(true);
 })();
