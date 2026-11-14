@@ -50,6 +50,18 @@ concept getCategory = requires (TImpl impl)
 };
 
 template <class TImpl>
+concept getAliasesWithParams = requires (TImpl impl, service::FieldParams params)
+{
+	{ service::AwaitableScalar<std::vector<std::string>> { impl.getAliases(std::move(params)) } };
+};
+
+template <class TImpl>
+concept getAliases = requires (TImpl impl)
+{
+	{ service::AwaitableScalar<std::vector<std::string>> { impl.getAliases() } };
+};
+
+template <class TImpl>
 concept beginSelectionSet = requires (TImpl impl, const service::SelectionSetParams params)
 {
 	{ impl.beginSelectionSet(params) };
@@ -70,6 +82,7 @@ private:
 	[[nodiscard("unnecessary call")]] service::AwaitableResolver resolveId(service::ResolverParams&& params) const;
 	[[nodiscard("unnecessary call")]] service::AwaitableResolver resolveName(service::ResolverParams&& params) const;
 	[[nodiscard("unnecessary call")]] service::AwaitableResolver resolveCategory(service::ResolverParams&& params) const;
+	[[nodiscard("unnecessary call")]] service::AwaitableResolver resolveAliases(service::ResolverParams&& params) const;
 
 	[[nodiscard("unnecessary call")]] service::AwaitableResolver resolve_typename(service::ResolverParams&& params) const;
 
@@ -83,6 +96,7 @@ private:
 		[[nodiscard("unnecessary call")]] virtual service::AwaitableScalar<response::IdType> getId(service::FieldParams&& params) const = 0;
 		[[nodiscard("unnecessary call")]] virtual service::AwaitableScalar<std::string> getName(service::FieldParams&& params) const = 0;
 		[[nodiscard("unnecessary call")]] virtual service::AwaitableScalar<std::optional<std::string>> getCategory(service::FieldParams&& params) const = 0;
+		[[nodiscard("unnecessary call")]] virtual service::AwaitableScalar<std::vector<std::string>> getAliases(service::FieldParams&& params) const = 0;
 	};
 
 	template <class T>
@@ -130,6 +144,19 @@ private:
 			{
 				static_assert(methods::TagHas::getCategory<T>, R"msg(Tag::getCategory is not implemented)msg");
 				return { _pimpl->getCategory() };
+			}
+		}
+
+		[[nodiscard("unnecessary call")]] service::AwaitableScalar<std::vector<std::string>> getAliases(service::FieldParams&& params) const override
+		{
+			if constexpr (methods::TagHas::getAliasesWithParams<T>)
+			{
+				return { _pimpl->getAliases(std::move(params)) };
+			}
+			else
+			{
+				static_assert(methods::TagHas::getAliases<T>, R"msg(Tag::getAliases is not implemented)msg");
+				return { _pimpl->getAliases() };
 			}
 		}
 

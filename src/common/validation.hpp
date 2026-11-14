@@ -12,6 +12,10 @@ namespace tagimg {
 inline constexpr std::size_t kMaxEntityIds = 20;
 inline constexpr std::size_t kMaxTitleLength = 500;
 
+// 标签搜索的关键词长度与返回条数上限，仓储层与 GraphQL 层共用。
+inline constexpr std::size_t kMaxTagSearchLength = 100;
+inline constexpr std::size_t kMaxTagSearchLimit = 50;
+
 // 统计 UTF-8 码位数量（按字符而不是字节限制长度）。
 std::size_t utf8_length(std::string_view text);
 

@@ -21,6 +21,7 @@
 #include "graphql/ArtworkObject.h"
 #include "graphql/MutationObject.h"
 #include "graphql/QueryObject.h"
+#include "graphql/TagMatchObject.h"
 #include "graphql/TagObject.h"
 #include "graphql/TagPathObject.h"
 #include "graphql/TagimgSchema.h"
@@ -137,6 +138,11 @@ public:
         info_.category);
   }
 
+  gql::service::AwaitableScalar<std::vector<std::string>> getAliases() const {
+    return gql::service::AwaitableScalar<std::vector<std::string>>(
+        info_.aliases);
+  }
+
 private:
   ArtworkTagInfo info_;
 };
@@ -158,6 +164,29 @@ public:
 private:
   std::string id_;
   std::string path_;
+};
+
+class TagMatchModel {
+public:
+  explicit TagMatchModel(TagMatch info) : info_(std::move(info)) {
+  }
+
+  gql::service::AwaitableScalar<IdType> getTagId() const {
+    return id_scalar(info_.id);
+  }
+
+  gql::service::AwaitableScalar<std::optional<std::string>> getName() const {
+    return gql::service::AwaitableScalar<std::optional<std::string>>(
+        info_.name);
+  }
+
+  gql::service::AwaitableScalar<std::optional<std::string>> getTagPath() const {
+    return gql::service::AwaitableScalar<std::optional<std::string>>(
+        info_.path);
+  }
+
+private:
+  TagMatch info_;
 };
 
 class ArtistModel {
@@ -519,6 +548,52 @@ public:
                 std::move(items), result->has_more, total,
                 static_cast<int>(query.limit),
                 static_cast<int>(query.offset))));
+  }
+
+  gql::service::AwaitableObject<
+      std::vector<std::shared_ptr<gql::tagimg::object::TagMatch>>>
+  getTags(std::string query, std::unique_ptr<gql::tagimg::TagSearchScope> scope,
+          std::optional<int> limit) const {
+    TagSearchQuery search;
+    search.text = std::move(query);
+    if (search.text.empty() || utf8_length(search.text) > kMaxTagSearchLength) {
+      fail("INVALID_ARGUMENT", "query must be 1 to 100 characters");
+    }
+    if (limit) {
+      if (*limit < 1 || *limit > static_cast<int>(kMaxTagSearchLimit)) {
+        fail("INVALID_ARGUMENT", "limit must be between 1 and 50");
+      }
+      search.limit = static_cast<std::size_t>(*limit);
+    }
+    if (scope) {
+      if (scope->parentId) {
+        const std::string parent = id_text(*scope->parentId);
+        if (!is_uuid(parent)) {
+          fail("INVALID_ARGUMENT", "parentId is not a valid uuid");
+        }
+        search.scope = TagSearchScope::Subtree;
+        search.parent_id = parent;
+      } else {
+        // scope 传了对象但 parentId 为 null：只查全局根的直接子标签。
+        search.scope = TagSearchScope::Root;
+      }
+      search.direct_only = scope->directOnly.value_or(false);
+    }
+
+    const auto result = repository_->search_tags(search);
+    if (!result) {
+      fail_repository(result.error());
+    }
+
+    std::vector<std::shared_ptr<gql::tagimg::object::TagMatch>> items;
+    items.reserve(result->size());
+    for (const TagMatch &match : *result) {
+      items.push_back(std::make_shared<gql::tagimg::object::TagMatch>(
+          std::make_shared<TagMatchModel>(match)));
+    }
+    return gql::service::AwaitableObject<
+        std::vector<std::shared_ptr<gql::tagimg::object::TagMatch>>>(
+        std::move(items));
   }
 
 private:

@@ -50,6 +50,18 @@ concept getArtworks = requires (TImpl impl, std::unique_ptr<ArtworkFilter> filte
 };
 
 template <class TImpl>
+concept getTagsWithParams = requires (TImpl impl, service::FieldParams params, std::string queryArg, std::unique_ptr<TagSearchScope> scopeArg, std::optional<int> limitArg)
+{
+	{ service::AwaitableObject<std::vector<std::shared_ptr<TagMatch>>> { impl.getTags(std::move(params), std::move(queryArg), std::move(scopeArg), std::move(limitArg)) } };
+};
+
+template <class TImpl>
+concept getTags = requires (TImpl impl, std::string queryArg, std::unique_ptr<TagSearchScope> scopeArg, std::optional<int> limitArg)
+{
+	{ service::AwaitableObject<std::vector<std::shared_ptr<TagMatch>>> { impl.getTags(std::move(queryArg), std::move(scopeArg), std::move(limitArg)) } };
+};
+
+template <class TImpl>
 concept beginSelectionSet = requires (TImpl impl, const service::SelectionSetParams params)
 {
 	{ impl.beginSelectionSet(params) };
@@ -70,6 +82,7 @@ private:
 	[[nodiscard("unnecessary call")]] service::AwaitableResolver resolvePing(service::ResolverParams&& params) const;
 	[[nodiscard("unnecessary call")]] service::AwaitableResolver resolveArtwork(service::ResolverParams&& params) const;
 	[[nodiscard("unnecessary call")]] service::AwaitableResolver resolveArtworks(service::ResolverParams&& params) const;
+	[[nodiscard("unnecessary call")]] service::AwaitableResolver resolveTags(service::ResolverParams&& params) const;
 
 	[[nodiscard("unnecessary call")]] service::AwaitableResolver resolve_typename(service::ResolverParams&& params) const;
 	[[nodiscard("unnecessary call")]] service::AwaitableResolver resolve_schema(service::ResolverParams&& params) const;
@@ -87,6 +100,7 @@ private:
 		[[nodiscard("unnecessary call")]] virtual service::AwaitableScalar<std::string> getPing(service::FieldParams&& params) const = 0;
 		[[nodiscard("unnecessary call")]] virtual service::AwaitableObject<std::shared_ptr<Artwork>> getArtwork(service::FieldParams&& params, response::IdType&& idArg) const = 0;
 		[[nodiscard("unnecessary call")]] virtual service::AwaitableObject<std::shared_ptr<ArtworkConnection>> getArtworks(service::FieldParams&& params, std::unique_ptr<ArtworkFilter>&& filterArg, std::optional<ArtworkOrderField>&& orderByArg, std::optional<SortDirection>&& directionArg, std::optional<int>&& limitArg, std::optional<int>&& offsetArg, std::optional<bool>&& includeTotalArg) const = 0;
+		[[nodiscard("unnecessary call")]] virtual service::AwaitableObject<std::vector<std::shared_ptr<TagMatch>>> getTags(service::FieldParams&& params, std::string&& queryArg, std::unique_ptr<TagSearchScope>&& scopeArg, std::optional<int>&& limitArg) const = 0;
 	};
 
 	template <class T>
@@ -134,6 +148,19 @@ private:
 			{
 				static_assert(methods::QueryHas::getArtworks<T>, R"msg(Query::getArtworks is not implemented)msg");
 				return { _pimpl->getArtworks(std::move(filterArg), std::move(orderByArg), std::move(directionArg), std::move(limitArg), std::move(offsetArg), std::move(includeTotalArg)) };
+			}
+		}
+
+		[[nodiscard("unnecessary call")]] service::AwaitableObject<std::vector<std::shared_ptr<TagMatch>>> getTags(service::FieldParams&& params, std::string&& queryArg, std::unique_ptr<TagSearchScope>&& scopeArg, std::optional<int>&& limitArg) const override
+		{
+			if constexpr (methods::QueryHas::getTagsWithParams<T>)
+			{
+				return { _pimpl->getTags(std::move(params), std::move(queryArg), std::move(scopeArg), std::move(limitArg)) };
+			}
+			else
+			{
+				static_assert(methods::QueryHas::getTags<T>, R"msg(Query::getTags is not implemented)msg");
+				return { _pimpl->getTags(std::move(queryArg), std::move(scopeArg), std::move(limitArg)) };
 			}
 		}
 

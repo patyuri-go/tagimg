@@ -35,6 +35,21 @@ type Query {
     "是否统计总数；为 true 时 total 才有值。"
     includeTotal: Boolean = false
   ): ArtworkConnection!
+
+  """
+  按关键词搜索标签库，用于输入联想。
+
+  scope 不传时在全部标签中搜索；scope.parentId 为 null 时只搜索全局根
+  的直接子标签；scope.parentId 有值时搜索该标签的整棵子树。
+  """
+  tags(
+    "关键词，匹配标签标准名，忽略大小写，1 到 100 个字符。"
+    query: String!
+    "搜索范围，缺省时不限制父标签。"
+    scope: TagSearchScope
+    "返回条数，1 到 50，默认 10。"
+    limit: Int = 10
+  ): [TagMatch!]!
 }
 
 "作品过滤条件。"
@@ -135,8 +150,28 @@ type Tag {
   id: ID!
   "标签自身的标准名，例如 1girl。"
   name: String!
-  "根标签的直接子节点名，例如 general；没有父标签时为 null。"
+  "直接父标签的标准名，例如 general；没有父标签时为 null。"
   category: String
+  "别名列表，按名称升序。"
+  aliases: [String!]!
+}
+
+"标签搜索范围。"
+input TagSearchScope {
+  "父标签 ID；显式传 null 表示只查全局根的直接子标签。"
+  parentId: ID
+  "是否只查直接子标签；默认 false，表示查整棵子树。"
+  directOnly: Boolean = false
+}
+
+"标签搜索结果。"
+type TagMatch {
+  "标签 ID。"
+  tagId: ID!
+  "标签标准名。"
+  name: String
+  "从根标签到该标签自身的路径，例如 wd14scan::general::1girl。"
+  tagPath: String
 }
 
 "标签路径。"

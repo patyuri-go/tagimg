@@ -15,9 +15,15 @@
           createdAt
           imageCount
           entityIds
+          tagPaths {
+            id
+            path
+          }
           tags {
             id
             name
+            category
+            aliases
           }
         }
         hasMore
@@ -32,6 +38,17 @@
     }
   `;
 
+  // 标签输入联想：按路径逐段解析，返回 tagId、name 和完整路径。
+  const TAG_SEARCH_QUERY = `
+    query SearchTags($query: String!, $scope: TagSearchScope, $limit: Int!) {
+      tags(query: $query, scope: $scope, limit: $limit) {
+        tagId
+        name
+        tagPath
+      }
+    }
+  `;
+
   const UUID_PATTERN =
     /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   // 与服务端一致，只检查 RFC3339 的形状。
@@ -42,6 +59,13 @@
   const results = document.getElementById("results");
   const status = document.getElementById("status");
   const loadMore = document.getElementById("load-more");
+  const tagInput = document.getElementById("tag-input");
+  const tagSuggest = document.getElementById("tag-suggest");
+  const tagStaging = document.getElementById("tag-staging");
+  const includeStageRow = document.getElementById("include-stage-row");
+  const includeStage = document.getElementById("include-stage");
+  const excludeStageRow = document.getElementById("exclude-stage-row");
+  const excludeStage = document.getElementById("exclude-stage");
 
   const addButton = document.getElementById("add-button");
   const addDialog = document.getElementById("add-dialog");
@@ -61,20 +85,329 @@
   let debounceTimer = 0;
   let scanToken = 0;
 
+  // 标签联想的请求与键盘选中状态。
+  let tagTimer = 0;
+  let tagAbortController = null;
+  let tagComposing = false;
+  let tagSuggestions = [];
+  let tagActive = -1;
+  // 路径解析缓存：完整路径 -> 标签，父路径 + 段名 -> 标签。
+  const tagPathCache = new Map();
+  const tagChildCache = new Map();
+  // 最近一次点击候选选中的标签，回车时直接用它，避免重复解析。
+  let chosenTag = null;
+  // 暂存区，元素为 { id, name, path }。
+  const includeTags = [];
+  const excludeTags = [];
+
   function setStatus(text, kind) {
     status.textContent = text || "";
     status.hidden = !text;
     status.classList.toggle("error", kind === "error");
   }
 
-  async function requestArtworks(title, fromOffset, signal) {
+  // 关闭标签联想下拉，并清掉选中态。
+  function closeTagSuggest() {
+    tagSuggest.hidden = true;
+    tagSuggest.replaceChildren();
+    tagSuggestions = [];
+    tagActive = -1;
+    tagInput.setAttribute("aria-expanded", "false");
+    tagInput.removeAttribute("aria-activedescendant");
+  }
+
+  function setTagActive(index) {
+    const options = tagSuggest.querySelectorAll('[role="option"]');
+    if (index < 0 || index >= options.length) {
+      return;
+    }
+    tagActive = index;
+    options.forEach((option, position) => {
+      const selected = position === index;
+      option.classList.toggle("active", selected);
+      option.setAttribute("aria-selected", selected ? "true" : "false");
+    });
+    tagInput.setAttribute("aria-activedescendant", options[index].id);
+    options[index].scrollIntoView({ block: "nearest" });
+  }
+
+  // 选中候选：把完整路径写回输入框，并在末尾补 :: 方便继续向下补全。
+  function chooseTag(index) {
+    const item = tagSuggestions[index];
+    if (!item) {
+      return;
+    }
+    tagInput.value = `${item.tagPath}::`;
+    chosenTag = { id: item.tagId, name: item.name, path: item.tagPath };
+    closeTagSuggest();
+    tagInput.focus();
+    tagInput.setSelectionRange(tagInput.value.length, tagInput.value.length);
+  }
+
+  function renderTagSuggest(items, emptyText) {
+    tagSuggestions = items;
+    tagActive = -1;
+
+    const fragment = document.createDocumentFragment();
+    items.forEach((item, index) => {
+      const option = document.createElement("li");
+      option.id = `tag-option-${index}`;
+      option.className = "tag-option";
+      option.setAttribute("role", "option");
+      option.setAttribute("aria-selected", "false");
+
+      const name = document.createElement("span");
+      name.className = "tag-option-name";
+      name.textContent = item.name || "（无名称）";
+
+      const path = document.createElement("span");
+      path.className = "tag-option-path";
+      path.textContent = item.tagPath || "";
+
+      option.append(name, path);
+      // pointerdown 先于 blur，阻止默认行为可以保住输入框焦点。
+      option.addEventListener("pointerdown", (event) => {
+        event.preventDefault();
+        chooseTag(index);
+      });
+      fragment.appendChild(option);
+    });
+
+    if (items.length === 0) {
+      const empty = document.createElement("li");
+      empty.className = "tag-empty";
+      empty.textContent = emptyText || "没有匹配的标签";
+      fragment.appendChild(empty);
+    }
+
+    tagSuggest.replaceChildren(fragment);
+    tagSuggest.hidden = false;
+    tagInput.setAttribute("aria-expanded", "true");
+  }
+
+  async function fetchTagSearch(text, scope, limit, signal) {
+    const response = await fetch("/graphql", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        query: TAG_SEARCH_QUERY,
+        variables: { query: text, scope, limit },
+      }),
+      signal,
+    });
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+    const payload = await response.json();
+    if (Array.isArray(payload.errors) && payload.errors.length > 0) {
+      throw new Error(payload.errors[0].message || "标签查询失败");
+    }
+    return (payload.data && payload.data.tags) || [];
+  }
+
+  // 去掉末尾连续的 ::，得到真正要解析或暂存的路径。
+  function trimPathSuffix(text) {
+    return text.trim().replace(/(?:::\s*)+$/, "");
+  }
+
+  // 把 1::2::3 从根开始逐段解析成标签；路径不存在时返回 null。
+  async function resolveTagPath(text, signal) {
+    const normalized = trimPathSuffix(text);
+    if (normalized === "") {
+      return { id: null, name: "", path: "" };
+    }
+    if (tagPathCache.has(normalized)) {
+      return tagPathCache.get(normalized);
+    }
+
+    const names = normalized.split("::");
+    if (names.some((name) => name.trim() === "")) {
+      tagPathCache.set(normalized, null);
+      return null;
+    }
+
+    let parent = { id: null, path: "" };
+    for (const rawName of names) {
+      const name = rawName.trim();
+      const key = `${parent.path}\u0000${name}`;
+      let item = null;
+      if (tagChildCache.has(key)) {
+        item = tagChildCache.get(key);
+      } else {
+        // 只查直接子标签，保证补全出来的是路径的下一段。
+        const scope = parent.id
+          ? { parentId: parent.id, directOnly: true }
+          : {};
+        const items = await fetchTagSearch(name, scope, 10, signal);
+        item =
+          items.find(
+            (entry) => entry.name.toLowerCase() === name.toLowerCase(),
+          ) || null;
+        tagChildCache.set(key, item);
+      }
+      if (!item) {
+        tagPathCache.set(normalized, null);
+        return null;
+      }
+      parent = { id: item.tagId, name: item.name, path: item.tagPath };
+    }
+
+    tagPathCache.set(normalized, parent);
+    return parent;
+  }
+
+  // 拆成「已确定父路径」和「正在输入的最后一段」。
+  function splitTagInput(text) {
+    const value = text.trimEnd();
+    if (value.endsWith("::")) {
+      return { parentText: value.slice(0, -2).trimEnd(), partial: "" };
+    }
+    const index = value.lastIndexOf("::");
+    if (index < 0) {
+      return { parentText: "", partial: value };
+    }
+    return {
+      parentText: value.slice(0, index).trimEnd(),
+      partial: value.slice(index + 2),
+    };
+  }
+
+  async function refreshTagSuggest(text, signal) {
+    const { parentText, partial } = splitTagInput(text);
+    if (partial === "") {
+      closeTagSuggest();
+      return;
+    }
+
+    // 没有父路径时全库搜索；有父路径时在该标签的整棵子树里搜索，
+    // 这样即使跳过中间层，也能补全出完整路径。
+    let parent = { id: null, path: "" };
+    if (parentText) {
+      parent = await resolveTagPath(parentText, signal);
+      if (signal.aborted) {
+        return;
+      }
+      if (!parent) {
+        renderTagSuggest([], "路径不存在");
+        return;
+      }
+    }
+
+    const scope = parent.id ? { parentId: parent.id } : undefined;
+    const items = await fetchTagSearch(partial, scope, 10, signal);
+    if (signal.aborted) {
+      return;
+    }
+    renderTagSuggest(items);
+  }
+
+  // 暂存区：只显示标签名，点击移除；包含与不包含互斥，后加覆盖。
+  function addStageTag(tag, kind) {
+    const target = kind === "exclude" ? excludeTags : includeTags;
+    const other = kind === "exclude" ? includeTags : excludeTags;
+    const otherIndex = other.findIndex((item) => item.id === tag.id);
+    if (otherIndex >= 0) {
+      other.splice(otherIndex, 1);
+    }
+    if (!target.some((item) => item.id === tag.id)) {
+      target.push(tag);
+    }
+    renderStaging();
+    search(true);
+  }
+
+  function removeStageTag(id, kind) {
+    const list = kind === "exclude" ? excludeTags : includeTags;
+    const index = list.findIndex((item) => item.id === id);
+    if (index < 0) {
+      return;
+    }
+    list.splice(index, 1);
+    renderStaging();
+    search(true);
+  }
+
+  function fillStage(listEl, tags, kind) {
+    const fragment = document.createDocumentFragment();
+    for (const tag of tags) {
+      const chip = document.createElement("button");
+      chip.type = "button";
+      chip.className = "chip chip-filter";
+      chip.textContent = tag.name;
+      chip.title = `${tag.path}\n点击移除`;
+      chip.addEventListener("click", () => removeStageTag(tag.id, kind));
+      fragment.appendChild(chip);
+    }
+    listEl.replaceChildren(fragment);
+  }
+
+  function renderStaging() {
+    fillStage(includeStage, includeTags, "include");
+    fillStage(excludeStage, excludeTags, "exclude");
+    includeStageRow.hidden = includeTags.length === 0;
+    excludeStageRow.hidden = excludeTags.length === 0;
+    tagStaging.hidden = includeTags.length === 0 && excludeTags.length === 0;
+  }
+
+  // 回车：把输入框里的完整路径加入包含或排除暂存区。
+  async function addTagFromInput(kind) {
+    const normalized = trimPathSuffix(tagInput.value);
+    if (normalized === "") {
+      return;
+    }
+
+    let tag = null;
+    if (chosenTag && normalized === chosenTag.path) {
+      tag = chosenTag;
+    } else {
+      try {
+        tag = await resolveTagPath(normalized, null);
+      } catch (error) {
+        setStatus(error.message || "标签解析失败", "error");
+        return;
+      }
+    }
+
+    if (!tag) {
+      setStatus(`找不到标签路径：${normalized}`, "error");
+      return;
+    }
+
+    // 保留完整路径并补上 ::，方便继续在它下面补全。
+    tagInput.value = `${tag.path}::`;
+    chosenTag = null;
+    closeTagSuggest();
+    tagInput.focus();
+    tagInput.setSelectionRange(tagInput.value.length, tagInput.value.length);
+    addStageTag(tag, kind);
+  }
+
+  // 标题 + 暂存区标签共同组成作品过滤条件。
+  function currentFilter() {
+    const filter = {};
+    const title = input.value.trim();
+    if (title) {
+      filter.title = title;
+    }
+    if (includeTags.length > 0) {
+      filter.includeTagIds = includeTags.map((tag) => tag.id);
+      // 包含暂存区里的标签必须全部命中。
+      filter.includeMode = "ALL";
+    }
+    if (excludeTags.length > 0) {
+      filter.excludeTagIds = excludeTags.map((tag) => tag.id);
+    }
+    return Object.keys(filter).length > 0 ? filter : null;
+  }
+
+  async function requestArtworks(filter, fromOffset, signal) {
     const response = await fetch("/graphql", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         query: SEARCH_QUERY,
         variables: {
-          filter: title ? { title } : null,
+          filter,
           limit: PAGE_SIZE,
           offset: fromOffset,
         },
@@ -148,9 +481,27 @@
     return thumb;
   }
 
+  // 标签悬停提示：第一个别名、完整路径、直接父标签名。
+  function tag_tooltip(tag, path) {
+    const lines = [];
+    const aliases = Array.isArray(tag.aliases) ? tag.aliases : [];
+    if (aliases.length > 0) {
+      lines.push(`别名：${aliases[0]}`);
+    }
+    if (path) {
+      lines.push(`路径：${path}`);
+    }
+    if (tag.category) {
+      lines.push(`分类：${tag.category}`);
+    }
+    return lines.join("\n");
+  }
+
   function createCard(item) {
-    const card = document.createElement("article");
+    // 整张卡片就是详情页链接，语义上用 a。
+    const card = document.createElement("a");
     card.className = "card";
+    card.href = `/artwork.html?id=${encodeURIComponent(item.id)}`;
 
     const body = document.createElement("div");
     body.className = "card-body";
@@ -172,13 +523,19 @@
 
     const tags = Array.isArray(item.tags) ? item.tags : [];
     if (tags.length > 0) {
+      // 悬停提示要显示完整路径，先按标签 id 建索引。
+      const pathById = new Map();
+      for (const entry of Array.isArray(item.tagPaths) ? item.tagPaths : []) {
+        pathById.set(entry.id, entry.path);
+      }
+
       const list = document.createElement("div");
       list.className = "tags";
       for (const tag of tags.slice(0, 6)) {
         const chip = document.createElement("span");
         chip.className = "chip";
         chip.textContent = tag.name;
-        chip.title = tag.name;
+        chip.title = tag_tooltip(tag, pathById.get(tag.id));
         list.appendChild(chip);
       }
       if (tags.length > 6) {
@@ -206,7 +563,7 @@
   }
 
   async function search(reset) {
-    const title = input.value.trim();
+    const filter = currentFilter();
 
     if (reset) {
       offset = 0;
@@ -223,13 +580,13 @@
     setStatus("搜索中…");
 
     try {
-      const data = await requestArtworks(title, offset, controller.signal);
+      const data = await requestArtworks(filter, offset, controller.signal);
       if (inFlight !== controller) {
         return;
       }
 
       if (data.items.length === 0 && offset === 0) {
-        setStatus(title ? `没有匹配“${title}”的作品` : "还没有作品");
+        setStatus(filter ? "没有符合条件的作品" : "还没有作品");
       } else if (typeof data.total === "number") {
         setStatus(`共 ${data.total} 个作品`);
       } else {
@@ -429,6 +786,81 @@
     clearTimeout(debounceTimer);
     debounceTimer = setTimeout(() => search(true), 300);
   });
+
+  // 标签联想：中文输入法组合期间不触发查询。
+  tagInput.addEventListener("compositionstart", () => {
+    tagComposing = true;
+  });
+
+  tagInput.addEventListener("compositionend", () => {
+    tagComposing = false;
+  });
+
+  tagInput.addEventListener("input", () => {
+    if (tagComposing) {
+      return;
+    }
+    // 手动改过输入框后，之前点击选中的标签不再可信。
+    chosenTag = null;
+    clearTimeout(tagTimer);
+    if (tagAbortController) {
+      tagAbortController.abort();
+      tagAbortController = null;
+    }
+
+    const text = tagInput.value.trim();
+    if (!text) {
+      closeTagSuggest();
+      return;
+    }
+
+    tagTimer = setTimeout(() => {
+      const controller = new AbortController();
+      tagAbortController = controller;
+      refreshTagSuggest(text, controller.signal).catch((error) => {
+        if (error.name === "AbortError") {
+          return;
+        }
+        renderTagSuggest([], "标签查询失败");
+      });
+    }, 200);
+  });
+
+  tagInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      // Shift+回车加入不包含暂存区，直接回车加入包含暂存区。
+      if (event.shiftKey) {
+        addTagFromInput("exclude");
+      } else if (!tagSuggest.hidden && tagActive >= 0) {
+        chooseTag(tagActive);
+      } else {
+        addTagFromInput("include");
+      }
+      return;
+    }
+
+    if (tagSuggest.hidden) {
+      return;
+    }
+    const count = tagSuggestions.length;
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      if (count > 0) {
+        setTagActive((tagActive + 1) % count);
+      }
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      if (count > 0) {
+        setTagActive(tagActive <= 0 ? count - 1 : tagActive - 1);
+      }
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      closeTagSuggest();
+    }
+  });
+
+  tagInput.addEventListener("blur", () => closeTagSuggest());
 
   loadMore.addEventListener("click", () => {
     search(false);

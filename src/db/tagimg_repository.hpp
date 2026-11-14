@@ -72,11 +72,43 @@ struct ArtworkTagInfo {
   std::optional<std::string> category;
   // 从根标签到该标签自身、用 :: 连接的路径。
   std::string path;
+  // 别名，按名称升序。
+  std::vector<std::string> aliases;
 };
 
 struct ArtworkArtistInfo {
   std::string id;
   std::string name;
+};
+
+// 一条标签搜索结果。
+struct TagMatch {
+  std::string id;
+  // 标签自身的标准名。
+  std::string name;
+  // 从根标签到该标签自身、用 :: 连接的路径。
+  std::string path;
+};
+
+// 标签搜索的父标签范围。
+enum class TagSearchScope {
+  // 不限父标签。
+  Any,
+  // 只查全局根的直接子标签。
+  Root,
+  // 查指定父标签的整棵子树，不含父标签自身。
+  Subtree,
+};
+
+// 一次标签搜索的条件。
+struct TagSearchQuery {
+  std::string text;
+  TagSearchScope scope = TagSearchScope::Any;
+  // 仅 scope 为 Subtree 时使用。
+  std::string parent_id;
+  // Subtree 下是否只查直接子标签，默认整棵子树。
+  bool direct_only = false;
+  std::size_t limit = 10;
 };
 
 // 一次作品查询返回的单条作品。
@@ -162,6 +194,10 @@ public:
   // 分页查询作品。条件之间是 AND，同一数组内部是 OR。
   [[nodiscard]] Result<ArtworkSearchResult, TagimgRepositoryError>
   search_artworks(const ArtworkSearchQuery &query) const;
+
+  // 按标准名搜索标签，用于输入联想。
+  [[nodiscard]] Result<std::vector<TagMatch>, TagimgRepositoryError>
+  search_tags(const TagSearchQuery &query) const;
 
 private:
   struct Impl;

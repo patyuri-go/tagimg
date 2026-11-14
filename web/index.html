@@ -30,6 +30,22 @@
           />
           <button type="submit">搜索</button>
         </form>
+        <div class="tag-search">
+          <label class="visually-hidden" for="tag-input">按标签搜索</label>
+          <input
+            id="tag-input"
+            type="search"
+            placeholder="输入标签名或路径…"
+            autocomplete="off"
+            spellcheck="false"
+            role="combobox"
+            aria-autocomplete="list"
+            aria-expanded="false"
+            aria-controls="tag-suggest"
+            title="选中后按回车加入包含，Shift+回车加入不包含"
+          />
+          <ul id="tag-suggest" class="tag-suggest" role="listbox" hidden></ul>
+        </div>
         <button
           id="add-button"
           class="add-button"
@@ -43,6 +59,16 @@
 
     <main class="page">
       <div class="toolbar">
+        <div id="tag-staging" class="tag-staging" hidden>
+          <div id="include-stage-row" class="tag-stage" hidden>
+            <span class="tag-stage-label">包含</span>
+            <div id="include-stage" class="tag-stage-list"></div>
+          </div>
+          <div id="exclude-stage-row" class="tag-stage" hidden>
+            <span class="tag-stage-label">不包含</span>
+            <div id="exclude-stage" class="tag-stage-list"></div>
+          </div>
+        </div>
         <p id="status" class="status" hidden></p>
       </div>
 

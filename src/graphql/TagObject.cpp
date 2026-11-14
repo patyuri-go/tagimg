@@ -38,6 +38,10 @@ service::ResolverMap Tag::getResolvers() const noexcept {
            [this](service::ResolverParams &&params) {
              return resolveName(std::move(params));
            }},
+          {R"gql(aliases)gql"sv,
+           [this](service::ResolverParams &&params) {
+             return resolveAliases(std::move(params));
+           }},
           {R"gql(category)gql"sv,
            [this](service::ResolverParams &&params) {
              return resolveCategory(std::move(params));
@@ -98,6 +102,20 @@ Tag::resolveCategory(service::ResolverParams &&params) const {
 }
 
 service::AwaitableResolver
+Tag::resolveAliases(service::ResolverParams &&params) const {
+  std::unique_lock resolverLock(_resolverMutex);
+  service::SelectionSetParams selectionSetParams{
+      static_cast<const service::SelectionSetParams &>(params)};
+  auto directives = std::move(params.fieldDirectives);
+  auto result = _pimpl->getAliases(service::FieldParams{
+      std::move(selectionSetParams), std::move(directives)});
+  resolverLock.unlock();
+
+  return service::ModifiedResult<std::string>::convert<
+      service::TypeModifier::List>(std::move(result), std::move(params));
+}
+
+service::AwaitableResolver
 Tag::resolve_typename(service::ResolverParams &&params) const {
   return service::Result<std::string>::convert(std::string{R"gql(Tag)gql"},
                                                std::move(params));
@@ -119,8 +137,18 @@ void AddTagDetails(const std::shared_ptr<schema::ObjectType> &typeTag,
                             schema->LookupType(R"gql(String)gql"sv))),
        schema::Field::Make(
            R"gql(category)gql"sv,
-           R"md(根标签的直接子节点名，例如 general；没有父标签时为 null。)md"sv,
-           std::nullopt, schema->LookupType(R"gql(String)gql"sv))});
+           R"md(直接父标签的标准名，例如 general；没有父标签时为 null。)md"sv,
+           std::nullopt, schema->LookupType(R"gql(String)gql"sv)),
+       schema::Field::Make(
+           R"gql(aliases)gql"sv, R"md(别名列表，按名称升序。)md"sv,
+           std::nullopt,
+           schema->WrapType(
+               introspection::TypeKind::NON_NULL,
+               schema->WrapType(
+                   introspection::TypeKind::LIST,
+                   schema->WrapType(
+                       introspection::TypeKind::NON_NULL,
+                       schema->LookupType(R"gql(String)gql"sv)))))});
 }
 
 } // namespace graphql::tagimg

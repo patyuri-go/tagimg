@@ -143,6 +143,7 @@ add_library(tagimg_graphql STATIC
     src/graphql/ArtworkObject.cpp
     src/graphql/MutationObject.cpp
     src/graphql/QueryObject.cpp
+    src/graphql/TagMatchObject.cpp
     src/graphql/TagObject.cpp
     src/graphql/TagPathObject.cpp
     src/graphql/TagimgSchema.cpp

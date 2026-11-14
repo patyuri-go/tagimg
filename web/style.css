@@ -152,6 +152,128 @@ body {
   filter: brightness(1.06);
 }
 
+/* 标签输入联想 */
+.tag-search {
+  position: relative;
+  flex: 1 1 200px;
+  max-width: 280px;
+}
+
+.tag-search input {
+  width: 100%;
+  height: 40px;
+  padding: 0 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 15px;
+  outline: none;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.tag-search input::placeholder {
+  color: var(--muted);
+}
+
+.tag-search input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+.tag-suggest {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  left: 0;
+  z-index: 20;
+  max-height: 320px;
+  margin: 0;
+  padding: 6px;
+  overflow-y: auto;
+  list-style: none;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.tag-option {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border-radius: 7px;
+  cursor: pointer;
+}
+
+.tag-option:hover,
+.tag-option.active {
+  background: var(--chip-bg);
+}
+
+.tag-option-name {
+  font-size: 14px;
+  line-height: 1.3;
+  word-break: break-word;
+}
+
+.tag-option-path {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.3;
+  word-break: break-all;
+}
+
+.tag-empty {
+  padding: 10px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+/* 标签暂存区 */
+.tag-staging {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.tag-stage {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.tag-stage-label {
+  flex: none;
+  padding-top: 3px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.tag-stage-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.chip-filter {
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.3;
+  cursor: pointer;
+}
+
+.chip-filter:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
 .search button:active {
   filter: brightness(0.94);
 }
@@ -502,6 +624,121 @@ body {
   cursor: progress;
 }
 
+/* 卡片本身就是详情页链接 */
+a.card {
+  color: inherit;
+  text-decoration: none;
+}
+
+a.card:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  outline-offset: 2px;
+}
+
+.top-link {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 14px;
+  text-decoration: none;
+}
+
+.top-link:hover {
+  color: var(--text);
+}
+
+/* 作品详情 */
+.detail {
+  max-width: 1100px;
+}
+
+.detail-head {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.detail-title {
+  margin: 0;
+  font-size: clamp(22px, 3vw, 30px);
+  line-height: 1.25;
+  word-break: break-word;
+}
+
+.detail-meta {
+  flex-wrap: wrap;
+  gap: 6px 18px;
+}
+
+.meta-label {
+  margin-right: 6px;
+  color: var(--muted);
+}
+
+.mono {
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 0.92em;
+  word-break: break-all;
+}
+
+.detail-description {
+  margin: 18px 0 0;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.detail-section {
+  margin-top: 30px;
+}
+
+.section-title {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0 0 12px;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.gallery {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 14px;
+}
+
+.gallery-item {
+  display: block;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background:
+    repeating-linear-gradient(
+      45deg,
+      color-mix(in srgb, var(--border) 60%, transparent) 0 10px,
+      transparent 10px 20px
+    ),
+    var(--bg);
+  box-shadow: var(--shadow);
+}
+
+.gallery-item img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.gallery-item:hover img {
+  opacity: 0.94;
+}
+
+.gallery-placeholder {
+  display: grid;
+  place-items: center;
+  aspect-ratio: 3 / 2;
+  color: var(--muted);
+  font-size: 13px;
+}
+
 /* 窄屏 */
 @media (max-width: 640px) {
   .topbar-inner {
@@ -518,6 +755,12 @@ body {
     max-width: none;
   }
 
+  .tag-search {
+    order: 3;
+    flex-basis: 100%;
+    max-width: none;
+  }
+
   .page {
     padding: 16px 16px 40px;
   }
@@ -525,5 +768,13 @@ body {
   .grid {
     grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
     gap: 12px;
+  }
+
+  .gallery {
+    grid-template-columns: 1fr;
+  }
+
+  .detail-section {
+    margin-top: 24px;
   }
 }

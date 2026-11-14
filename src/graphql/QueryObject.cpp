@@ -6,6 +6,7 @@
 #include "QueryObject.h"
 #include "ArtworkConnectionObject.h"
 #include "ArtworkObject.h"
+#include "TagMatchObject.h"
 
 #include "graphqlservice/internal/Introspection.h"
 
@@ -36,6 +37,10 @@ service::ResolverMap Query::getResolvers() const noexcept {
   return {{R"gql(ping)gql"sv,
            [this](service::ResolverParams &&params) {
              return resolvePing(std::move(params));
+           }},
+          {R"gql(tags)gql"sv,
+           [this](service::ResolverParams &&params) {
+             return resolveTags(std::move(params));
            }},
           {R"gql(__type)gql"sv,
            [this](service::ResolverParams &&params) {
@@ -177,6 +182,44 @@ Query::resolveArtworks(service::ResolverParams &&params) const {
 }
 
 service::AwaitableResolver
+Query::resolveTags(service::ResolverParams &&params) const {
+  static const auto defaultArguments = []() {
+    response::Value values(response::Type::Map);
+    response::Value entry;
+
+    entry = response::Value(static_cast<int>(10));
+    values.emplace_back("limit", std::move(entry));
+
+    return values;
+  }();
+
+  auto argQuery = service::ModifiedArgument<std::string>::require(
+      "query", params.arguments);
+  auto argScope = service::ModifiedArgument<tagimg::TagSearchScope>::require<
+      service::TypeModifier::Nullable>("scope", params.arguments);
+  auto pairLimit =
+      service::ModifiedArgument<int>::find<service::TypeModifier::Nullable>(
+          "limit", params.arguments);
+  auto argLimit =
+      (pairLimit.second
+           ? std::move(pairLimit.first)
+           : service::ModifiedArgument<int>::require<
+                 service::TypeModifier::Nullable>("limit", defaultArguments));
+  std::unique_lock resolverLock(_resolverMutex);
+  service::SelectionSetParams selectionSetParams{
+      static_cast<const service::SelectionSetParams &>(params)};
+  auto directives = std::move(params.fieldDirectives);
+  auto result = _pimpl->getTags(
+      service::FieldParams{std::move(selectionSetParams),
+                           std::move(directives)},
+      std::move(argQuery), std::move(argScope), std::move(argLimit));
+  resolverLock.unlock();
+
+  return service::ModifiedResult<TagMatch>::convert<
+      service::TypeModifier::List>(std::move(result), std::move(params));
+}
+
+service::AwaitableResolver
 Query::resolve_typename(service::ResolverParams &&params) const {
   return service::Result<std::string>::convert(std::string{R"gql(Query)gql"},
                                                std::move(params));
@@ -253,8 +296,32 @@ ID 必须是合法 UUID，否则返回 INVALID_ARGUMENT 错误；
             schema::InputValue::Make(
                 R"gql(includeTotal)gql"sv,
                 R"md(是否统计总数；为 true 时 total 才有值。)md"sv,
-                schema->LookupType(R"gql(Boolean)gql"sv),
-                R"gql(false)gql"sv)})});
+                schema->LookupType(R"gql(Boolean)gql"sv), R"gql(false)gql"sv)}),
+       schema::Field::Make(
+           R"gql(tags)gql"sv, R"md(按关键词搜索标签库，用于输入联想。
+
+scope 不传时在全部标签中搜索；scope.parentId 为 null 时只搜索全局根
+的直接子标签；scope.parentId 有值时搜索该标签的整棵子树。)md"sv,
+           std::nullopt,
+           schema->WrapType(
+               introspection::TypeKind::NON_NULL,
+               schema->WrapType(
+                   introspection::TypeKind::LIST,
+                   schema->WrapType(
+                       introspection::TypeKind::NON_NULL,
+                       schema->LookupType(R"gql(TagMatch)gql"sv)))),
+           {schema::InputValue::Make(
+                R"gql(query)gql"sv,
+                R"md(关键词，匹配标签标准名，忽略大小写，1 到 100 个字符。)md"sv,
+                schema->WrapType(introspection::TypeKind::NON_NULL,
+                                 schema->LookupType(R"gql(String)gql"sv)),
+                R"gql()gql"sv),
+            schema::InputValue::Make(
+                R"gql(scope)gql"sv, R"md(搜索范围，缺省时不限制父标签。)md"sv,
+                schema->LookupType(R"gql(TagSearchScope)gql"sv), R"gql()gql"sv),
+            schema::InputValue::Make(
+                R"gql(limit)gql"sv, R"md(返回条数，1 到 50，默认 10。)md"sv,
+                schema->LookupType(R"gql(Int)gql"sv), R"gql(10)gql"sv)})});
 }
 
 } // namespace graphql::tagimg

@@ -132,6 +132,23 @@ struct [[nodiscard("unnecessary construction")]] ArtworkFilter
 	std::optional<bool> expandExcludeTagDescendants;
 };
 
+struct [[nodiscard("unnecessary construction")]] TagSearchScope
+{
+	explicit TagSearchScope() noexcept;
+	explicit TagSearchScope(
+		std::optional<response::IdType> parentIdArg,
+		std::optional<bool> directOnlyArg) noexcept;
+	TagSearchScope(const TagSearchScope& other);
+	TagSearchScope(TagSearchScope&& other) noexcept;
+	~TagSearchScope();
+
+	TagSearchScope& operator=(const TagSearchScope& other);
+	TagSearchScope& operator=(TagSearchScope&& other) noexcept;
+
+	std::optional<response::IdType> parentId;
+	std::optional<bool> directOnly;
+};
+
 struct [[nodiscard("unnecessary construction")]] AddArtworkInput
 {
 	explicit AddArtworkInput() noexcept;
@@ -163,6 +180,7 @@ class Query;
 class ArtworkConnection;
 class Artwork;
 class Tag;
+class TagMatch;
 class TagPath;
 class Artist;
 class Mutation;
@@ -193,6 +211,7 @@ void AddQueryDetails(const std::shared_ptr<schema::ObjectType>& typeQuery, const
 void AddArtworkConnectionDetails(const std::shared_ptr<schema::ObjectType>& typeArtworkConnection, const std::shared_ptr<schema::Schema>& schema);
 void AddArtworkDetails(const std::shared_ptr<schema::ObjectType>& typeArtwork, const std::shared_ptr<schema::Schema>& schema);
 void AddTagDetails(const std::shared_ptr<schema::ObjectType>& typeTag, const std::shared_ptr<schema::Schema>& schema);
+void AddTagMatchDetails(const std::shared_ptr<schema::ObjectType>& typeTagMatch, const std::shared_ptr<schema::Schema>& schema);
 void AddTagPathDetails(const std::shared_ptr<schema::ObjectType>& typeTagPath, const std::shared_ptr<schema::Schema>& schema);
 void AddArtistDetails(const std::shared_ptr<schema::ObjectType>& typeArtist, const std::shared_ptr<schema::Schema>& schema);
 void AddMutationDetails(const std::shared_ptr<schema::ObjectType>& typeMutation, const std::shared_ptr<schema::Schema>& schema);

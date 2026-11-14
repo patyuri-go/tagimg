@@ -279,6 +279,34 @@ Argument<tagimg::ArtworkFilter>::convert(const response::Value &value) {
 }
 
 template <>
+tagimg::TagSearchScope
+Argument<tagimg::TagSearchScope>::convert(const response::Value &value) {
+  const auto defaultValue = []() {
+    response::Value values(response::Type::Map);
+    response::Value entry;
+
+    entry = response::Value(false);
+    values.emplace_back("directOnly", std::move(entry));
+
+    return values;
+  }();
+
+  auto valueParentId = service::ModifiedArgument<response::IdType>::require<
+      service::TypeModifier::Nullable>("parentId", value);
+  auto pairDirectOnly =
+      service::ModifiedArgument<bool>::find<service::TypeModifier::Nullable>(
+          "directOnly", value);
+  auto valueDirectOnly =
+      (pairDirectOnly.second
+           ? std::move(pairDirectOnly.first)
+           : service::ModifiedArgument<bool>::require<
+                 service::TypeModifier::Nullable>("directOnly", defaultValue));
+
+  return tagimg::TagSearchScope{std::move(valueParentId),
+                                std::move(valueDirectOnly)};
+}
+
+template <>
 tagimg::AddArtworkInput
 Argument<tagimg::AddArtworkInput>::convert(const response::Value &value) {
   auto valueEntityIds = service::ModifiedArgument<response::IdType>::require<
@@ -390,6 +418,46 @@ ArtworkFilter &ArtworkFilter::operator=(ArtworkFilter &&other) noexcept {
   return *this;
 }
 
+TagSearchScope::TagSearchScope() noexcept : parentId{}, directOnly{} {
+  // Explicit definition to prevent ODR violations when LTO is enabled.
+}
+
+TagSearchScope::TagSearchScope(std::optional<response::IdType> parentIdArg,
+                               std::optional<bool> directOnlyArg) noexcept
+    : parentId{std::move(parentIdArg)}, directOnly{std::move(directOnlyArg)} {
+}
+
+TagSearchScope::TagSearchScope(const TagSearchScope &other)
+    : parentId{service::ModifiedArgument<response::IdType>::duplicate<
+          service::TypeModifier::Nullable>(other.parentId)},
+      directOnly{service::ModifiedArgument<bool>::duplicate<
+          service::TypeModifier::Nullable>(other.directOnly)} {
+}
+
+TagSearchScope::TagSearchScope(TagSearchScope &&other) noexcept
+    : parentId{std::move(other.parentId)},
+      directOnly{std::move(other.directOnly)} {
+}
+
+TagSearchScope::~TagSearchScope() {
+  // Explicit definition to prevent ODR violations when LTO is enabled.
+}
+
+TagSearchScope &TagSearchScope::operator=(const TagSearchScope &other) {
+  TagSearchScope value{other};
+
+  std::swap(*this, value);
+
+  return *this;
+}
+
+TagSearchScope &TagSearchScope::operator=(TagSearchScope &&other) noexcept {
+  parentId = std::move(other.parentId);
+  directOnly = std::move(other.directOnly);
+
+  return *this;
+}
+
 AddArtworkInput::AddArtworkInput() noexcept
     : entityIds{}, title{}, description{}, publishedAt{}, tagIds{},
       artistIds{} {
@@ -475,6 +543,9 @@ void AddTypesToSchema(const std::shared_ptr<schema::Schema> &schema) {
   auto typeArtworkFilter = schema::InputObjectType::Make(
       R"gql(ArtworkFilter)gql"sv, R"md(作品过滤条件。)md"sv);
   schema->AddType(R"gql(ArtworkFilter)gql"sv, typeArtworkFilter);
+  auto typeTagSearchScope = schema::InputObjectType::Make(
+      R"gql(TagSearchScope)gql"sv, R"md(标签搜索范围。)md"sv);
+  schema->AddType(R"gql(TagSearchScope)gql"sv, typeTagSearchScope);
   auto typeAddArtworkInput = schema::InputObjectType::Make(
       R"gql(AddArtworkInput)gql"sv,
       R"md(提交一次图片扫描任务所需的参数。)md"sv);
@@ -490,6 +561,9 @@ void AddTypesToSchema(const std::shared_ptr<schema::Schema> &schema) {
   schema->AddType(R"gql(Artwork)gql"sv, typeArtwork);
   auto typeTag = schema::ObjectType::Make(R"gql(Tag)gql"sv, R"md(标签。)md"sv);
   schema->AddType(R"gql(Tag)gql"sv, typeTag);
+  auto typeTagMatch = schema::ObjectType::Make(R"gql(TagMatch)gql"sv,
+                                               R"md(标签搜索结果。)md"sv);
+  schema->AddType(R"gql(TagMatch)gql"sv, typeTagMatch);
   auto typeTagPath =
       schema::ObjectType::Make(R"gql(TagPath)gql"sv, R"md(标签路径。)md"sv);
   schema->AddType(R"gql(TagPath)gql"sv, typeTagPath);
@@ -571,6 +645,15 @@ void AddTypesToSchema(const std::shared_ptr<schema::Schema> &schema) {
                                 R"md(excludeTagIds 是否递归包含后代标签。)md"sv,
                                 schema->LookupType(R"gql(Boolean)gql"sv),
                                 R"gql(false)gql"sv)});
+  typeTagSearchScope->AddInputValues(
+      {schema::InputValue::Make(
+           R"gql(parentId)gql"sv,
+           R"md(父标签 ID；显式传 null 表示只查全局根的直接子标签。)md"sv,
+           schema->LookupType(R"gql(ID)gql"sv), R"gql()gql"sv),
+       schema::InputValue::Make(
+           R"gql(directOnly)gql"sv,
+           R"md(是否只查直接子标签；默认 false，表示查整棵子树。)md"sv,
+           schema->LookupType(R"gql(Boolean)gql"sv), R"gql(false)gql"sv)});
   typeAddArtworkInput->AddInputValues(
       {schema::InputValue::Make(
            R"gql(entityIds)gql"sv,
@@ -615,6 +698,7 @@ void AddTypesToSchema(const std::shared_ptr<schema::Schema> &schema) {
   AddArtworkConnectionDetails(typeArtworkConnection, schema);
   AddArtworkDetails(typeArtwork, schema);
   AddTagDetails(typeTag, schema);
+  AddTagMatchDetails(typeTagMatch, schema);
   AddTagPathDetails(typeTagPath, schema);
   AddArtistDetails(typeArtist, schema);
   AddMutationDetails(typeMutation, schema);

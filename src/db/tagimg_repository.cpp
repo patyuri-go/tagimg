@@ -151,16 +151,30 @@ std::string uuid_array_literal(const std::vector<std::string> &ids) {
 }
 
 // LIKE 模式里转义 % _ \，保证按字面匹配。
+std::string escape_like(std::string_view text) {
+  std::string escaped;
+  escaped.reserve(text.size());
+  for (const char c : text) {
+    if (c == '\\' || c == '%' || c == '_') {
+      escaped.push_back('\\');
+    }
+    escaped.push_back(c);
+  }
+  return escaped;
+}
+
 std::string like_pattern(std::string_view text) {
   std::string pattern;
   pattern.reserve(text.size() + 2);
   pattern.push_back('%');
-  for (const char c : text) {
-    if (c == '\\' || c == '%' || c == '_') {
-      pattern.push_back('\\');
-    }
-    pattern.push_back(c);
-  }
+  pattern += escape_like(text);
+  pattern.push_back('%');
+  return pattern;
+}
+
+// 前缀匹配，用于给「完全相等 > 前缀 > 其他」排序。
+std::string like_prefix_pattern(std::string_view text) {
+  std::string pattern = escape_like(text);
   pattern.push_back('%');
   return pattern;
 }
@@ -305,6 +319,13 @@ FROM aggregated a
 LEFT JOIN tag_name n ON n.tag_id = a.tag_id AND n.type = 'standard'
 )sql";
 
+constexpr const char *kArtworkAliasesSql = R"sql(
+SELECT tn.tag_id::text, tn.name
+FROM tag_name tn
+WHERE tn.type = 'alias' AND tn.tag_id = ANY(CAST(:tag_ids AS uuid[]))
+ORDER BY tn.tag_id, tn.name
+)sql";
+
 constexpr const char *kArtworkArtistsSql = R"sql(
 SELECT aa.artwork_id::text, ar.id::text, ar.name
 FROM artwork_artists aa
@@ -390,6 +411,16 @@ void attach_relations(soci::session &sql, std::vector<ArtworkSummary> &items) {
       }
       info.path = row.get<std::string>(3);
       tag_infos.emplace(info.id, std::move(info));
+    }
+
+    // 别名单独查一次，避免在路径 CTE 里放大结果集。
+    soci::rowset<soci::row> aliases =
+        (sql.prepare << kArtworkAliasesSql, soci::use(tag_array));
+    for (const soci::row &row : aliases) {
+      const auto found = tag_infos.find(row.get<std::string>(0));
+      if (found != tag_infos.end()) {
+        found->second.aliases.push_back(row.get<std::string>(1));
+      }
     }
   }
   for (const auto &[position, tag_id] : tag_links) {
@@ -793,6 +824,133 @@ TagimgRepository::search_artworks(const ArtworkSearchQuery &query) const {
     }
 
     return result;
+  } catch (const std::exception &) {
+    return TagimgRepositoryError::QueryFailed;
+  }
+}
+
+Result<std::vector<TagMatch>, TagimgRepositoryError>
+TagimgRepository::search_tags(const TagSearchQuery &query) const {
+  if (query.text.empty() || utf8_length(query.text) > kMaxTagSearchLength) {
+    return TagimgRepositoryError::InvalidArgument;
+  }
+  if (query.limit == 0 || query.limit > kMaxTagSearchLimit) {
+    return TagimgRepositoryError::InvalidArgument;
+  }
+  if (query.scope == TagSearchScope::Subtree && !is_uuid(query.parent_id)) {
+    return TagimgRepositoryError::InvalidArgument;
+  }
+  if (!impl_ || !impl_->pool) {
+    return TagimgRepositoryError::ConnectionFailed;
+  }
+
+  std::string sql_text = "WITH RECURSIVE\n";
+  if (query.scope == TagSearchScope::Subtree && !query.direct_only) {
+    sql_text += R"sql(subtree(id) AS (
+  SELECT id FROM tags WHERE parent_id = CAST(:parent_id AS uuid)
+  UNION ALL
+  SELECT t.id FROM tags t JOIN subtree s ON t.parent_id = s.id
+),
+)sql";
+  }
+  // 先算出候选和名次再拼路径：名次在窗口函数里计算，
+  // 同一层排序键只出现一次，便于按位置绑定参数。
+  sql_text += R"sql(candidates AS (
+  SELECT id, name,
+         row_number() OVER (
+           ORDER BY is_exact DESC, is_prefix DESC, length(name), name, id
+         ) AS rn
+  FROM (
+    SELECT t.id,
+           n.name,
+           (lower(n.name) = lower(:text)) AS is_exact,
+           (n.name ILIKE :prefix ESCAPE '\') AS is_prefix
+    FROM tags t
+    JOIN tag_name n ON n.tag_id = t.id AND n.type = 'standard'
+    WHERE n.name ILIKE :pattern ESCAPE '\')sql";
+  if (query.scope == TagSearchScope::Root) {
+    sql_text += "\n      AND t.parent_id IS NULL";
+  } else if (query.scope == TagSearchScope::Subtree) {
+    if (query.direct_only) {
+      sql_text += "\n      AND t.parent_id = CAST(:parent_id AS uuid)";
+    } else {
+      sql_text += "\n      AND t.id IN (SELECT id FROM subtree)";
+    }
+  }
+  sql_text += R"sql(
+  ) m
+  ORDER BY is_exact DESC, is_prefix DESC, length(name), name, id
+  LIMIT :limit
+),
+ancestors(tag_id, cur_id, distance) AS (
+  SELECT c.id, c.id, 0 FROM candidates c
+  UNION ALL
+  SELECT a.tag_id, p.parent_id, a.distance + 1
+  FROM ancestors a
+  JOIN tags p ON p.id = a.cur_id
+  WHERE p.parent_id IS NOT NULL
+),
+segments AS (
+  SELECT a.tag_id,
+         a.distance,
+         COALESCE(n.name, a.cur_id::text) AS segment
+  FROM ancestors a
+  LEFT JOIN tag_name n ON n.tag_id = a.cur_id AND n.type = 'standard'
+),
+aggregated AS (
+  SELECT tag_id,
+         string_agg(segment, '::' ORDER BY distance DESC) AS path
+  FROM segments
+  GROUP BY tag_id
+)
+SELECT c.id::text, c.name, ag.path
+FROM candidates c
+JOIN aggregated ag ON ag.tag_id = c.id
+ORDER BY c.rn)sql";
+
+  try {
+    db_detail::PoolLease lease(*impl_->pool);
+    soci::session &sql = impl_->pool->at(lease.position());
+
+    std::string text = query.text;
+    std::string prefix = like_prefix_pattern(query.text);
+    std::string pattern = like_pattern(query.text);
+    const int limit_value = static_cast<int>(query.limit);
+
+    std::vector<TagMatch> matches;
+    if (query.scope == TagSearchScope::Subtree) {
+      std::string parent_id = query.parent_id;
+      if (query.direct_only) {
+        // 直接子标签模式下 :parent_id 出现在 :pattern 之后，绑定顺序要一致。
+        soci::rowset<soci::row> rows =
+            (sql.prepare << sql_text, soci::use(text), soci::use(prefix),
+             soci::use(pattern), soci::use(parent_id), soci::use(limit_value));
+        for (const soci::row &row : rows) {
+          matches.push_back(TagMatch{row.get<std::string>(0),
+                                     row.get<std::string>(1),
+                                     row.get<std::string>(2)});
+        }
+      } else {
+        soci::rowset<soci::row> rows =
+            (sql.prepare << sql_text, soci::use(parent_id), soci::use(text),
+             soci::use(prefix), soci::use(pattern), soci::use(limit_value));
+        for (const soci::row &row : rows) {
+          matches.push_back(TagMatch{row.get<std::string>(0),
+                                     row.get<std::string>(1),
+                                     row.get<std::string>(2)});
+        }
+      }
+    } else {
+      soci::rowset<soci::row> rows =
+          (sql.prepare << sql_text, soci::use(text), soci::use(prefix),
+           soci::use(pattern), soci::use(limit_value));
+      for (const soci::row &row : rows) {
+        matches.push_back(TagMatch{row.get<std::string>(0),
+                                   row.get<std::string>(1),
+                                   row.get<std::string>(2)});
+      }
+    }
+    return matches;
   } catch (const std::exception &) {
     return TagimgRepositoryError::QueryFailed;
   }
