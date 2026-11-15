@@ -110,6 +110,28 @@ WHERE id = :artwork_id
 FOR UPDATE
 )sql";
 
+// 校验图片顺序时锁住当前作品的全部图片行。
+constexpr const char *kLockArtworkImagesSql = R"sql(
+SELECT image_id::text
+FROM artwork_images
+WHERE artwork_id = :artwork_id
+FOR UPDATE
+)sql";
+
+// 按传入数组的顺序生成 position 0..n-1；调用方已校验集合完全一致。
+constexpr const char *kUpdateArtworkImagePositionsSql = R"sql(
+WITH ordered AS (
+  SELECT image_id, ordinality - 1 AS position
+  FROM unnest(CAST(:image_ids AS uuid[]))
+       WITH ORDINALITY AS t(image_id, ordinality)
+)
+UPDATE artwork_images ai
+SET position = ordered.position
+FROM ordered
+WHERE ai.artwork_id = :artwork_id
+  AND ai.image_id = ordered.image_id
+)sql";
+
 constexpr const char *kUpdateArtworkTitleSql = R"sql(
 UPDATE artworks
 SET title = :title
@@ -156,7 +178,6 @@ WHERE artwork_id = :artwork_id
 
 constexpr const char *kOrphanImagesSql = R"sql(
 SELECT i.id::text,
-       i.entity_id::text,
        i.width,
        i.height,
        i.frame_count,
@@ -543,9 +564,8 @@ WHERE (p.title IS NULL OR a.title ILIKE p.title ESCAPE '\')
 )sql";
 
 constexpr const char *kArtworkImagesSql = R"sql(
-SELECT ai.artwork_id::text, i.id::text, i.entity_id::text
+SELECT ai.artwork_id::text, ai.image_id::text
 FROM artwork_images ai
-JOIN images i ON i.id = ai.image_id
 WHERE ai.artwork_id = ANY(CAST(:ids AS uuid[]))
 ORDER BY ai.artwork_id, ai.position
 )sql";
@@ -653,11 +673,6 @@ void attach_relations(soci::session &sql, std::vector<ArtworkSummary> &items) {
     }
     ArtworkSummary &item = items[found->second];
     item.image_ids.push_back(row.get<std::string>(1));
-    // entity_id 可以为空（例如只按图片 ID 关联进作品），
-    // 此时不放进 entityIds，但 imageIds 仍然保留。
-    if (row.get_indicator(2) != soci::i_null) {
-      item.entity_ids.push_back(row.get<std::string>(2));
-    }
   }
 
   std::vector<std::pair<std::size_t, std::string>> tag_links;
@@ -1296,7 +1311,8 @@ TagimgRepository::update_artwork(const std::string &artwork_id,
     return TagimgRepositoryError::InvalidArgument;
   }
   if (!update.title && !update.published_at && !update.clear_published_at &&
-      update.add_tag_ids.empty() && update.remove_tag_ids.empty()) {
+      update.add_tag_ids.empty() && update.remove_tag_ids.empty() &&
+      !update.image_ids) {
     return TagimgRepositoryError::InvalidArgument;
   }
   if (update.clear_published_at && update.published_at) {
@@ -1306,6 +1322,9 @@ TagimgRepository::update_artwork(const std::string &artwork_id,
     return TagimgRepositoryError::InvalidArgument;
   }
   if (update.published_at && validate_published_at(*update.published_at)) {
+    return TagimgRepositoryError::InvalidArgument;
+  }
+  if (update.image_ids && validate_artwork_image_order(*update.image_ids)) {
     return TagimgRepositoryError::InvalidArgument;
   }
 
@@ -1360,6 +1379,26 @@ TagimgRepository::update_artwork(const std::string &artwork_id,
       }
     }
 
+    // 图片排序必须是当前作品图片集合的一个完整排列，不能借排序增删图片。
+    if (update.image_ids) {
+      std::set<std::string> current_image_ids;
+      {
+        soci::rowset<soci::row> rows =
+            (sql.prepare << kLockArtworkImagesSql, soci::use(id_value));
+        for (const soci::row &row : rows) {
+          current_image_ids.insert(row.get<std::string>(0));
+        }
+      }
+      if (current_image_ids.size() != update.image_ids->size()) {
+        return TagimgRepositoryError::InvalidArgument;
+      }
+      for (const std::string &image_id : *update.image_ids) {
+        if (current_image_ids.find(image_id) == current_image_ids.end()) {
+          return TagimgRepositoryError::InvalidArgument;
+        }
+      }
+    }
+
     if (update.title) {
       std::string title = *update.title;
       sql << kUpdateArtworkTitleSql, soci::use(title), soci::use(id_value);
@@ -1379,6 +1418,11 @@ TagimgRepository::update_artwork(const std::string &artwork_id,
     if (!update.remove_tag_ids.empty()) {
       const std::string tag_array = uuid_array_literal(update.remove_tag_ids);
       sql << kDeleteArtworkTagsSql, soci::use(id_value), soci::use(tag_array);
+    }
+    if (update.image_ids) {
+      const std::string image_array = uuid_array_literal(*update.image_ids);
+      sql << kUpdateArtworkImagePositionsSql, soci::use(image_array),
+          soci::use(id_value);
     }
 
     sql << kTouchArtworkSql, soci::use(id_value);
@@ -1414,20 +1458,17 @@ TagimgRepository::list_orphan_images(const OrphanImageQuery &query) const {
       OrphanImage image;
       image.id = row.get<std::string>(0);
       if (row.get_indicator(1) != soci::i_null) {
-        image.entity_id = row.get<std::string>(1);
+        image.width = row.get<int>(1);
       }
       if (row.get_indicator(2) != soci::i_null) {
-        image.width = row.get<int>(2);
+        image.height = row.get<int>(2);
       }
       if (row.get_indicator(3) != soci::i_null) {
-        image.height = row.get<int>(3);
+        image.frame_count = row.get<int>(3);
       }
-      if (row.get_indicator(4) != soci::i_null) {
-        image.frame_count = row.get<int>(4);
-      }
-      image.created_at = row.get<std::string>(5);
-      if (row.get_indicator(6) != soci::i_null) {
-        image.scan_at = row.get<std::string>(6);
+      image.created_at = row.get<std::string>(4);
+      if (row.get_indicator(5) != soci::i_null) {
+        image.scan_at = row.get<std::string>(5);
       }
       result.items.push_back(std::move(image));
     }

@@ -46,10 +46,6 @@ service::ResolverMap OrphanImage::getResolvers() const noexcept {
            [this](service::ResolverParams &&params) {
              return resolveScanAt(std::move(params));
            }},
-          {R"gql(entityId)gql"sv,
-           [this](service::ResolverParams &&params) {
-             return resolveEntityId(std::move(params));
-           }},
           {R"gql(createdAt)gql"sv,
            [this](service::ResolverParams &&params) {
              return resolveCreatedAt(std::move(params));
@@ -85,20 +81,6 @@ OrphanImage::resolveId(service::ResolverParams &&params) const {
 
   return service::ModifiedResult<response::IdType>::convert(std::move(result),
                                                             std::move(params));
-}
-
-service::AwaitableResolver
-OrphanImage::resolveEntityId(service::ResolverParams &&params) const {
-  std::unique_lock resolverLock(_resolverMutex);
-  service::SelectionSetParams selectionSetParams{
-      static_cast<const service::SelectionSetParams &>(params)};
-  auto directives = std::move(params.fieldDirectives);
-  auto result = _pimpl->getEntityId(service::FieldParams{
-      std::move(selectionSetParams), std::move(directives)});
-  resolverLock.unlock();
-
-  return service::ModifiedResult<response::IdType>::convert<
-      service::TypeModifier::Nullable>(std::move(result), std::move(params));
 }
 
 service::AwaitableResolver
@@ -187,9 +169,6 @@ void AddOrphanImageDetails(
            R"gql(id)gql"sv, R"md(图片 ID。)md"sv, std::nullopt,
            schema->WrapType(introspection::TypeKind::NON_NULL,
                             schema->LookupType(R"gql(ID)gql"sv))),
-       schema::Field::Make(R"gql(entityId)gql"sv,
-                           R"md(图片对应的实体 ID，可能为 null。)md"sv,
-                           std::nullopt, schema->LookupType(R"gql(ID)gql"sv)),
        schema::Field::Make(R"gql(width)gql"sv,
                            R"md(图片宽度，未知时为 null。)md"sv, std::nullopt,
                            schema->LookupType(R"gql(Int)gql"sv)),

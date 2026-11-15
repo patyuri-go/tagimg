@@ -18,6 +18,8 @@ inline constexpr std::size_t kMaxTagSearchLength = 100;
 inline constexpr std::size_t kMaxTagSearchLimit = 50;
 // 编辑作品时单次添加/移除的标签数量上限。
 inline constexpr std::size_t kMaxArtworkEditTags = 200;
+// 单个作品的图片数量上限，也是完整图片顺序的最大长度。
+inline constexpr std::size_t kMaxArtworkImages = 200;
 
 // 统计 UTF-8 码位数量（按字符而不是字节限制长度）。
 std::size_t utf8_length(std::string_view text);
@@ -37,6 +39,9 @@ validate_uuid_list(const std::vector<std::string> &ids, std::string_view field);
 std::optional<std::string>
 validate_tag_update_ids(const std::vector<std::string> &ids,
                         std::string_view field);
+// 更新作品图片顺序：必须非空、最多 kMaxArtworkImages 个、UUID、无重复。
+std::optional<std::string>
+validate_artwork_image_order(const std::vector<std::string> &image_ids);
 std::optional<std::string> validate_published_at(const std::string &value);
 
 } // namespace tagimg

@@ -97,6 +97,9 @@ struct ArtworkUpdate {
   // 增量添加/移除的标签 ID；不存在的标签会报 UnknownTag。
   std::vector<std::string> add_tag_ids;
   std::vector<std::string> remove_tag_ids;
+  // 有值时表示作品图片的完整顺序，仓储层生成 position 0..n-1。
+  // 集合必须与作品当前图片完全一致，不能借此增删图片。
+  std::optional<std::vector<std::string>> image_ids;
 };
 
 // 查询结果里的标签信息。
@@ -157,7 +160,6 @@ struct ArtworkSummary {
   std::string created_at;
   std::string updated_at;
   std::vector<std::string> image_ids;
-  std::vector<std::string> entity_ids;
   // 与 tags 的顺序一致，按名称排序。
   std::vector<std::string> tag_ids;
   std::vector<ArtworkTagInfo> tags;
@@ -200,7 +202,6 @@ struct ArtworkSearchResult {
 // 一张不属于任何作品的图片。
 struct OrphanImage {
   std::string id;
-  std::optional<std::string> entity_id;
   std::optional<int> width;
   std::optional<int> height;
   std::optional<int> frame_count;

@@ -8,12 +8,13 @@
 #include <drogon/HttpResponse.h>
 
 #include "db/entity_repository.hpp"
+#include "db/tagimg_repository.hpp"
 
 namespace tagimg {
 
-// GET /api/v1/image/{entityId} 的请求参数。
+// GET /api/v1/image/{imageId} 的请求参数。
 struct ImageStreamOptions {
-  std::string entity_id;
+  std::string image_id;
   // 只从指定存储节点读取；为空表示按实体库返回的顺序依次尝试。
   std::string storage_id;
   bool download = false;
@@ -32,7 +33,8 @@ struct ImageStreamOptions {
 // 只能断开连接（chunked 响应的固有限制）。
 class ImageStreamer {
 public:
-  explicit ImageStreamer(std::shared_ptr<const EntityRepository> entities);
+  ImageStreamer(std::shared_ptr<const EntityRepository> entities,
+                std::shared_ptr<const TagimgRepository> images);
 
   ~ImageStreamer();
 

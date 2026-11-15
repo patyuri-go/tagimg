@@ -13,7 +13,6 @@
       orphanImages(limit: $limit, offset: $offset, includeTotal: $includeTotal) {
         items {
           id
-          entityId
           width
           height
           frameCount
@@ -206,9 +205,7 @@
     card.type = "button";
     card.className = "card orphan-card";
     card.dataset.imageId = item.id;
-    card.title = item.entityId
-      ? `图片 ID：${item.id}\n实体 ID：${item.entityId}`
-      : `图片 ID：${item.id}\n没有实体 ID`;
+    card.title = `图片 ID：${item.id}`;
     card.setAttribute("aria-pressed", "false");
     if (selected.has(item.id)) {
       card.classList.add("selected");
@@ -217,25 +214,20 @@
 
     const thumb = document.createElement("div");
     thumb.className = "thumb";
-    if (item.entityId) {
-      const image = document.createElement("img");
-      image.src = `/api/v1/image/${encodeURIComponent(item.entityId)}`;
-      image.alt = "游离图片";
-      image.loading = "lazy";
-      image.decoding = "async";
-      image.addEventListener(
-        "error",
-        () => {
-          thumb.classList.add("placeholder");
-          thumb.replaceChildren(makePlaceholder("图片加载失败"));
-        },
-        { once: true },
-      );
-      thumb.appendChild(image);
-    } else {
-      thumb.classList.add("placeholder");
-      thumb.appendChild(makePlaceholder("无实体 ID，无法预览"));
-    }
+    const image = document.createElement("img");
+    image.src = `/api/v1/image/${encodeURIComponent(item.id)}`;
+    image.alt = "游离图片";
+    image.loading = "lazy";
+    image.decoding = "async";
+    image.addEventListener(
+      "error",
+      () => {
+        thumb.classList.add("placeholder");
+        thumb.replaceChildren(makePlaceholder("无法预览"));
+      },
+      { once: true },
+    );
+    thumb.appendChild(image);
 
     const meta = document.createElement("div");
     meta.className = "orphan-meta";
@@ -600,7 +592,7 @@
           try {
             await requestAddArtwork({
               imageIds: [item.id],
-              title: title || item.entityId || item.id,
+              title: title || item.id,
               ...shared,
               rescan,
             });

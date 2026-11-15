@@ -141,8 +141,6 @@ type OrphanImageConnection {
 type OrphanImage {
   "图片 ID。"
   id: ID!
-  "图片对应的实体 ID，可能为 null。"
-  entityId: ID
   "图片宽度，未知时为 null。"
   width: Int
   "图片高度，未知时为 null。"
@@ -180,10 +178,8 @@ type Artwork {
 
   "图片数量。"
   imageCount: Int!
-  "图片 ID 列表。"
+  "图片 ID 列表，按作品内 position 升序。"
   imageIds: [ID!]!
-  "图片对应的实体 ID 列表。"
-  entityIds: [ID!]!
 
   "标签 ID 列表。"
   tagIds: [ID!]!
@@ -290,6 +286,13 @@ input UpdateArtworkInput {
   addTagIds: [ID!]
   "要移除的标签 ID；没有挂在该作品上的会忽略。"
   removeTagIds: [ID!]
+  """
+  该作品完整图片 ID 顺序，最多 200 张；后端按数组顺序写入 position 0..n-1。
+
+  省略或 null 表示不修改图片顺序。提供时必须是当前作品全部图片的完整集合，
+  不能借此增删图片；任一图片不存在、重复或不属于该作品都会拒绝整次更新。
+  """
+  imageIds: [ID!]
 }
 
 "根变更类型。"

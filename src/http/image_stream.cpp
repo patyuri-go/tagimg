@@ -59,11 +59,11 @@ std::string_view extension_for(std::string_view mime_type) {
   return {};
 }
 
-std::string content_disposition(std::string_view entity_id,
+std::string content_disposition(std::string_view image_id,
                                 std::string_view mime_type, bool download) {
   std::string value =
       download ? "attachment; filename=\"" : "inline; filename=\"";
-  value += entity_id;
+  value += image_id;
   const std::string_view extension = extension_for(mime_type);
   if (!extension.empty()) {
     value += '.';
@@ -73,8 +73,8 @@ std::string content_disposition(std::string_view entity_id,
   return value;
 }
 
-std::string make_etag(std::string_view entity_id, std::uint64_t size) {
-  return '"' + std::string(entity_id) + '-' + std::to_string(size) + '"';
+std::string make_etag(std::string_view image_id, std::uint64_t size) {
+  return '"' + std::string(image_id) + '-' + std::to_string(size) + '"';
 }
 
 // 只做精确比较：按逗号拆分、去掉空白与 W/ 前缀，* 视为命中。
@@ -114,18 +114,21 @@ bool is_image_mime(std::string_view mime_type) {
 // 一条进行中的下载。字段 stream 只在 Impl::mutex 保护下读写。
 struct ImageStreamer::Impl : std::enable_shared_from_this<ImageStreamer::Impl> {
   struct StreamSession {
-    std::string entity_id;
+    std::string image_id;
     std::shared_ptr<WebdavByteStream> stream;
     std::atomic<bool> stop{false};
     // pump 是否已经开始；用于回收「客户端在响应前断开」的会话。
     std::atomic<bool> started{false};
   };
 
-  explicit Impl(std::shared_ptr<const EntityRepository> repository)
-      : entities(std::move(repository)) {
+  Impl(std::shared_ptr<const EntityRepository> entities_repository,
+       std::shared_ptr<const TagimgRepository> image_repository)
+      : entities(std::move(entities_repository)),
+        images(std::move(image_repository)) {
   }
 
   std::shared_ptr<const EntityRepository> entities;
+  std::shared_ptr<const TagimgRepository> images;
 
   mutable std::mutex mutex;
   std::condition_variable idle;
@@ -167,12 +170,11 @@ struct ImageStreamer::Impl : std::enable_shared_from_this<ImageStreamer::Impl> {
 void ImageStreamer::Impl::handle(
     ImageStreamOptions options,
     std::function<void(const drogon::HttpResponsePtr &)> &&callback) {
-  if (!is_uuid(options.entity_id)) {
-    auto body =
-        envelope(options.request_id, nullptr,
-                 single_error(error_object("INVALID_ARGUMENT",
-                                           "entity id is not a valid uuid",
-                                           Json(), {{"retryable", false}})));
+  if (!is_uuid(options.image_id)) {
+    auto body = envelope(options.request_id, nullptr,
+                         single_error(error_object(
+                             "INVALID_ARGUMENT", "image id is not a valid uuid",
+                             Json(), {{"retryable", false}})));
     callback(json_response(std::move(body), drogon::k400BadRequest));
     return;
   }
@@ -200,7 +202,7 @@ void ImageStreamer::Impl::handle(
   }
 
   auto session = std::make_shared<StreamSession>();
-  session->entity_id = options.entity_id;
+  session->image_id = options.image_id;
   {
     std::lock_guard lock(mutex);
     active.insert(session);
@@ -216,7 +218,26 @@ void ImageStreamer::Impl::handle(
 void ImageStreamer::Impl::resolve(
     const std::shared_ptr<StreamSession> &session, ImageStreamOptions options,
     std::function<void(const drogon::HttpResponsePtr &)> callback) {
-  const auto metadata = entities->find_entity(session->entity_id);
+  // 前端只拿得到图片 ID，这里先换成实体 ID 再走实体库的存储定位。
+  const auto entity_id = images->find_image_entity_id(session->image_id);
+  if (!entity_id) {
+    if (entity_id.error() == TagimgRepositoryError::InvalidArgument) {
+      fail(session, options, drogon::k400BadRequest, "INVALID_ARGUMENT",
+           "image id is not a valid uuid", false, callback);
+      return;
+    }
+    fail(session, options, drogon::k503ServiceUnavailable, "REPOSITORY_FAILED",
+         "image repository query failed", true, callback);
+    return;
+  }
+  // 图片存在但没有 entity_id 时无法定位原始文件，按不存在处理。
+  if (!*entity_id) {
+    fail(session, options, drogon::k404NotFound, "IMAGE_NOT_FOUND",
+         "image not found", false, callback);
+    return;
+  }
+
+  const auto metadata = entities->find_entity(**entity_id);
   if (!metadata) {
     switch (metadata.error()) {
     case EntityRepositoryError::NotFound:
@@ -252,7 +273,7 @@ void ImageStreamer::Impl::resolve(
     return;
   }
 
-  const std::string etag = make_etag(session->entity_id, metadata->size);
+  const std::string etag = make_etag(session->image_id, metadata->size);
   if (options.if_none_match && etag_matches(*options.if_none_match, etag)) {
     post([callback, etag]() mutable {
       auto response = drogon::HttpResponse::newHttpResponse();
@@ -270,7 +291,7 @@ void ImageStreamer::Impl::resolve(
     return;
   }
 
-  const auto locations = entities->find_webdav_locations(session->entity_id);
+  const auto locations = entities->find_webdav_locations(**entity_id);
   if (!locations) {
     if (locations.error() == EntityRepositoryError::NotFound) {
       fail(session, options, drogon::k404NotFound, "STORAGE_NOT_FOUND",
@@ -357,10 +378,9 @@ void ImageStreamer::Impl::respond_ok(
   response->setStatusCode(drogon::k200OK);
   response->setContentTypeString(content_type);
   response->addHeader("Content-Disposition",
-                      content_disposition(session->entity_id,
-                                          metadata.mime_type,
+                      content_disposition(session->image_id, metadata.mime_type,
                                           options.download));
-  response->addHeader("ETag", make_etag(session->entity_id, metadata.size));
+  response->addHeader("ETag", make_etag(session->image_id, metadata.size));
   response->addHeader("Cache-Control", "private, max-age=3600");
   response->addHeader("X-Content-Type-Options", "nosniff");
 
@@ -488,8 +508,9 @@ void ImageStreamer::Impl::shutdown() {
   }
 }
 
-ImageStreamer::ImageStreamer(std::shared_ptr<const EntityRepository> entities)
-    : impl_(std::make_shared<Impl>(std::move(entities))) {
+ImageStreamer::ImageStreamer(std::shared_ptr<const EntityRepository> entities,
+                             std::shared_ptr<const TagimgRepository> images)
+    : impl_(std::make_shared<Impl>(std::move(entities), std::move(images))) {
 }
 
 ImageStreamer::~ImageStreamer() {

@@ -405,11 +405,16 @@ Argument<tagimg::UpdateArtworkInput>::convert(const response::Value &value) {
   auto valueRemoveTagIds = service::ModifiedArgument<response::IdType>::require<
       service::TypeModifier::Nullable, service::TypeModifier::List>(
       "removeTagIds", value);
+  auto valueImageIds = service::ModifiedArgument<response::IdType>::require<
+      service::TypeModifier::Nullable, service::TypeModifier::List>("imageIds",
+                                                                    value);
 
-  return tagimg::UpdateArtworkInput{
-      std::move(valueTitle), std::move(valuePublishedAt),
-      std::move(valueClearPublishedAt), std::move(valueAddTagIds),
-      std::move(valueRemoveTagIds)};
+  return tagimg::UpdateArtworkInput{std::move(valueTitle),
+                                    std::move(valuePublishedAt),
+                                    std::move(valueClearPublishedAt),
+                                    std::move(valueAddTagIds),
+                                    std::move(valueRemoveTagIds),
+                                    std::move(valueImageIds)};
 }
 
 } // namespace service
@@ -678,7 +683,8 @@ AddArtworkFromImagesInput &AddArtworkFromImagesInput::operator=(
 }
 
 UpdateArtworkInput::UpdateArtworkInput() noexcept
-    : title{}, publishedAt{}, clearPublishedAt{}, addTagIds{}, removeTagIds{} {
+    : title{}, publishedAt{}, clearPublishedAt{}, addTagIds{}, removeTagIds{},
+      imageIds{} {
   // Explicit definition to prevent ODR violations when LTO is enabled.
 }
 
@@ -687,11 +693,13 @@ UpdateArtworkInput::UpdateArtworkInput(
     std::optional<std::string> publishedAtArg,
     std::optional<bool> clearPublishedAtArg,
     std::optional<std::vector<response::IdType>> addTagIdsArg,
-    std::optional<std::vector<response::IdType>> removeTagIdsArg) noexcept
+    std::optional<std::vector<response::IdType>> removeTagIdsArg,
+    std::optional<std::vector<response::IdType>> imageIdsArg) noexcept
     : title{std::move(titleArg)}, publishedAt{std::move(publishedAtArg)},
       clearPublishedAt{std::move(clearPublishedAtArg)},
       addTagIds{std::move(addTagIdsArg)},
-      removeTagIds{std::move(removeTagIdsArg)} {
+      removeTagIds{std::move(removeTagIdsArg)},
+      imageIds{std::move(imageIdsArg)} {
 }
 
 UpdateArtworkInput::UpdateArtworkInput(const UpdateArtworkInput &other)
@@ -706,14 +714,18 @@ UpdateArtworkInput::UpdateArtworkInput(const UpdateArtworkInput &other)
           other.addTagIds)},
       removeTagIds{service::ModifiedArgument<response::IdType>::duplicate<
           service::TypeModifier::Nullable, service::TypeModifier::List>(
-          other.removeTagIds)} {
+          other.removeTagIds)},
+      imageIds{service::ModifiedArgument<response::IdType>::duplicate<
+          service::TypeModifier::Nullable, service::TypeModifier::List>(
+          other.imageIds)} {
 }
 
 UpdateArtworkInput::UpdateArtworkInput(UpdateArtworkInput &&other) noexcept
     : title{std::move(other.title)}, publishedAt{std::move(other.publishedAt)},
       clearPublishedAt{std::move(other.clearPublishedAt)},
       addTagIds{std::move(other.addTagIds)},
-      removeTagIds{std::move(other.removeTagIds)} {
+      removeTagIds{std::move(other.removeTagIds)},
+      imageIds{std::move(other.imageIds)} {
 }
 
 UpdateArtworkInput::~UpdateArtworkInput() {
@@ -736,6 +748,7 @@ UpdateArtworkInput::operator=(UpdateArtworkInput &&other) noexcept {
   clearPublishedAt = std::move(other.clearPublishedAt);
   addTagIds = std::move(other.addTagIds);
   removeTagIds = std::move(other.removeTagIds);
+  imageIds = std::move(other.imageIds);
 
   return *this;
 }
@@ -997,6 +1010,17 @@ void AddTypesToSchema(const std::shared_ptr<schema::Schema> &schema) {
        schema::InputValue::Make(
            R"gql(removeTagIds)gql"sv,
            R"md(要移除的标签 ID；没有挂在该作品上的会忽略。)md"sv,
+           schema->WrapType(
+               introspection::TypeKind::LIST,
+               schema->WrapType(introspection::TypeKind::NON_NULL,
+                                schema->LookupType(R"gql(ID)gql"sv))),
+           R"gql()gql"sv),
+       schema::InputValue::Make(
+           R"gql(imageIds)gql"sv,
+           R"md(该作品完整图片 ID 顺序，最多 200 张；后端按数组顺序写入 position 0..n-1。
+
+省略或 null 表示不修改图片顺序。提供时必须是当前作品全部图片的完整集合，
+不能借此增删图片；任一图片不存在、重复或不属于该作品都会拒绝整次更新。)md"sv,
            schema->WrapType(
                introspection::TypeKind::LIST,
                schema->WrapType(introspection::TypeKind::NON_NULL,

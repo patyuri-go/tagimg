@@ -116,6 +116,11 @@ validate_tag_update_ids(const std::vector<std::string> &ids,
   return std::nullopt;
 }
 
+std::optional<std::string>
+validate_artwork_image_order(const std::vector<std::string> &image_ids) {
+  return validate_id_list(image_ids, kMaxArtworkImages, "imageIds");
+}
+
 std::optional<std::string> validate_published_at(const std::string &value) {
   if (!has_timestamp_shape(value)) {
     return "publishedAt must be an RFC3339 timestamp";

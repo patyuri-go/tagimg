@@ -119,8 +119,8 @@ int main() {
           std::move(*tagimg_repository));
 
   // 图片流管理器要活到 Drogon 停止之后，因此声明在 service 之前。
-  auto image_streamer =
-      std::make_shared<tagimg::ImageStreamer>(entity_repository_shared);
+  auto image_streamer = std::make_shared<tagimg::ImageStreamer>(
+      entity_repository_shared, tagimg_repository_shared);
 
   // 扫描任务由 REST 与 GraphQL 共用同一个服务实例。
   auto runtime = std::make_shared<tagimg::ServiceRuntime>(
@@ -158,13 +158,13 @@ int main() {
       {drogon::Post});
 
   drogon::app().registerHandler(
-      "/api/v1/image/{string entityId}",
+      "/api/v1/image/{string imageId}",
       [image_streamer](
           const drogon::HttpRequestPtr &request,
           std::function<void(const drogon::HttpResponsePtr &)> &&callback,
-          std::string entity_id) {
+          std::string image_id) {
         tagimg::ImageStreamOptions options;
-        options.entity_id = std::move(entity_id);
+        options.image_id = std::move(image_id);
         options.storage_id = request->getParameter("storageId");
 
         const std::string &download = request->getParameter("download");

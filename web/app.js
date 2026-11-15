@@ -14,7 +14,7 @@
           title
           createdAt
           imageCount
-          entityIds
+          imageIds
           tagPaths {
             id
             path
@@ -376,8 +376,8 @@
     const thumb = document.createElement("div");
     thumb.className = "thumb";
 
-    const entityIds = Array.isArray(item.entityIds) ? item.entityIds : [];
-    if (entityIds.length === 0) {
+    const imageIds = Array.isArray(item.imageIds) ? item.imageIds : [];
+    if (imageIds.length === 0) {
       thumb.classList.add("placeholder");
       thumb.textContent = "无预览";
       return thumb;
@@ -387,8 +387,8 @@
     image.loading = "lazy";
     image.decoding = "async";
     image.alt = item.title || "作品图片";
-    // 缩略图接口还没实现，先直接取原图。
-    image.src = `/api/v1/image/${encodeURIComponent(entityIds[0])}`;
+    // 缩略图接口还没实现，先直接用图片 ID 取原图。
+    image.src = `/api/v1/image/${encodeURIComponent(imageIds[0])}`;
     image.addEventListener(
       "error",
       () => {

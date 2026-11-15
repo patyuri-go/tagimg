@@ -11,8 +11,10 @@
 #include "graphqlservice/internal/Schema.h"
 
 // Check if the library version is compatible with schemagen 4.5.0
-static_assert(graphql::internal::MajorVersion == 4, "regenerate with schemagen: major version mismatch");
-static_assert(graphql::internal::MinorVersion == 5, "regenerate with schemagen: minor version mismatch");
+static_assert(graphql::internal::MajorVersion == 4,
+              "regenerate with schemagen: major version mismatch");
+static_assert(graphql::internal::MinorVersion == 5,
+              "regenerate with schemagen: minor version mismatch");
 
 #include <array>
 #include <memory>
@@ -22,206 +24,178 @@ static_assert(graphql::internal::MinorVersion == 5, "regenerate with schemagen: 
 namespace graphql {
 namespace tagimg {
 
-enum class [[nodiscard("unnecessary conversion")]] TagMatchMode
-{
-	ALL,
-	ANY
-};
+enum class [[nodiscard("unnecessary conversion")]] TagMatchMode{ALL, ANY};
 
-[[nodiscard("unnecessary call")]] constexpr auto getTagMatchModeNames() noexcept
-{
-	using namespace std::literals;
+[[nodiscard("unnecessary call")]] constexpr auto
+getTagMatchModeNames() noexcept {
+  using namespace std::literals;
 
-	return std::array<std::string_view, 2> {
-		R"gql(ALL)gql"sv,
-		R"gql(ANY)gql"sv
-	};
+  return std::array<std::string_view, 2>{R"gql(ALL)gql"sv, R"gql(ANY)gql"sv};
 }
 
-[[nodiscard("unnecessary call")]] constexpr auto getTagMatchModeValues() noexcept
-{
-	using namespace std::literals;
+[[nodiscard("unnecessary call")]] constexpr auto
+getTagMatchModeValues() noexcept {
+  using namespace std::literals;
 
-	return std::array<std::pair<std::string_view, TagMatchMode>, 2> {
-		std::make_pair(R"gql(ALL)gql"sv, TagMatchMode::ALL),
-		std::make_pair(R"gql(ANY)gql"sv, TagMatchMode::ANY)
-	};
+  return std::array<std::pair<std::string_view, TagMatchMode>, 2>{
+      std::make_pair(R"gql(ALL)gql"sv, TagMatchMode::ALL),
+      std::make_pair(R"gql(ANY)gql"sv, TagMatchMode::ANY)};
 }
 
-enum class [[nodiscard("unnecessary conversion")]] ArtworkOrderField
-{
-	CREATED_AT,
-	PUBLISHED_AT,
-	TITLE
-};
+enum class [[nodiscard("unnecessary conversion")]] ArtworkOrderField{
+    CREATED_AT, PUBLISHED_AT, TITLE};
 
-[[nodiscard("unnecessary call")]] constexpr auto getArtworkOrderFieldNames() noexcept
-{
-	using namespace std::literals;
+[[nodiscard("unnecessary call")]] constexpr auto
+getArtworkOrderFieldNames() noexcept {
+  using namespace std::literals;
 
-	return std::array<std::string_view, 3> {
-		R"gql(CREATED_AT)gql"sv,
-		R"gql(PUBLISHED_AT)gql"sv,
-		R"gql(TITLE)gql"sv
-	};
+  return std::array<std::string_view, 3>{
+      R"gql(CREATED_AT)gql"sv, R"gql(PUBLISHED_AT)gql"sv, R"gql(TITLE)gql"sv};
 }
 
-[[nodiscard("unnecessary call")]] constexpr auto getArtworkOrderFieldValues() noexcept
-{
-	using namespace std::literals;
+[[nodiscard("unnecessary call")]] constexpr auto
+getArtworkOrderFieldValues() noexcept {
+  using namespace std::literals;
 
-	return std::array<std::pair<std::string_view, ArtworkOrderField>, 3> {
-		std::make_pair(R"gql(TITLE)gql"sv, ArtworkOrderField::TITLE),
-		std::make_pair(R"gql(CREATED_AT)gql"sv, ArtworkOrderField::CREATED_AT),
-		std::make_pair(R"gql(PUBLISHED_AT)gql"sv, ArtworkOrderField::PUBLISHED_AT)
-	};
+  return std::array<std::pair<std::string_view, ArtworkOrderField>, 3>{
+      std::make_pair(R"gql(TITLE)gql"sv, ArtworkOrderField::TITLE),
+      std::make_pair(R"gql(CREATED_AT)gql"sv, ArtworkOrderField::CREATED_AT),
+      std::make_pair(R"gql(PUBLISHED_AT)gql"sv,
+                     ArtworkOrderField::PUBLISHED_AT)};
 }
 
-enum class [[nodiscard("unnecessary conversion")]] SortDirection
-{
-	ASC,
-	DESC
-};
+enum class [[nodiscard("unnecessary conversion")]] SortDirection{ASC, DESC};
 
-[[nodiscard("unnecessary call")]] constexpr auto getSortDirectionNames() noexcept
-{
-	using namespace std::literals;
+[[nodiscard("unnecessary call")]] constexpr auto
+getSortDirectionNames() noexcept {
+  using namespace std::literals;
 
-	return std::array<std::string_view, 2> {
-		R"gql(ASC)gql"sv,
-		R"gql(DESC)gql"sv
-	};
+  return std::array<std::string_view, 2>{R"gql(ASC)gql"sv, R"gql(DESC)gql"sv};
 }
 
-[[nodiscard("unnecessary call")]] constexpr auto getSortDirectionValues() noexcept
-{
-	using namespace std::literals;
+[[nodiscard("unnecessary call")]] constexpr auto
+getSortDirectionValues() noexcept {
+  using namespace std::literals;
 
-	return std::array<std::pair<std::string_view, SortDirection>, 2> {
-		std::make_pair(R"gql(ASC)gql"sv, SortDirection::ASC),
-		std::make_pair(R"gql(DESC)gql"sv, SortDirection::DESC)
-	};
+  return std::array<std::pair<std::string_view, SortDirection>, 2>{
+      std::make_pair(R"gql(ASC)gql"sv, SortDirection::ASC),
+      std::make_pair(R"gql(DESC)gql"sv, SortDirection::DESC)};
 }
 
-struct [[nodiscard("unnecessary construction")]] ArtworkFilter
-{
-	explicit ArtworkFilter() noexcept;
-	explicit ArtworkFilter(
-		std::optional<std::string> titleArg,
-		std::optional<std::vector<response::IdType>> entityIdsArg,
-		std::optional<std::vector<response::IdType>> artistIdsArg,
-		std::optional<std::vector<response::IdType>> includeTagIdsArg,
-		std::optional<TagMatchMode> includeModeArg,
-		std::optional<bool> expandIncludeTagDescendantsArg,
-		std::optional<std::vector<response::IdType>> excludeTagIdsArg,
-		std::optional<bool> expandExcludeTagDescendantsArg) noexcept;
-	ArtworkFilter(const ArtworkFilter& other);
-	ArtworkFilter(ArtworkFilter&& other) noexcept;
-	~ArtworkFilter();
+struct [[nodiscard("unnecessary construction")]] ArtworkFilter {
+  explicit ArtworkFilter() noexcept;
+  explicit ArtworkFilter(
+      std::optional<std::string> titleArg,
+      std::optional<std::vector<response::IdType>> entityIdsArg,
+      std::optional<std::vector<response::IdType>> artistIdsArg,
+      std::optional<std::vector<response::IdType>> includeTagIdsArg,
+      std::optional<TagMatchMode> includeModeArg,
+      std::optional<bool> expandIncludeTagDescendantsArg,
+      std::optional<std::vector<response::IdType>> excludeTagIdsArg,
+      std::optional<bool> expandExcludeTagDescendantsArg) noexcept;
+  ArtworkFilter(const ArtworkFilter &other);
+  ArtworkFilter(ArtworkFilter &&other) noexcept;
+  ~ArtworkFilter();
 
-	ArtworkFilter& operator=(const ArtworkFilter& other);
-	ArtworkFilter& operator=(ArtworkFilter&& other) noexcept;
+  ArtworkFilter &operator=(const ArtworkFilter &other);
+  ArtworkFilter &operator=(ArtworkFilter &&other) noexcept;
 
-	std::optional<std::string> title;
-	std::optional<std::vector<response::IdType>> entityIds;
-	std::optional<std::vector<response::IdType>> artistIds;
-	std::optional<std::vector<response::IdType>> includeTagIds;
-	std::optional<TagMatchMode> includeMode;
-	std::optional<bool> expandIncludeTagDescendants;
-	std::optional<std::vector<response::IdType>> excludeTagIds;
-	std::optional<bool> expandExcludeTagDescendants;
+  std::optional<std::string> title;
+  std::optional<std::vector<response::IdType>> entityIds;
+  std::optional<std::vector<response::IdType>> artistIds;
+  std::optional<std::vector<response::IdType>> includeTagIds;
+  std::optional<TagMatchMode> includeMode;
+  std::optional<bool> expandIncludeTagDescendants;
+  std::optional<std::vector<response::IdType>> excludeTagIds;
+  std::optional<bool> expandExcludeTagDescendants;
 };
 
-struct [[nodiscard("unnecessary construction")]] TagSearchScope
-{
-	explicit TagSearchScope() noexcept;
-	explicit TagSearchScope(
-		std::optional<response::IdType> parentIdArg,
-		std::optional<bool> directOnlyArg) noexcept;
-	TagSearchScope(const TagSearchScope& other);
-	TagSearchScope(TagSearchScope&& other) noexcept;
-	~TagSearchScope();
+struct [[nodiscard("unnecessary construction")]] TagSearchScope {
+  explicit TagSearchScope() noexcept;
+  explicit TagSearchScope(std::optional<response::IdType> parentIdArg,
+                          std::optional<bool> directOnlyArg) noexcept;
+  TagSearchScope(const TagSearchScope &other);
+  TagSearchScope(TagSearchScope &&other) noexcept;
+  ~TagSearchScope();
 
-	TagSearchScope& operator=(const TagSearchScope& other);
-	TagSearchScope& operator=(TagSearchScope&& other) noexcept;
+  TagSearchScope &operator=(const TagSearchScope &other);
+  TagSearchScope &operator=(TagSearchScope &&other) noexcept;
 
-	std::optional<response::IdType> parentId;
-	std::optional<bool> directOnly;
+  std::optional<response::IdType> parentId;
+  std::optional<bool> directOnly;
 };
 
-struct [[nodiscard("unnecessary construction")]] AddArtworkInput
-{
-	explicit AddArtworkInput() noexcept;
-	explicit AddArtworkInput(
-		std::vector<response::IdType> entityIdsArg,
-		std::string titleArg,
-		std::optional<std::string> descriptionArg,
-		std::optional<std::string> publishedAtArg,
-		std::optional<std::vector<response::IdType>> tagIdsArg,
-		std::optional<std::vector<response::IdType>> artistIdsArg) noexcept;
-	AddArtworkInput(const AddArtworkInput& other);
-	AddArtworkInput(AddArtworkInput&& other) noexcept;
-	~AddArtworkInput();
+struct [[nodiscard("unnecessary construction")]] AddArtworkInput {
+  explicit AddArtworkInput() noexcept;
+  explicit AddArtworkInput(
+      std::vector<response::IdType> entityIdsArg, std::string titleArg,
+      std::optional<std::string> descriptionArg,
+      std::optional<std::string> publishedAtArg,
+      std::optional<std::vector<response::IdType>> tagIdsArg,
+      std::optional<std::vector<response::IdType>> artistIdsArg) noexcept;
+  AddArtworkInput(const AddArtworkInput &other);
+  AddArtworkInput(AddArtworkInput &&other) noexcept;
+  ~AddArtworkInput();
 
-	AddArtworkInput& operator=(const AddArtworkInput& other);
-	AddArtworkInput& operator=(AddArtworkInput&& other) noexcept;
+  AddArtworkInput &operator=(const AddArtworkInput &other);
+  AddArtworkInput &operator=(AddArtworkInput &&other) noexcept;
 
-	std::vector<response::IdType> entityIds;
-	std::string title;
-	std::optional<std::string> description;
-	std::optional<std::string> publishedAt;
-	std::optional<std::vector<response::IdType>> tagIds;
-	std::optional<std::vector<response::IdType>> artistIds;
+  std::vector<response::IdType> entityIds;
+  std::string title;
+  std::optional<std::string> description;
+  std::optional<std::string> publishedAt;
+  std::optional<std::vector<response::IdType>> tagIds;
+  std::optional<std::vector<response::IdType>> artistIds;
 };
 
-struct [[nodiscard("unnecessary construction")]] AddArtworkFromImagesInput
-{
-	explicit AddArtworkFromImagesInput() noexcept;
-	explicit AddArtworkFromImagesInput(
-		std::vector<response::IdType> imageIdsArg,
-		std::string titleArg,
-		std::optional<std::string> descriptionArg,
-		std::optional<std::string> publishedAtArg,
-		std::optional<std::vector<response::IdType>> tagIdsArg,
-		std::optional<std::vector<response::IdType>> artistIdsArg,
-		std::optional<bool> rescanArg) noexcept;
-	AddArtworkFromImagesInput(const AddArtworkFromImagesInput& other);
-	AddArtworkFromImagesInput(AddArtworkFromImagesInput&& other) noexcept;
-	~AddArtworkFromImagesInput();
+struct [[nodiscard("unnecessary construction")]] AddArtworkFromImagesInput {
+  explicit AddArtworkFromImagesInput() noexcept;
+  explicit AddArtworkFromImagesInput(
+      std::vector<response::IdType> imageIdsArg, std::string titleArg,
+      std::optional<std::string> descriptionArg,
+      std::optional<std::string> publishedAtArg,
+      std::optional<std::vector<response::IdType>> tagIdsArg,
+      std::optional<std::vector<response::IdType>> artistIdsArg,
+      std::optional<bool> rescanArg) noexcept;
+  AddArtworkFromImagesInput(const AddArtworkFromImagesInput &other);
+  AddArtworkFromImagesInput(AddArtworkFromImagesInput &&other) noexcept;
+  ~AddArtworkFromImagesInput();
 
-	AddArtworkFromImagesInput& operator=(const AddArtworkFromImagesInput& other);
-	AddArtworkFromImagesInput& operator=(AddArtworkFromImagesInput&& other) noexcept;
+  AddArtworkFromImagesInput &operator=(const AddArtworkFromImagesInput &other);
+  AddArtworkFromImagesInput &
+  operator=(AddArtworkFromImagesInput &&other) noexcept;
 
-	std::vector<response::IdType> imageIds;
-	std::string title;
-	std::optional<std::string> description;
-	std::optional<std::string> publishedAt;
-	std::optional<std::vector<response::IdType>> tagIds;
-	std::optional<std::vector<response::IdType>> artistIds;
-	std::optional<bool> rescan;
+  std::vector<response::IdType> imageIds;
+  std::string title;
+  std::optional<std::string> description;
+  std::optional<std::string> publishedAt;
+  std::optional<std::vector<response::IdType>> tagIds;
+  std::optional<std::vector<response::IdType>> artistIds;
+  std::optional<bool> rescan;
 };
 
-struct [[nodiscard("unnecessary construction")]] UpdateArtworkInput
-{
-	explicit UpdateArtworkInput() noexcept;
-	explicit UpdateArtworkInput(
-		std::optional<std::string> titleArg,
-		std::optional<std::string> publishedAtArg,
-		std::optional<bool> clearPublishedAtArg,
-		std::optional<std::vector<response::IdType>> addTagIdsArg,
-		std::optional<std::vector<response::IdType>> removeTagIdsArg) noexcept;
-	UpdateArtworkInput(const UpdateArtworkInput& other);
-	UpdateArtworkInput(UpdateArtworkInput&& other) noexcept;
-	~UpdateArtworkInput();
+struct [[nodiscard("unnecessary construction")]] UpdateArtworkInput {
+  explicit UpdateArtworkInput() noexcept;
+  explicit UpdateArtworkInput(
+      std::optional<std::string> titleArg,
+      std::optional<std::string> publishedAtArg,
+      std::optional<bool> clearPublishedAtArg,
+      std::optional<std::vector<response::IdType>> addTagIdsArg,
+      std::optional<std::vector<response::IdType>> removeTagIdsArg,
+      std::optional<std::vector<response::IdType>> imageIdsArg) noexcept;
+  UpdateArtworkInput(const UpdateArtworkInput &other);
+  UpdateArtworkInput(UpdateArtworkInput &&other) noexcept;
+  ~UpdateArtworkInput();
 
-	UpdateArtworkInput& operator=(const UpdateArtworkInput& other);
-	UpdateArtworkInput& operator=(UpdateArtworkInput&& other) noexcept;
+  UpdateArtworkInput &operator=(const UpdateArtworkInput &other);
+  UpdateArtworkInput &operator=(UpdateArtworkInput &&other) noexcept;
 
-	std::optional<std::string> title;
-	std::optional<std::string> publishedAt;
-	std::optional<bool> clearPublishedAt;
-	std::optional<std::vector<response::IdType>> addTagIds;
-	std::optional<std::vector<response::IdType>> removeTagIds;
+  std::optional<std::string> title;
+  std::optional<std::string> publishedAt;
+  std::optional<bool> clearPublishedAt;
+  std::optional<std::vector<response::IdType>> addTagIds;
+  std::optional<std::vector<response::IdType>> removeTagIds;
+  std::optional<std::vector<response::IdType>> imageIds;
 };
 
 namespace object {
@@ -241,36 +215,49 @@ class Mutation;
 } // namespace object
 
 class [[nodiscard("unnecessary construction")]] Operations final
-	: public service::Request
-{
+    : public service::Request {
 public:
-	explicit Operations(std::shared_ptr<object::Query> query, std::shared_ptr<object::Mutation> mutation);
+  explicit Operations(std::shared_ptr<object::Query> query,
+                      std::shared_ptr<object::Mutation> mutation);
 
-	template <class TQuery, class TMutation>
-	explicit Operations(std::shared_ptr<TQuery> query, std::shared_ptr<TMutation> mutation)
-		: Operations {
-			std::make_shared<object::Query>(std::move(query)),
-			std::make_shared<object::Mutation>(std::move(mutation))
-		}
-	{
-	}
+  template <class TQuery, class TMutation>
+  explicit Operations(std::shared_ptr<TQuery> query,
+                      std::shared_ptr<TMutation> mutation)
+      : Operations{std::make_shared<object::Query>(std::move(query)),
+                   std::make_shared<object::Mutation>(std::move(mutation))} {
+  }
 
 private:
-	std::shared_ptr<object::Query> _query;
-	std::shared_ptr<object::Mutation> _mutation;
+  std::shared_ptr<object::Query> _query;
+  std::shared_ptr<object::Mutation> _mutation;
 };
 
-void AddQueryDetails(const std::shared_ptr<schema::ObjectType>& typeQuery, const std::shared_ptr<schema::Schema>& schema);
-void AddArtworkConnectionDetails(const std::shared_ptr<schema::ObjectType>& typeArtworkConnection, const std::shared_ptr<schema::Schema>& schema);
-void AddOrphanImageConnectionDetails(const std::shared_ptr<schema::ObjectType>& typeOrphanImageConnection, const std::shared_ptr<schema::Schema>& schema);
-void AddOrphanImageDetails(const std::shared_ptr<schema::ObjectType>& typeOrphanImage, const std::shared_ptr<schema::Schema>& schema);
-void AddDeleteArtworkResultDetails(const std::shared_ptr<schema::ObjectType>& typeDeleteArtworkResult, const std::shared_ptr<schema::Schema>& schema);
-void AddArtworkDetails(const std::shared_ptr<schema::ObjectType>& typeArtwork, const std::shared_ptr<schema::Schema>& schema);
-void AddTagDetails(const std::shared_ptr<schema::ObjectType>& typeTag, const std::shared_ptr<schema::Schema>& schema);
-void AddTagMatchDetails(const std::shared_ptr<schema::ObjectType>& typeTagMatch, const std::shared_ptr<schema::Schema>& schema);
-void AddTagPathDetails(const std::shared_ptr<schema::ObjectType>& typeTagPath, const std::shared_ptr<schema::Schema>& schema);
-void AddArtistDetails(const std::shared_ptr<schema::ObjectType>& typeArtist, const std::shared_ptr<schema::Schema>& schema);
-void AddMutationDetails(const std::shared_ptr<schema::ObjectType>& typeMutation, const std::shared_ptr<schema::Schema>& schema);
+void AddQueryDetails(const std::shared_ptr<schema::ObjectType> &typeQuery,
+                     const std::shared_ptr<schema::Schema> &schema);
+void AddArtworkConnectionDetails(
+    const std::shared_ptr<schema::ObjectType> &typeArtworkConnection,
+    const std::shared_ptr<schema::Schema> &schema);
+void AddOrphanImageConnectionDetails(
+    const std::shared_ptr<schema::ObjectType> &typeOrphanImageConnection,
+    const std::shared_ptr<schema::Schema> &schema);
+void AddOrphanImageDetails(
+    const std::shared_ptr<schema::ObjectType> &typeOrphanImage,
+    const std::shared_ptr<schema::Schema> &schema);
+void AddDeleteArtworkResultDetails(
+    const std::shared_ptr<schema::ObjectType> &typeDeleteArtworkResult,
+    const std::shared_ptr<schema::Schema> &schema);
+void AddArtworkDetails(const std::shared_ptr<schema::ObjectType> &typeArtwork,
+                       const std::shared_ptr<schema::Schema> &schema);
+void AddTagDetails(const std::shared_ptr<schema::ObjectType> &typeTag,
+                   const std::shared_ptr<schema::Schema> &schema);
+void AddTagMatchDetails(const std::shared_ptr<schema::ObjectType> &typeTagMatch,
+                        const std::shared_ptr<schema::Schema> &schema);
+void AddTagPathDetails(const std::shared_ptr<schema::ObjectType> &typeTagPath,
+                       const std::shared_ptr<schema::Schema> &schema);
+void AddArtistDetails(const std::shared_ptr<schema::ObjectType> &typeArtist,
+                      const std::shared_ptr<schema::Schema> &schema);
+void AddMutationDetails(const std::shared_ptr<schema::ObjectType> &typeMutation,
+                        const std::shared_ptr<schema::Schema> &schema);
 
 std::shared_ptr<schema::Schema> GetSchema();
 

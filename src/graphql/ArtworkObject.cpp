@@ -69,10 +69,6 @@ service::ResolverMap Artwork::getResolvers() const noexcept {
            [this](service::ResolverParams &&params) {
              return resolveCreatedAt(std::move(params));
            }},
-          {R"gql(entityIds)gql"sv,
-           [this](service::ResolverParams &&params) {
-             return resolveEntityIds(std::move(params));
-           }},
           {R"gql(updatedAt)gql"sv,
            [this](service::ResolverParams &&params) {
              return resolveUpdatedAt(std::move(params));
@@ -216,20 +212,6 @@ Artwork::resolveImageIds(service::ResolverParams &&params) const {
 }
 
 service::AwaitableResolver
-Artwork::resolveEntityIds(service::ResolverParams &&params) const {
-  std::unique_lock resolverLock(_resolverMutex);
-  service::SelectionSetParams selectionSetParams{
-      static_cast<const service::SelectionSetParams &>(params)};
-  auto directives = std::move(params.fieldDirectives);
-  auto result = _pimpl->getEntityIds(service::FieldParams{
-      std::move(selectionSetParams), std::move(directives)});
-  resolverLock.unlock();
-
-  return service::ModifiedResult<response::IdType>::convert<
-      service::TypeModifier::List>(std::move(result), std::move(params));
-}
-
-service::AwaitableResolver
 Artwork::resolveTagIds(service::ResolverParams &&params) const {
   std::unique_lock resolverLock(_resolverMutex);
   service::SelectionSetParams selectionSetParams{
@@ -337,16 +319,8 @@ void AddArtworkDetails(const std::shared_ptr<schema::ObjectType> &typeArtwork,
            schema->WrapType(introspection::TypeKind::NON_NULL,
                             schema->LookupType(R"gql(Int)gql"sv))),
        schema::Field::Make(
-           R"gql(imageIds)gql"sv, R"md(图片 ID 列表。)md"sv, std::nullopt,
-           schema->WrapType(
-               introspection::TypeKind::NON_NULL,
-               schema->WrapType(
-                   introspection::TypeKind::LIST,
-                   schema->WrapType(introspection::TypeKind::NON_NULL,
-                                    schema->LookupType(R"gql(ID)gql"sv))))),
-       schema::Field::Make(
-           R"gql(entityIds)gql"sv, R"md(图片对应的实体 ID 列表。)md"sv,
-           std::nullopt,
+           R"gql(imageIds)gql"sv,
+           R"md(图片 ID 列表，按作品内 position 升序。)md"sv, std::nullopt,
            schema->WrapType(
                introspection::TypeKind::NON_NULL,
                schema->WrapType(

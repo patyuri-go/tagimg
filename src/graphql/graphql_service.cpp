@@ -321,11 +321,6 @@ public:
         to_id_list(item_.image_ids));
   }
 
-  gql::service::AwaitableScalar<std::vector<IdType>> getEntityIds() const {
-    return gql::service::AwaitableScalar<std::vector<IdType>>(
-        to_id_list(item_.entity_ids));
-  }
-
   gql::service::AwaitableScalar<std::vector<IdType>> getTagIds() const {
     return gql::service::AwaitableScalar<std::vector<IdType>>(
         to_id_list(item_.tag_ids));
@@ -429,14 +424,6 @@ public:
 
   gql::service::AwaitableScalar<IdType> getId() const {
     return id_scalar(info_.id);
-  }
-
-  gql::service::AwaitableScalar<std::optional<IdType>> getEntityId() const {
-    if (!info_.entity_id) {
-      return gql::service::AwaitableScalar<std::optional<IdType>>(std::nullopt);
-    }
-    return gql::service::AwaitableScalar<std::optional<IdType>>(
-        IdType(IdType::OpaqueString(*info_.entity_id)));
   }
 
   gql::service::AwaitableScalar<std::optional<int>> getWidth() const {
@@ -883,6 +870,14 @@ public:
         fail("INVALID_ARGUMENT", *error);
       }
       has_change = has_change || !update.remove_tag_ids.empty();
+    }
+
+    if (input.imageIds) {
+      update.image_ids = id_list(*input.imageIds);
+      if (const auto error = validate_artwork_image_order(*update.image_ids)) {
+        fail("INVALID_ARGUMENT", *error);
+      }
+      has_change = true;
     }
 
     if (update.add_tag_ids.size() + update.remove_tag_ids.size() >

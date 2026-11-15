@@ -543,8 +543,8 @@ void ApiService::handle_schema(
 
   Json resource;
   resource["method"] = "GET";
-  resource["path"] = "/api/v1/image/{entityId}";
-  resource["description"] = "流式返回实体图片的原始字节";
+  resource["path"] = "/api/v1/image/{imageId}";
+  resource["description"] = "按图片 ID 流式返回图片的原始字节";
   resource["body"] = "binary";
   resource["parameters"] = Json::array(
       {{{"name", "storageId"},
@@ -559,10 +559,10 @@ void ApiService::handle_schema(
         {"in", "query"},
         {"required", false},
         {"description", "回显到错误响应"}}});
-  resource["errors"] =
-      Json::array({"INVALID_ARGUMENT", "ENTITY_NOT_FOUND", "STORAGE_NOT_FOUND",
-                   "NOT_IMAGE", "IMAGE_TOO_LARGE", "REPOSITORY_FAILED",
-                   "STORAGE_UNAVAILABLE", "SERVICE_UNAVAILABLE"});
+  resource["errors"] = Json::array(
+      {"INVALID_ARGUMENT", "IMAGE_NOT_FOUND", "ENTITY_NOT_FOUND",
+       "STORAGE_NOT_FOUND", "NOT_IMAGE", "IMAGE_TOO_LARGE", "REPOSITORY_FAILED",
+       "STORAGE_UNAVAILABLE", "SERVICE_UNAVAILABLE"});
 
   Json body;
   body["transport"] = {{"method", "POST"},

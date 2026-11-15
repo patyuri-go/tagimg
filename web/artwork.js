@@ -16,7 +16,6 @@
         updatedAt
         imageCount
         imageIds
-        entityIds
         tagIds
         tags { id name category aliases }
         tagPaths { id path }
@@ -52,6 +51,7 @@
   const imagesSection = document.getElementById("images-section");
   const galleryEl = document.getElementById("gallery");
   const imageCountEl = document.getElementById("image-count");
+  const editGalleryHint = document.getElementById("edit-gallery-hint");
   const tagsSection = document.getElementById("tags-section");
   const tagsEl = document.getElementById("detail-tags");
   const editTagSearch = document.getElementById("edit-tag-search");
@@ -74,6 +74,14 @@
   const pendingRemovals = new Set();
   // 编辑模式下新增的标签，元素为 { id, name, path }。
   const pendingAdditions = [];
+  // 当前详情页图片顺序，元素为 { imageId }。
+  let galleryEntries = [];
+  // 正在拖动的图片 ID。
+  let draggedImageId = "";
+  // 选择排序模式：点击图片按顺序编号，点击空白退出并应用新顺序。
+  let selectionMode = false;
+  // 已编号的图片 ID，数组下标 + 1 就是角标上的序号。
+  let selectionOrder = [];
 
   const tagSuggestWidget = TagSearch.create({
     input: editTagInput,
@@ -128,27 +136,186 @@
     return item;
   }
 
-  function createGalleryItem(entityId, index, title) {
+  // 画廊只用图片 ID 定位；顺序按服务端返回的 imageIds。
+  function galleryEntriesFromArtwork(artwork) {
+    const imageIds = Array.isArray(artwork.imageIds) ? artwork.imageIds : [];
+    return imageIds.map((imageId) => ({ imageId, missing: false }));
+  }
+
+  function createMissingGalleryItem(imageId) {
+    const placeholder = document.createElement("div");
+    placeholder.className = "gallery-item gallery-item-missing";
+    placeholder.dataset.imageId = imageId;
+    const box = document.createElement("span");
+    box.className = "gallery-placeholder";
+    box.setAttribute("aria-label", "无法预览的图片");
+    placeholder.appendChild(box);
+    return placeholder;
+  }
+
+  // 没有 entity_id 的图片会让流接口返回 404；这里保留位置并显示空占位符，
+  // 这样既不会暴露实体 ID，也仍然可以继续拖动排序。
+  function showGalleryPlaceholder(entry, link) {
+    entry.missing = true;
+    link.classList.add("gallery-item-missing");
+    link.removeAttribute("href");
+    link.removeAttribute("target");
+    const placeholder = document.createElement("span");
+    placeholder.className = "gallery-placeholder";
+    placeholder.setAttribute("aria-label", "无法预览的图片");
+    link.replaceChildren(placeholder);
+  }
+
+  function createGalleryItem(entry, index, title) {
+    const imageId = entry.imageId || "";
+    const url = `/api/v1/image/${encodeURIComponent(imageId)}`;
+
+    // 重新渲染时保留之前的加载失败状态，避免反复请求已知无法预览的图片。
+    if (entry.missing) {
+      return createMissingGalleryItem(imageId);
+    }
+
     const link = document.createElement("a");
     link.className = "gallery-item";
-    link.href = `/api/v1/image/${encodeURIComponent(entityId)}?download=1`;
+    link.dataset.imageId = imageId;
+    link.href = `${url}?download=1`;
     link.target = "_blank";
     link.rel = "noopener";
 
     const image = document.createElement("img");
-    image.src = `/api/v1/image/${encodeURIComponent(entityId)}`;
+    image.src = url;
     image.alt = `${title || "作品图片"} 第 ${index + 1} 张`;
     image.loading = "lazy";
     image.decoding = "async";
-    image.addEventListener("error", () => {
-      const placeholder = document.createElement("span");
-      placeholder.className = "gallery-placeholder";
-      placeholder.textContent = "图片加载失败";
-      link.replaceChildren(placeholder);
+    image.draggable = false;
+    image.addEventListener("error", () => showGalleryPlaceholder(entry, link));
+
+    // 编辑模式下点击图片不应该打开原图，避免和拖动冲突。
+    link.addEventListener("click", (event) => {
+      if (editing || link.classList.contains("gallery-item-missing")) {
+        event.preventDefault();
+      }
     });
 
     link.appendChild(image);
     return link;
+  }
+
+  function renderGallery() {
+    const title = currentArtwork ? currentArtwork.title : "";
+    const fragment = document.createDocumentFragment();
+    galleryEntries.forEach((entry, index) => {
+      fragment.appendChild(createGalleryItem(entry, index, title));
+    });
+    galleryEl.replaceChildren(fragment);
+    imageCountEl.textContent = `共 ${galleryEntries.length} 张`;
+    imagesSection.hidden = galleryEntries.length === 0;
+    setGalleryEditing(editing);
+  }
+
+  // 把点击顺序编号显示在图片左上角；未编号的图片不显示角标。
+  function applySelectionBadges() {
+    for (const item of galleryEl.querySelectorAll(".gallery-item")) {
+      const imageId = item.dataset.imageId || "";
+      const order = selectionOrder.indexOf(imageId);
+      let badge = item.querySelector(".gallery-order");
+      if (order >= 0) {
+        if (!badge) {
+          badge = document.createElement("span");
+          badge.className = "gallery-order";
+          item.appendChild(badge);
+        }
+        badge.textContent = String(order + 1);
+        badge.title = `第 ${order + 1} 张`;
+        item.classList.add("gallery-item-numbered");
+      } else {
+        if (badge) {
+          badge.remove();
+        }
+        item.classList.remove("gallery-item-numbered");
+      }
+    }
+  }
+
+  // 进入选择排序模式；已经编号的图片再点一次不会重复编号。
+  function selectGalleryItem(imageId) {
+    if (!editing || !imageId) {
+      return;
+    }
+    if (!selectionMode) {
+      selectionMode = true;
+      selectionOrder = [];
+    }
+    if (selectionOrder.includes(imageId)) {
+      return;
+    }
+    selectionOrder.push(imageId);
+    applySelectionBadges();
+    setGalleryEditing(editing);
+  }
+
+  // 退出选择排序：已编号图片按点击顺序排在前面，其余保持原相对顺序。
+  function exitSelectionMode() {
+    if (!selectionMode) {
+      return;
+    }
+    const remaining = new Map(
+      galleryEntries.map((entry) => [entry.imageId, entry]),
+    );
+    const ordered = [];
+    for (const imageId of selectionOrder) {
+      const entry = remaining.get(imageId);
+      if (entry) {
+        ordered.push(entry);
+        remaining.delete(imageId);
+      }
+    }
+    for (const entry of galleryEntries) {
+      if (remaining.has(entry.imageId)) {
+        ordered.push(entry);
+        remaining.delete(entry.imageId);
+      }
+    }
+    galleryEntries = ordered;
+    selectionMode = false;
+    selectionOrder = [];
+    renderGallery();
+  }
+
+  function updateGalleryHint() {
+    if (!editGalleryHint) {
+      return;
+    }
+    const visible = editing && galleryEntries.length >= 2;
+    editGalleryHint.hidden = !visible;
+    editGalleryHint.textContent = selectionMode
+      ? "选择排序中：按点击顺序编号，点击空白完成排序。"
+      : "拖动图片到另一张图片上可交换位置；点击图片进入选择排序，按点击顺序编号，点击空白完成。";
+  }
+
+  function setGalleryEditing(enabled) {
+    galleryEl.classList.toggle("gallery-edit", enabled);
+    galleryEl.classList.toggle("gallery-selecting", enabled && selectionMode);
+    const canDrag = enabled && !selectionMode;
+    for (const item of galleryEl.querySelectorAll(".gallery-item")) {
+      item.draggable = canDrag;
+      item.classList.toggle("gallery-item-draggable", canDrag);
+      if (canDrag) {
+        item.setAttribute("aria-grabbed", "false");
+      } else {
+        item.removeAttribute("aria-grabbed");
+      }
+    }
+    updateGalleryHint();
+  }
+
+  function clearGalleryDragStyles() {
+    for (const item of galleryEl.querySelectorAll(".gallery-item")) {
+      item.classList.remove("gallery-item-dragging", "gallery-item-drop");
+      if (editing) {
+        item.setAttribute("aria-grabbed", "false");
+      }
+    }
   }
 
   function tagPathMap(paths) {
@@ -300,16 +467,8 @@
       descriptionEl.hidden = true;
     }
 
-    const entityIds = Array.isArray(artwork.entityIds)
-      ? artwork.entityIds
-      : [];
-    const gallery = document.createDocumentFragment();
-    entityIds.forEach((entityId, index) => {
-      gallery.appendChild(createGalleryItem(entityId, index, artwork.title));
-    });
-    galleryEl.replaceChildren(gallery);
-    imageCountEl.textContent = `共 ${entityIds.length} 张`;
-    imagesSection.hidden = entityIds.length === 0;
+    galleryEntries = galleryEntriesFromArtwork(artwork);
+    renderGallery();
 
     renderTags();
     renderArtists(artwork.artists);
@@ -323,6 +482,14 @@
     editButton.setAttribute("aria-pressed", String(enabled));
     // 删除属于编辑模式里的破坏性操作，退出编辑时一并收起。
     deleteButton.hidden = !enabled;
+
+    // 进入或退出编辑都回到服务端当前顺序，未保存的拖动不会留在只读视图。
+    selectionMode = false;
+    selectionOrder = [];
+    galleryEntries = currentArtwork
+      ? galleryEntriesFromArtwork(currentArtwork)
+      : [];
+    renderGallery();
 
     if (enabled) {
       pendingRemovals.clear();
@@ -431,6 +598,18 @@
     }
     if (pendingRemovals.size > 0) {
       input.removeTagIds = Array.from(pendingRemovals);
+    }
+
+    // 只在真正拖动过时提交完整顺序；后端会统一重写 position 0..n-1。
+    const imageIds = galleryEntries.map((entry) => entry.imageId);
+    const originalImageIds = Array.isArray(currentArtwork.imageIds)
+      ? currentArtwork.imageIds
+      : [];
+    const orderChanged =
+      imageIds.length !== originalImageIds.length ||
+      imageIds.some((imageId, index) => imageId !== originalImageIds[index]);
+    if (orderChanged) {
+      input.imageIds = imageIds;
     }
 
     saving = true;
@@ -567,6 +746,125 @@
         : "已删除作品",
     );
   }
+
+  function galleryItemFromEvent(event) {
+    const target = event.target;
+    return target && target.closest ? target.closest(".gallery-item") : null;
+  }
+
+  galleryEl.addEventListener("click", (event) => {
+    if (!editing) {
+      return;
+    }
+    const item = galleryItemFromEvent(event);
+    if (!item) {
+      return;
+    }
+    // 编辑模式下点击图片不打开原图，而是按点击顺序编号。
+    event.preventDefault();
+    selectGalleryItem(item.dataset.imageId || "");
+  });
+
+  // 点击图片之外的空白区域退出选择排序；capture 保证先应用顺序再处理保存等按钮。
+  document.addEventListener(
+    "click",
+    (event) => {
+      if (!selectionMode) {
+        return;
+      }
+      const target = event.target;
+      const item =
+        target && target.closest ? target.closest(".gallery-item") : null;
+      if (!item) {
+        exitSelectionMode();
+      }
+    },
+    true,
+  );
+
+  function galleryItemFromEvent(event) {
+    const target = event.target;
+    return target && target.closest ? target.closest(".gallery-item") : null;
+  }
+
+  galleryEl.addEventListener("dragstart", (event) => {
+    if (!editing || selectionMode) {
+      event.preventDefault();
+      return;
+    }
+    const item = galleryItemFromEvent(event);
+    if (!item || !galleryEl.contains(item)) {
+      event.preventDefault();
+      return;
+    }
+    draggedImageId = item.dataset.imageId || "";
+    if (!draggedImageId) {
+      event.preventDefault();
+      return;
+    }
+    if (event.dataTransfer) {
+      event.dataTransfer.effectAllowed = "move";
+      event.dataTransfer.setData("text/plain", draggedImageId);
+    }
+    item.classList.add("gallery-item-dragging");
+    item.setAttribute("aria-grabbed", "true");
+  });
+
+  galleryEl.addEventListener("dragend", () => {
+    draggedImageId = "";
+    clearGalleryDragStyles();
+  });
+
+  galleryEl.addEventListener("dragover", (event) => {
+    if (!editing || selectionMode || !draggedImageId) {
+      return;
+    }
+    const item = galleryItemFromEvent(event);
+    // 只有拖到另一张图片上才允许放下，空白处不改变顺序。
+    if (!item || item.dataset.imageId === draggedImageId) {
+      return;
+    }
+    event.preventDefault();
+    if (event.dataTransfer) {
+      event.dataTransfer.dropEffect = "move";
+    }
+    item.classList.add("gallery-item-drop");
+  });
+
+  galleryEl.addEventListener("dragleave", (event) => {
+    const item = galleryItemFromEvent(event);
+    if (item) {
+      item.classList.remove("gallery-item-drop");
+    }
+  });
+
+  galleryEl.addEventListener("drop", (event) => {
+    if (!editing || selectionMode || !draggedImageId) {
+      return;
+    }
+    const item = galleryItemFromEvent(event);
+    const targetImageId = item ? item.dataset.imageId || "" : "";
+    const from = galleryEntries.findIndex(
+      (entry) => entry.imageId === draggedImageId,
+    );
+    const to = galleryEntries.findIndex(
+      (entry) => entry.imageId === targetImageId,
+    );
+    if (from < 0 || to < 0 || from === to) {
+      draggedImageId = "";
+      clearGalleryDragStyles();
+      return;
+    }
+    event.preventDefault();
+
+    // 拖到另一张图片上表示两张图片交换位置。
+    const moved = galleryEntries[from];
+    galleryEntries[from] = galleryEntries[to];
+    galleryEntries[to] = moved;
+
+    draggedImageId = "";
+    renderGallery();
+  });
 
   async function load() {
     const params = new URLSearchParams(window.location.search);
