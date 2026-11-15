@@ -8,23 +8,24 @@
 
 namespace tagimg {
 
-// 扫描任务服务：持有扫描 worker 与写库 worker。
+// 服务运行期持有任务 worker。
 //
 // REST 与 GraphQL 两个入口共用同一个实例，避免重复建线程、重复占用
 // 标签模型。addArtwork 只提交任务并立即返回；任务结束后的结果通过
 // on_done 回调交给调用方。任务终态不保存，也不提供任何查询接口。
-class ScanService {
+class ServiceRuntime {
 public:
-  ScanService(std::shared_ptr<const EntityRepository> entity_repository,
-              std::shared_ptr<const TagimgRepository> tagimg_repository,
-              std::shared_ptr<WdTagger> tagger, std::filesystem::path work_dir);
+  ServiceRuntime(std::shared_ptr<const EntityRepository> entity_repository,
+                 std::shared_ptr<const TagimgRepository> tagimg_repository,
+                 std::shared_ptr<WdTagger> tagger,
+                 std::filesystem::path work_dir);
 
-  ~ScanService();
+  ~ServiceRuntime();
 
-  ScanService(const ScanService &) = delete;
-  ScanService &operator=(const ScanService &) = delete;
-  ScanService(ScanService &&) = delete;
-  ScanService &operator=(ScanService &&) = delete;
+  ServiceRuntime(const ServiceRuntime &) = delete;
+  ServiceRuntime &operator=(const ServiceRuntime &) = delete;
+  ServiceRuntime(ServiceRuntime &&) = delete;
+  ServiceRuntime &operator=(ServiceRuntime &&) = delete;
 
   // 提交一次 add 任务。返回 false 表示 worker 已停止，任务没有入队。
   // on_done 在 worker 线程里执行，可以是空函数。
@@ -41,7 +42,7 @@ public:
   void shutdown();
 
 private:
-  // 把构造好的 job 交给 add worker，并挂上结果回调。
+  // 把构造好的 job 交给 worker，并挂上结果回调。
   bool
   submit_job(std::unique_ptr<Job> job,
              std::function<void(const Result<JobOutcome, JobError> &)> on_done);

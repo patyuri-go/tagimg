@@ -60,6 +60,18 @@ JobError map_tagger_error(TaggerError error) {
   return JobError::TaggingFailed;
 }
 
+JobError map_tagimg_lookup_error(TagimgRepositoryError error) {
+  switch (error) {
+  case TagimgRepositoryError::InvalidArgument:
+    return JobError::InvalidEntityId;
+  case TagimgRepositoryError::ConnectionFailed:
+  case TagimgRepositoryError::QueryFailed:
+    return JobError::RepositoryFailed;
+  default:
+    return JobError::RepositoryFailed;
+  }
+}
+
 // 只按实体库记录的 mime_type 判断是否为图片。
 bool is_image_mime(std::string_view mime_type) {
   constexpr std::string_view kPrefix = "image/";
@@ -80,9 +92,21 @@ bool is_image_mime(std::string_view mime_type) {
 ScanJob::ScanJob(std::string entity_id) : entity_id_(std::move(entity_id)) {
 }
 
+Result<ScanResult, JobError>
+ScanJob::scan_entity(JobContext &context, const std::string &entity_id) {
+  ScanJob job(entity_id);
+  return job.scan(context, true);
+}
+
+Result<ScanResult, JobError>
+ScanJob::rescan_entity(JobContext &context, const std::string &entity_id) {
+  ScanJob job(entity_id);
+  return job.scan(context, false);
+}
+
 StepResult ScanJob::step(JobContext &context, const JobRun &run) {
   (void)run;
-  result_ = scan(context);
+  result_ = scan(context, true);
   return StepResult::Done;
 }
 
@@ -96,7 +120,8 @@ Result<JobOutcome, JobError> ScanJob::take_outcome() {
   return JobOutcome(std::move(**result_));
 }
 
-Result<ScanResult, JobError> ScanJob::scan(JobContext &context) {
+Result<ScanResult, JobError> ScanJob::scan(JobContext &context,
+                                           bool check_duplicate) {
   const EntityRepository &repository = context.entity_repository.get();
 
   auto metadata = repository.find_entity(entity_id_);
@@ -108,6 +133,17 @@ Result<ScanResult, JobError> ScanJob::scan(JobContext &context) {
   }
   if (metadata->size > WdTagger::kMaxImageBytes) {
     return JobError::ImageTooLarge;
+  }
+  // 在下载和推理之前判断实体是否已经入库，避免重复扫描。
+  if (check_duplicate) {
+    auto exists =
+        context.tagimg_repository.get().image_exists_by_entity_id(entity_id_);
+    if (!exists) {
+      return map_tagimg_lookup_error(exists.error());
+    }
+    if (*exists) {
+      return JobError::DuplicateImage;
+    }
   }
 
   auto locations = repository.find_webdav_locations(entity_id_);

@@ -95,7 +95,7 @@ add_library(tagimg_job STATIC
     src/job/job.cpp
     src/job/job_worker.cpp
     src/job/scan_job.cpp
-    src/job/scan_service.cpp
+    src/job/service_runtime.cpp
 )
 target_include_directories(tagimg_job PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src

@@ -3,7 +3,6 @@
 #include <filesystem>
 #include <iostream>
 #include <memory>
-#include <optional>
 #include <string>
 #include <utility>
 #include <variant>
@@ -20,24 +19,6 @@
 
 namespace {
 
-// 用来验证 worker 是否被 AddJob 占住的空 job：立刻返回 Done。
-class NoopJob final : public tagimg::Job {
-public:
-  [[nodiscard]] tagimg::StepResult step(tagimg::JobContext &context,
-                                        const tagimg::JobRun &run) override {
-    (void)context;
-    (void)run;
-    return tagimg::StepResult::Done;
-  }
-
-  [[nodiscard]] tagimg::Result<tagimg::JobOutcome, tagimg::JobError>
-  take_outcome() override {
-    tagimg::ScanResult result;
-    result.entity_id = "noop";
-    return tagimg::JobOutcome(std::move(result));
-  }
-};
-
 int print_usage(const char *program) {
   std::cerr << "usage: " << program
             << " [--config PATH] [--endpoint URL] [--work-dir DIR]"
@@ -51,7 +32,7 @@ int main(int argc, char **argv) {
   std::filesystem::path config_path = "config.json";
   std::string endpoint = "http://127.0.0.1:8001";
   std::filesystem::path work_dir = "tmp";
-  std::string title = "worker-yield-test";
+  std::string title = "job-smoke-test";
   std::string entity_id;
 
   for (int index = 1; index < argc; ++index) {
@@ -119,35 +100,23 @@ int main(int argc, char **argv) {
   tagimg::WdTagger tagger(endpoint);
   tagimg::JobContext context{std::cref(**repository),
                              std::cref(**tagimg_repository), std::ref(tagger),
-                             work_dir, std::nullopt};
+                             work_dir};
 
-  tagimg::JobWorker add_worker(context);
-  tagimg::JobWorker scan_worker(context);
-  add_worker.set_scan_worker(scan_worker);
+  tagimg::JobWorker worker(context);
 
   tagimg::AddRequest request;
   request.entity_ids.push_back(entity_id);
   request.title = title;
 
   const auto add_start = std::chrono::steady_clock::now();
-  const tagimg::JobId add_id = add_worker.submit(
-      std::make_unique<tagimg::AddJob>(std::move(request)), true);
+  const tagimg::JobId add_id =
+      worker.submit(std::make_unique<tagimg::AddJob>(std::move(request)), true);
   if (add_id == 0) {
     std::cerr << "submit error: worker is stopped\n";
     return 2;
   }
 
-  // AddJob 提交扫描后应该立刻让出线程；这个空 job 应该很快完成。
-  const auto noop_start = std::chrono::steady_clock::now();
-  const tagimg::JobId noop_id =
-      add_worker.submit(std::make_unique<NoopJob>(), true);
-  auto noop_outcome = add_worker.wait(noop_id);
-  const auto noop_elapsed =
-      std::chrono::duration_cast<std::chrono::milliseconds>(
-          std::chrono::steady_clock::now() - noop_start)
-          .count();
-
-  auto add_outcome = add_worker.wait(add_id);
+  auto add_outcome = worker.wait(add_id);
   const auto add_elapsed =
       std::chrono::duration_cast<std::chrono::milliseconds>(
           std::chrono::steady_clock::now() - add_start)
@@ -155,9 +124,7 @@ int main(int argc, char **argv) {
 
   nlohmann::json output;
   output["add_job_id"] = add_id;
-  output["noop_elapsed_ms"] = noop_elapsed;
   output["add_elapsed_ms"] = add_elapsed;
-  output["noop_ok"] = static_cast<bool>(noop_outcome);
   output["add_ok"] = static_cast<bool>(add_outcome);
 
   if (add_outcome) {
@@ -171,9 +138,6 @@ int main(int argc, char **argv) {
     output["add_error"] = std::string(tagimg::to_string(add_outcome.error()));
   }
 
-  // 空 job 若等了两秒以上，说明 AddJob 阻塞了 worker 线程。
-  const bool yielded = noop_elapsed < 500;
-  output["yielded"] = yielded;
   std::cout << output.dump(2) << '\n';
-  return yielded ? 0 : 1;
+  return add_outcome ? 0 : 1;
 }

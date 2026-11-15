@@ -2,7 +2,7 @@
   "use strict";
 
   const PAGE_SIZE = 24;
-  const MAX_ENTITIES = 20;
+  const MAX_ENTITIES = 200;
   // 扫描任务没有终态查询，靠轮询作品是否出现来判断完成。
   const SCAN_POLL_INTERVAL = 2500;
   const SCAN_POLL_ATTEMPTS = 24;

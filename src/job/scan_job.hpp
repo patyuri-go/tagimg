@@ -15,13 +15,22 @@ class ScanJob final : public Job {
 public:
   explicit ScanJob(std::string entity_id);
 
+  // 扫描实体，并固定检查实体是否已经入库。
+  [[nodiscard]] static Result<ScanResult, JobError>
+  scan_entity(JobContext &context, const std::string &entity_id);
+
+  // 重新扫描已有图片对应的实体，不检查实体是否已经入库。
+  [[nodiscard]] static Result<ScanResult, JobError>
+  rescan_entity(JobContext &context, const std::string &entity_id);
+
   [[nodiscard]] StepResult step(JobContext &context,
                                 const JobRun &run) override;
 
   [[nodiscard]] Result<JobOutcome, JobError> take_outcome() override;
 
 private:
-  [[nodiscard]] Result<ScanResult, JobError> scan(JobContext &context);
+  [[nodiscard]] Result<ScanResult, JobError> scan(JobContext &context,
+                                                  bool check_duplicate);
 
   [[nodiscard]] Result<ScanResult, JobError>
   scan_location(JobContext &context, const WebdavLocation &location);

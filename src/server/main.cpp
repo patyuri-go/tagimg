@@ -15,7 +15,7 @@
 #include "graphql/graphql_service.hpp"
 #include "http/api_service.hpp"
 #include "http/image_stream.hpp"
-#include "job/scan_service.hpp"
+#include "job/service_runtime.hpp"
 
 namespace {
 
@@ -123,12 +123,12 @@ int main() {
       std::make_shared<tagimg::ImageStreamer>(entity_repository_shared);
 
   // 扫描任务由 REST 与 GraphQL 共用同一个服务实例。
-  auto scan_service = std::make_shared<tagimg::ScanService>(
+  auto runtime = std::make_shared<tagimg::ServiceRuntime>(
       entity_repository_shared, tagimg_repository_shared, tagger, work_dir);
 
-  auto service = std::make_shared<tagimg::ApiService>(scan_service);
+  auto service = std::make_shared<tagimg::ApiService>(runtime);
   auto graphql_service = std::make_shared<tagimg::GraphQLService>(
-      scan_service, tagimg_repository_shared);
+      runtime, tagimg_repository_shared);
 
   drogon::app().registerHandler(
       "/api/v1",

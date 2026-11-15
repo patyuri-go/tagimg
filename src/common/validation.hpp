@@ -9,7 +9,7 @@
 namespace tagimg {
 
 // addArtwork 的输入限制，REST 与 GraphQL 两个入口共用。
-inline constexpr std::size_t kMaxEntityIds = 20;
+inline constexpr std::size_t kMaxEntityIds = 200;
 inline constexpr std::size_t kMaxImageIds = 20;
 inline constexpr std::size_t kMaxTitleLength = 500;
 

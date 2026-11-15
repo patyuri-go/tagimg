@@ -7,7 +7,7 @@
 #include <drogon/HttpResponse.h>
 
 #include "db/tagimg_repository.hpp"
-#include "job/scan_service.hpp"
+#include "job/service_runtime.hpp"
 
 namespace tagimg {
 
@@ -19,7 +19,7 @@ namespace tagimg {
 // 放在响应体的 errors 里。
 class GraphQLService {
 public:
-  GraphQLService(std::shared_ptr<ScanService> scan_service,
+  GraphQLService(std::shared_ptr<ServiceRuntime> runtime,
                  std::shared_ptr<const TagimgRepository> tagimg_repository);
 
   ~GraphQLService();

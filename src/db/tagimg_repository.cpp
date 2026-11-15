@@ -898,6 +898,24 @@ TagimgRepository::save_artwork_from_images(
   }
 }
 
+Result<bool, TagimgRepositoryError> TagimgRepository::image_exists_by_entity_id(
+    const std::string &entity_id) const {
+  if (!is_uuid(entity_id)) {
+    return TagimgRepositoryError::InvalidArgument;
+  }
+  if (!impl_ || !impl_->pool) {
+    return TagimgRepositoryError::ConnectionFailed;
+  }
+
+  try {
+    db_detail::PoolLease lease(*impl_->pool);
+    soci::session &sql = impl_->pool->at(lease.position());
+    return count_rows(sql, kCountImageSql, entity_id) > 0;
+  } catch (const std::exception &) {
+    return TagimgRepositoryError::QueryFailed;
+  }
+}
+
 Result<std::optional<std::string>, TagimgRepositoryError>
 TagimgRepository::find_image_entity_id(const std::string &image_id) const {
   if (!is_uuid(image_id)) {

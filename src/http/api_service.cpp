@@ -21,7 +21,7 @@
 #include "common/validation.hpp"
 #include "http/json_helpers.hpp"
 #include "job/job.hpp"
-#include "job/scan_service.hpp"
+#include "job/service_runtime.hpp"
 
 namespace tagimg {
 namespace {
@@ -328,15 +328,15 @@ Json schema_field(std::string name, std::string type, bool required,
 
 struct ApiService::Impl {
   // 扫描任务由 GraphQL 与 REST 共用，生命周期由 main 控制。
-  std::shared_ptr<ScanService> scan_service;
+  std::shared_ptr<ServiceRuntime> runtime;
 };
 
-ApiService::ApiService(std::shared_ptr<ScanService> scan_service)
+ApiService::ApiService(std::shared_ptr<ServiceRuntime> runtime)
     : impl_(std::make_shared<Impl>()) {
-  if (!scan_service) {
-    throw std::invalid_argument("ApiService requires a ScanService");
+  if (!runtime) {
+    throw std::invalid_argument("ApiService requires a ServiceRuntime");
   }
-  impl_->scan_service = std::move(scan_service);
+  impl_->runtime = std::move(runtime);
 }
 
 ApiService::~ApiService() {
@@ -344,10 +344,10 @@ ApiService::~ApiService() {
 }
 
 void ApiService::shutdown() {
-  if (!impl_ || !impl_->scan_service) {
+  if (!impl_ || !impl_->runtime) {
     return;
   }
-  impl_->scan_service->shutdown();
+  impl_->runtime->shutdown();
 }
 
 void ApiService::handle_rpc(
@@ -446,7 +446,7 @@ void ApiService::handle_rpc(
   pending->request_id = request_id;
   pending->started = std::chrono::steady_clock::now();
 
-  const bool accepted = impl_->scan_service->submit(
+  const bool accepted = impl_->runtime->submit(
       std::move(add_request),
       [pending](const Result<JobOutcome, JobError> &result) {
         Json body;

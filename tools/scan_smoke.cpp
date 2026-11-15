@@ -144,7 +144,7 @@ int main(int argc, char **argv) {
   tagimg::WdTagger tagger(endpoint);
   tagimg::JobContext context{std::cref(**repository),
                              std::cref(**tagimg_repository), std::ref(tagger),
-                             work_dir, std::nullopt};
+                             work_dir};
 
   nlohmann::json output;
   bool failed = false;
@@ -152,20 +152,16 @@ int main(int argc, char **argv) {
   if (add_mode) {
     request.entity_ids = entity_ids;
 
-    // add_worker 先声明、scan_worker 后声明：析构时 scan_worker 先停，
-    // 避免扫描回调再访问已经销毁的 add_worker。
-    tagimg::JobWorker add_worker(context);
-    tagimg::JobWorker scan_worker(context);
-    add_worker.set_scan_worker(scan_worker);
+    tagimg::JobWorker worker(context);
 
-    const tagimg::JobId job_id = add_worker.submit(
+    const tagimg::JobId job_id = worker.submit(
         std::make_unique<tagimg::AddJob>(std::move(request)), true);
     if (job_id == 0) {
       std::cerr << "submit error: worker is stopped\n";
       return 2;
     }
 
-    auto outcome = add_worker.wait(job_id);
+    auto outcome = worker.wait(job_id);
     if (!outcome) {
       std::cerr << "add error: " << tagimg::to_string(outcome.error()) << '\n';
       return 1;

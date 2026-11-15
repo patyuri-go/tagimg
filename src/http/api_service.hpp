@@ -8,7 +8,7 @@
 
 namespace tagimg {
 
-class ScanService;
+class ServiceRuntime;
 
 // HTTP 接口层。
 //
@@ -16,11 +16,11 @@ class ScanService;
 //   POST /api/v1         统一 RPC 入口，通过 operation 分发
 //   GET  /api/v1/schema  返回支持的操作与字段描述
 //
-// addArtwork 会提交到共用的 ScanService，handler 立即返回；job 完成后
+// addArtwork 会提交到共用的 ServiceRuntime，handler 立即返回；job 完成后
 // 再通过回调把响应交回 Drogon IO 线程。
 class ApiService {
 public:
-  explicit ApiService(std::shared_ptr<ScanService> scan_service);
+  explicit ApiService(std::shared_ptr<ServiceRuntime> runtime);
 
   ~ApiService();
 

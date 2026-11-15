@@ -262,6 +262,10 @@ public:
   [[nodiscard]] Result<std::optional<std::string>, TagimgRepositoryError>
   find_image_entity_id(const std::string &image_id) const;
 
+  // 判断实体是否已经作为图片入库。
+  [[nodiscard]] Result<bool, TagimgRepositoryError>
+  image_exists_by_entity_id(const std::string &entity_id) const;
+
   // 按作品 ID 查询；不存在时返回 std::nullopt。
   [[nodiscard]] Result<std::optional<ArtworkSummary>, TagimgRepositoryError>
   find_artwork(const std::string &artwork_id) const;

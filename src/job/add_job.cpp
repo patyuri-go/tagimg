@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <map>
-#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -96,42 +95,20 @@ AddJob::AddJob(ImageAddRequest request) : image_request_(std::move(request)) {
 }
 
 StepResult AddJob::step(JobContext &context, const JobRun &run) {
+  (void)run;
   if (outcome_) {
     return StepResult::Done;
   }
 
-  if (pending_scan_) {
-    collect_scan(context);
-    if (outcome_) {
-      return StepResult::Done;
-    }
-    if (pending_scan_) {
-      // 扫描还没结束，只是被提前唤醒；继续让出线程。
-      return StepResult::Pending;
-    }
-  }
-
-  // 图片模式不重新扫描时不需要扫描 worker，直接写库。
+  // 图片模式不重新扫描时不需要访问存储，直接写库。
   if (image_request_ && !image_request_->rescan) {
     finish(context);
     return StepResult::Done;
   }
 
-  if (!context.scan_worker) {
-    outcome_ = Result<JobOutcome, JobError>::err(JobError::InternalError);
-    return StepResult::Done;
-  }
-
-  JobWorker &scan_worker = context.scan_worker->get();
-  JobWorker &self_worker = run.worker;
-  const JobId self_id = run.id;
-
   if (image_request_) {
     const TagimgRepository &repository = context.tagimg_repository.get();
-    while (next_index_ < image_request_->image_ids.size()) {
-      const std::string &image_id = image_request_->image_ids[next_index_];
-      ++next_index_;
-
+    for (const std::string &image_id : image_request_->image_ids) {
       auto entity_id = repository.find_image_entity_id(image_id);
       if (!entity_id) {
         outcome_ = Result<JobOutcome, JobError>::err(
@@ -145,75 +122,35 @@ StepResult AddJob::step(JobContext &context, const JobRun &run) {
         continue;
       }
 
-      pending_image_id_ = image_id;
-      pending_entity_id_ = **entity_id;
-      pending_scan_ = scan_worker.submit(
-          std::make_unique<ScanJob>(pending_entity_id_), true,
-          [&worker = self_worker, self_id](JobId) { worker.wake(self_id); });
-      if (*pending_scan_ == 0) {
-        pending_scan_.reset();
-        outcome_ = Result<JobOutcome, JobError>::err(JobError::InternalError);
+      // 已有图片本身就在 images 表中，rescan 时不能按实体查重。
+      auto scan = ScanJob::rescan_entity(context, **entity_id);
+      if (!scan) {
+        failures_.push_back(ScanFailure{**entity_id, scan.error(), image_id});
+        continue;
+      }
+      scans_.push_back(std::move(*scan));
+    }
+
+    finish(context);
+    return StepResult::Done;
+  }
+
+  for (const std::string &entity_id : request_.entity_ids) {
+    // 实体模式下在下载前检查是否已入库。
+    auto scan = ScanJob::scan_entity(context, entity_id);
+    if (!scan) {
+      if (scan.error() == JobError::DuplicateImage) {
+        outcome_ = Result<JobOutcome, JobError>::err(scan.error());
         return StepResult::Done;
       }
-      return StepResult::Pending;
+      failures_.push_back(ScanFailure{entity_id, scan.error(), ""});
+      continue;
     }
-
-    finish(context);
-    return StepResult::Done;
+    scans_.push_back(std::move(*scan));
   }
 
-  if (next_index_ >= request_.entity_ids.size()) {
-    finish(context);
-    return StepResult::Done;
-  }
-
-  pending_entity_id_ = request_.entity_ids[next_index_];
-  ++next_index_;
-
-  // 扫描完成后由回调唤醒本 job，step() 不会阻塞等它。
-  pending_scan_ = scan_worker.submit(
-      std::make_unique<ScanJob>(pending_entity_id_), true,
-      [&worker = self_worker, self_id](JobId) { worker.wake(self_id); });
-
-  if (*pending_scan_ == 0) {
-    pending_scan_.reset();
-    outcome_ = Result<JobOutcome, JobError>::err(JobError::InternalError);
-    return StepResult::Done;
-  }
-
-  return StepResult::Pending;
-}
-
-void AddJob::collect_scan(JobContext &context) {
-  JobWorker &scan_worker = context.scan_worker->get();
-  const JobSnapshot snapshot = scan_worker.peek(*pending_scan_);
-  if (snapshot.state != JobState::Finished) {
-    return;
-  }
-
-  auto result = scan_worker.take_result(*pending_scan_);
-  pending_scan_.reset();
-
-  // 先取出当前扫描的 ID，失败记录和成功合并都要用。
-  const std::string entity_id = pending_entity_id_;
-  const std::string image_id = pending_image_id_;
-  pending_image_id_.clear();
-
-  if (!result) {
-    if (result.error() == JobError::JobNotFinished) {
-      outcome_ = Result<JobOutcome, JobError>::err(JobError::InternalError);
-      return;
-    }
-    failures_.push_back(ScanFailure{entity_id, result.error(), image_id});
-    return;
-  }
-
-  auto *scan = std::get_if<ScanResult>(&*result);
-  if (scan == nullptr) {
-    outcome_ = Result<JobOutcome, JobError>::err(JobError::InternalError);
-    return;
-  }
-  scans_.push_back(std::move(*scan));
+  finish(context);
+  return StepResult::Done;
 }
 
 void AddJob::finish(JobContext &context) {

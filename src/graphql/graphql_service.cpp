@@ -543,12 +543,12 @@ private:
 // Query / Mutation 的实现对象；生成代码按 concept 直接调用同名方法。
 class Root {
 public:
-  Root(std::shared_ptr<ScanService> scan_service,
+  Root(std::shared_ptr<ServiceRuntime> runtime,
        std::shared_ptr<const TagimgRepository> repository)
-      : scan_service_(std::move(scan_service)),
-        repository_(std::move(repository)) {
-    if (!scan_service_ || !repository_) {
-      throw std::invalid_argument("Root requires ScanService and repository");
+      : runtime_(std::move(runtime)), repository_(std::move(repository)) {
+    if (!runtime_ || !repository_) {
+      throw std::invalid_argument(
+          "Root requires ServiceRuntime and repository");
     }
   }
 
@@ -565,11 +565,11 @@ public:
     log_line("[scan] task " + task_id +
              " queued: " + std::to_string(entity_count) + " entities");
 
-    const bool accepted = scan_service_->submit(
-        std::move(request),
-        [task_id](const Result<JobOutcome, JobError> &result) {
-          log_add_outcome(task_id, result);
-        });
+    const bool accepted =
+        runtime_->submit(std::move(request),
+                         [task_id](const Result<JobOutcome, JobError> &result) {
+                           log_add_outcome(task_id, result);
+                         });
 
     if (!accepted) {
       fail("SERVICE_UNAVAILABLE", "job worker is not running");
@@ -588,11 +588,11 @@ public:
              " queued: " + std::to_string(image_count) +
              " image(s), rescan=" + (request.rescan ? "true" : "false"));
 
-    const bool accepted = scan_service_->submit(
-        std::move(request),
-        [task_id](const Result<JobOutcome, JobError> &result) {
-          log_add_outcome(task_id, result);
-        });
+    const bool accepted =
+        runtime_->submit(std::move(request),
+                         [task_id](const Result<JobOutcome, JobError> &result) {
+                           log_add_outcome(task_id, result);
+                         });
 
     if (!accepted) {
       fail("SERVICE_UNAVAILABLE", "job worker is not running");
@@ -917,7 +917,7 @@ public:
   }
 
 private:
-  std::shared_ptr<ScanService> scan_service_;
+  std::shared_ptr<ServiceRuntime> runtime_;
   std::shared_ptr<const TagimgRepository> repository_;
 };
 
@@ -1019,15 +1019,14 @@ drogon::HttpResponsePtr json_response(std::string body,
 } // namespace
 
 struct GraphQLService::Impl {
-  Impl(std::shared_ptr<ScanService> scan_service_ref,
+  Impl(std::shared_ptr<ServiceRuntime> runtime_ref,
        std::shared_ptr<const TagimgRepository> repository_ref)
-      : scan_service(std::move(scan_service_ref)),
-        repository(std::move(repository_ref)) {
-    if (!scan_service || !repository) {
+      : runtime(std::move(runtime_ref)), repository(std::move(repository_ref)) {
+    if (!runtime || !repository) {
       throw std::invalid_argument(
-          "GraphQLService requires a ScanService and a repository");
+          "GraphQLService requires a ServiceRuntime and a repository");
     }
-    root = std::make_shared<Root>(scan_service, repository);
+    root = std::make_shared<Root>(runtime, repository);
     query = std::make_shared<gql::tagimg::object::Query>(root);
     mutation = std::make_shared<gql::tagimg::object::Mutation>(root);
     operations = std::make_shared<gql::tagimg::Operations>(query, mutation);
@@ -1063,7 +1062,7 @@ struct GraphQLService::Impl {
     return gql::response::toJSON(attach_error_codes(std::move(result)));
   }
 
-  std::shared_ptr<ScanService> scan_service;
+  std::shared_ptr<ServiceRuntime> runtime;
   std::shared_ptr<const TagimgRepository> repository;
   std::shared_ptr<Root> root;
   std::shared_ptr<gql::tagimg::object::Query> query;
@@ -1072,9 +1071,9 @@ struct GraphQLService::Impl {
 };
 
 GraphQLService::GraphQLService(
-    std::shared_ptr<ScanService> scan_service,
+    std::shared_ptr<ServiceRuntime> runtime,
     std::shared_ptr<const TagimgRepository> tagimg_repository)
-    : impl_(std::make_shared<Impl>(std::move(scan_service),
+    : impl_(std::make_shared<Impl>(std::move(runtime),
                                    std::move(tagimg_repository))) {
 }
 

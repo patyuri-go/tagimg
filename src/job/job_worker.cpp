@@ -143,10 +143,6 @@ JobWorker::~JobWorker() {
   shutdown();
 }
 
-void JobWorker::set_scan_worker(JobWorker &worker) {
-  impl_->context.scan_worker = std::ref(worker);
-}
-
 JobId JobWorker::submit(std::unique_ptr<Job> job, bool want_result,
                         JobDoneCallback on_done) {
   if (!job) {

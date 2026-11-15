@@ -123,20 +123,20 @@ struct JobRun {
 
 // job 用到的外部依赖，由 worker 持有并注入。
 //
-// 所有引用对象都必须比 worker 活得久。scan_worker 只给 AddJob 使用，
-// 通过 JobWorker::set_scan_worker() 注入。
+// 所有引用对象都必须比 worker 活得久。
 struct JobContext {
   std::reference_wrapper<const EntityRepository> entity_repository;
   std::reference_wrapper<const TagimgRepository> tagimg_repository;
   std::reference_wrapper<WdTagger> tagger;
   std::filesystem::path work_dir;
-  std::optional<std::reference_wrapper<JobWorker>> scan_worker;
 };
 
 // 一次可执行的工作。
 //
-// job 只保存业务参数，依赖由 worker 通过 JobContext 注入。step() 必须
-// 非阻塞：需要等待其他 job 时立刻返回 Pending，worker 会保存现场。
+// job 只保存业务参数，依赖由 worker 通过 JobContext 注入。step() 在
+// worker 线程里执行；需要等待其他 job 时可以返回 Pending，worker 会
+// 保存现场并在 wake() 后再次调度。AddJob 选择同步扫描，因此会占用
+// 当前 worker 直到整批图片处理完。
 class Job {
 public:
   virtual ~Job() = default;
@@ -181,9 +181,6 @@ public:
   JobWorker &operator=(const JobWorker &) = delete;
   JobWorker(JobWorker &&) = delete;
   JobWorker &operator=(JobWorker &&) = delete;
-
-  // 注入扫描 worker；必须在提交 AddJob 之前调用。
-  void set_scan_worker(JobWorker &worker);
 
   // 提交 job，返回索引。worker 已停止时返回 0。
   [[nodiscard]] JobId submit(std::unique_ptr<Job> job, bool want_result = false,
