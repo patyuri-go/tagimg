@@ -105,6 +105,11 @@ pid_t spawn_sidecar(const SidecarConfig &config) {
   ::setenv("PYTHONUNBUFFERED", "1", 1);
   ::setenv("TAGIMG_MODEL_DIR", config.model_dir.c_str(), 1);
   ::setenv("TAGIMG_TAGGER_THREADS", std::to_string(config.threads).c_str(), 1);
+  if (!config.clip_model_dir.empty()) {
+    ::setenv("TAGIMG_CLIP_MODEL_DIR", config.clip_model_dir.c_str(), 1);
+  }
+  ::setenv("TAGIMG_CLIP_THREADS", std::to_string(config.clip_threads).c_str(), 1);
+  ::setenv("TAGIMG_CLIP_PRELOAD", config.clip_preload ? "1" : "0", 1);
   ::setenv("TAGIMG_AI_HOST", config.host.c_str(), 1);
   ::setenv("TAGIMG_AI_PORT", std::to_string(config.port).c_str(), 1);
 
@@ -193,8 +198,14 @@ SidecarProcess::start(const SidecarConfig &config) {
   sidecar->impl_->child = pid;
   sidecar->impl_->managed = true;
 
-  const auto deadline =
-      std::chrono::steady_clock::now() + config.startup_timeout;
+  // CLIP 预加载发生在 lifespan 内，/health 要等权重读完才会返回 200，
+  // 因此启动等待上限要取两者较大值。
+  auto startup_timeout = config.startup_timeout;
+  if (config.clip_preload && config.clip_startup_timeout > startup_timeout) {
+    startup_timeout = config.clip_startup_timeout;
+  }
+
+  const auto deadline = std::chrono::steady_clock::now() + startup_timeout;
   while (std::chrono::steady_clock::now() < deadline) {
     if (probe_health(sidecar->impl_->connect_host, config.port)) {
       return sidecar;

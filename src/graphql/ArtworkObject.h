@@ -103,6 +103,22 @@ concept getImageCount = requires(TImpl impl) {
 };
 
 template <class TImpl>
+concept getSortScoreWithParams =
+    requires(TImpl impl, service::FieldParams params) {
+      {
+        service::AwaitableScalar<std::optional<double>>{
+            impl.getSortScore(std::move(params))}
+      };
+    };
+
+template <class TImpl>
+concept getSortScore = requires(TImpl impl) {
+  {
+    service::AwaitableScalar<std::optional<double>>{impl.getSortScore()}
+  };
+};
+
+template <class TImpl>
 concept getImageIdsWithParams =
     requires(TImpl impl, service::FieldParams params) {
       {
@@ -229,6 +245,8 @@ private:
   [[nodiscard("unnecessary call")]] service::AwaitableResolver
   resolveImageCount(service::ResolverParams &&params) const;
   [[nodiscard("unnecessary call")]] service::AwaitableResolver
+  resolveSortScore(service::ResolverParams &&params) const;
+  [[nodiscard("unnecessary call")]] service::AwaitableResolver
   resolveImageIds(service::ResolverParams &&params) const;
   [[nodiscard("unnecessary call")]] service::AwaitableResolver
   resolveTagIds(service::ResolverParams &&params) const;
@@ -272,6 +290,9 @@ private:
     getUpdatedAt(service::FieldParams &&params) const = 0;
     [[nodiscard("unnecessary call")]] virtual service::AwaitableScalar<int>
     getImageCount(service::FieldParams &&params) const = 0;
+    [[nodiscard("unnecessary call")]] virtual service::AwaitableScalar<
+        std::optional<double>>
+    getSortScore(service::FieldParams &&params) const = 0;
     [[nodiscard("unnecessary call")]] virtual service::AwaitableScalar<
         std::vector<response::IdType>>
     getImageIds(service::FieldParams &&params) const = 0;
@@ -374,6 +395,18 @@ private:
         static_assert(methods::ArtworkHas::getImageCount<T>,
                       R"msg(Artwork::getImageCount is not implemented)msg");
         return {_pimpl->getImageCount()};
+      }
+    }
+
+    [[nodiscard("unnecessary call")]] service::AwaitableScalar<
+        std::optional<double>>
+    getSortScore(service::FieldParams &&params) const override {
+      if constexpr (methods::ArtworkHas::getSortScoreWithParams<T>) {
+        return {_pimpl->getSortScore(std::move(params))};
+      } else {
+        static_assert(methods::ArtworkHas::getSortScore<T>,
+                      R"msg(Artwork::getSortScore is not implemented)msg");
+        return {_pimpl->getSortScore()};
       }
     }
 

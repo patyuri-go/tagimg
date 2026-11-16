@@ -274,8 +274,8 @@ a.brand {
 .search {
   display: flex;
   gap: 8px;
-  flex: 1;
-  max-width: 640px;
+  flex: 1 1 320px;
+  max-width: 380px;
 }
 
 .search input {
@@ -323,8 +323,8 @@ a.brand {
 /* 标签输入联想 */
 .tag-search {
   position: relative;
-  flex: 1 1 200px;
-  max-width: 280px;
+  flex: 1 1 160px;
+  max-width: 200px;
 }
 
 .tag-search input {
@@ -349,6 +349,70 @@ a.brand {
 .tag-search input:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+/* 按文字排序（调用 GraphQL 的 SIMILARITY 排序） */
+.sort-search {
+  position: relative;
+  flex: 1 1 160px;
+  max-width: 220px;
+}
+
+.sort-search input {
+  width: 100%;
+  height: 40px;
+  padding: 0 30px 0 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 15px;
+  outline: none;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.sort-search input::placeholder {
+  color: var(--muted);
+}
+
+.sort-search input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+/* 排序生效时用主色描边，提示当前列表不是默认顺序 */
+.sort-search.is-active input {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+}
+
+.sort-clear {
+  position: absolute;
+  top: 50%;
+  right: 6px;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  transform: translateY(-50%);
+}
+
+.sort-clear:hover {
+  background: var(--chip-bg);
+  color: var(--text);
+}
+
+.sort-clear:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 .tag-suggest {
@@ -568,6 +632,33 @@ a.brand {
   place-items: center;
   color: var(--muted);
   font-size: 13px;
+}
+
+/* 按文字排序时缩略图右上角的相似度角标。 */
+.score-badge {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.5;
+  letter-spacing: 0.01em;
+  /* 角标只是信息展示，不要拦住卡片的点击。 */
+  pointer-events: none;
+}
+
+.score-badge-hit {
+  background: rgba(15, 17, 21, 0.72);
+  color: #ffffff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.28);
+}
+
+.score-badge-empty {
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  color: var(--muted);
 }
 
 .card-body {
@@ -1497,6 +1588,12 @@ body.lightbox-open {
 
   .tag-search {
     order: 3;
+    flex-basis: 100%;
+    max-width: none;
+  }
+
+  .sort-search {
+    order: 4;
     flex-basis: 100%;
     max-width: none;
   }

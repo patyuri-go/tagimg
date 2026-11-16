@@ -7,14 +7,28 @@
   const SCAN_POLL_INTERVAL = 2500;
   const SCAN_POLL_ATTEMPTS = 24;
   const SEARCH_QUERY = `
-    query SearchArtworks($filter: ArtworkFilter, $limit: Int!, $offset: Int!) {
-      artworks(filter: $filter, limit: $limit, offset: $offset, includeTotal: true) {
+    query SearchArtworks(
+      $filter: ArtworkFilter
+      $limit: Int!
+      $offset: Int!
+      $orderBy: ArtworkOrderField
+      $sortText: String
+    ) {
+      artworks(
+        filter: $filter
+        limit: $limit
+        offset: $offset
+        orderBy: $orderBy
+        sortText: $sortText
+        includeTotal: true
+      ) {
         items {
           id
           title
           createdAt
           imageCount
           imageIds
+          sortScore
           tagPaths {
             id
             path
@@ -76,6 +90,9 @@
   const layoutHeightValue = document.getElementById("layout-height-value");
   const tagInput = document.getElementById("tag-input");
   const tagSuggest = document.getElementById("tag-suggest");
+  const sortSearch = document.getElementById("sort-search");
+  const sortInput = document.getElementById("sort-input");
+  const sortClear = document.getElementById("sort-clear");
   const tagStaging = document.getElementById("tag-staging");
   const includeStageRow = document.getElementById("include-stage-row");
   const includeStage = document.getElementById("include-stage");
@@ -111,6 +128,8 @@
   let inFlight = null;
   let debounceTimer = 0;
   let scanToken = 0;
+  // 非空时按语义相似度排序，配合 GraphQL 的 orderBy: SIMILARITY。
+  let sortText = "";
   let hasMore = false;
   let columns = [];
   let allCards = [];
@@ -366,6 +385,9 @@
           filter,
           limit: PAGE_SIZE,
           offset: fromOffset,
+          // 未设置排序文本时传 null，交给 schema 的默认值 CREATED_AT。
+          orderBy: sortText ? "SIMILARITY" : null,
+          sortText: sortText || null,
         },
       }),
       signal,
@@ -571,7 +593,25 @@
         ? thumbInfo.width / thumbInfo.height
         : 3 / 2;
     card.dataset.aspectRatio = String(ratio);
-    card.append(createThumb(item, thumbInfo), body);
+
+    const thumb = createThumb(item, thumbInfo);
+    // 只有按文字排序时才标分数，普通浏览不打扰。
+    if (sortText) {
+      const badge = document.createElement("span");
+      badge.className = "score-badge";
+      if (typeof item.sortScore === "number" && Number.isFinite(item.sortScore)) {
+        badge.textContent = item.sortScore.toFixed(3);
+        badge.classList.add("score-badge-hit");
+        badge.title = `与「${sortText}」的相似度 ${item.sortScore.toFixed(4)}`;
+      } else {
+        badge.textContent = "无向量";
+        badge.classList.add("score-badge-empty");
+        badge.title = "这个作品还没有图片向量，无法参与相似度排序，已排在最后";
+      }
+      thumb.appendChild(badge);
+    }
+
+    card.append(thumb, body);
     return card;
   }
 
@@ -1085,6 +1125,49 @@
     clearTimeout(debounceTimer);
     debounceTimer = setTimeout(() => search(true), 300);
   });
+
+  // 文字排序：输入描述后按回车才请求，避免每敲一个字都让 sidecar 编码一次。
+  function syncSortInput() {
+    const active = sortText.length > 0;
+    sortSearch.classList.toggle("is-active", active);
+    sortClear.hidden = !active;
+  }
+
+  function applySortText(value) {
+    const next = value.trim();
+    sortInput.value = next;
+    if (next === sortText) {
+      syncSortInput();
+      return;
+    }
+    sortText = next;
+    syncSortInput();
+    clearTimeout(debounceTimer);
+    search(true);
+  }
+
+  sortInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      applySortText(sortInput.value);
+    }
+  });
+
+  sortInput.addEventListener("input", () => {
+    // 清空输入框（包括 type=search 自带的清除按钮）时立刻取消排序。
+    if (!sortInput.value) {
+      applySortText("");
+      return;
+    }
+    sortClear.hidden = false;
+  });
+
+  sortClear.addEventListener("click", () => {
+    applySortText("");
+    sortInput.focus();
+  });
+
+  syncSortInput();
 
   for (const modeInput of addModeInputs) {
     modeInput.addEventListener("change", updateAddMode);

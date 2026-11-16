@@ -50,6 +50,10 @@ service::ResolverMap Mutation::getResolvers() const noexcept {
           {R"gql(addArtworkFromImages)gql"sv,
            [this](service::ResolverParams &&params) {
              return resolveAddArtworkFromImages(std::move(params));
+           }},
+          {R"gql(rescanArtwork)gql"sv,
+           [this](service::ResolverParams &&params) {
+             return resolveRescanArtwork(std::move(params));
            }}};
 }
 
@@ -93,6 +97,24 @@ Mutation::resolveAddArtworkFromImages(service::ResolverParams &&params) const {
       service::FieldParams{std::move(selectionSetParams),
                            std::move(directives)},
       std::move(argInput));
+  resolverLock.unlock();
+
+  return service::ModifiedResult<response::IdType>::convert(std::move(result),
+                                                            std::move(params));
+}
+
+service::AwaitableResolver
+Mutation::resolveRescanArtwork(service::ResolverParams &&params) const {
+  auto argArtworkId = service::ModifiedArgument<response::IdType>::require(
+      "artworkId", params.arguments);
+  std::unique_lock resolverLock(_resolverMutex);
+  service::SelectionSetParams selectionSetParams{
+      static_cast<const service::SelectionSetParams &>(params)};
+  auto directives = std::move(params.fieldDirectives);
+  auto result = _pimpl->applyRescanArtwork(
+      service::FieldParams{std::move(selectionSetParams),
+                           std::move(directives)},
+      std::move(argArtworkId));
   resolverLock.unlock();
 
   return service::ModifiedResult<response::IdType>::convert(std::move(result),
@@ -211,7 +233,22 @@ rescan 为 true 时逐张重新扫描并合并扫描标签；任一图片失败�
                 schema->WrapType(
                     introspection::TypeKind::NON_NULL,
                     schema->LookupType(R"gql(UpdateArtworkInput)gql"sv)),
-                R"gql()gql"sv)})});
+                R"gql()gql"sv)}),
+       schema::Field::Make(
+           R"gql(rescanArtwork)gql"sv,
+           R"md(重新扫描一个作品内的全部图片，立即返回任务 ID。
+
+先逐张重新下载、打标并生成向量；全部成功才写库，否则整单不写，作品的
+旧向量与旧标签保持原样。成功时按图片替换向量，并把本次扫描出的标签
+增量加入作品（只增不删）。与 addArtwork 一样不保存终态。)md"sv,
+           std::nullopt,
+           schema->WrapType(introspection::TypeKind::NON_NULL,
+                            schema->LookupType(R"gql(ID)gql"sv)),
+           {schema::InputValue::Make(
+               R"gql(artworkId)gql"sv, R"md()md"sv,
+               schema->WrapType(introspection::TypeKind::NON_NULL,
+                                schema->LookupType(R"gql(ID)gql"sv)),
+               R"gql()gql"sv)})});
 }
 
 } // namespace graphql::tagimg

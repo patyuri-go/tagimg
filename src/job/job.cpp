@@ -24,6 +24,8 @@ std::string_view to_string(JobError error) noexcept {
     return "TaggerUnavailable";
   case JobError::TaggingFailed:
     return "TaggingFailed";
+  case JobError::EmbeddingFailed:
+    return "EmbeddingFailed";
   case JobError::DuplicateImage:
     return "DuplicateImage";
   case JobError::UnknownTag:

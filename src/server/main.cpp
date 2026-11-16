@@ -7,6 +7,7 @@
 
 #include <drogon/drogon.h>
 
+#include "ai/clip_embedder.hpp"
 #include "ai/sidecar_process.hpp"
 #include "ai/tagger.hpp"
 #include "common/config.hpp"
@@ -47,6 +48,11 @@ tagimg::SidecarConfig make_sidecar_config(const tagimg::AiConfig &ai,
   sidecar.module = ai.module;
   sidecar.threads = ai.threads;
   sidecar.startup_timeout = std::chrono::seconds(ai.startup_timeout_seconds);
+  sidecar.clip_model_dir = resolve_path(base, ai.clip_model_dir);
+  sidecar.clip_threads = ai.clip_threads;
+  sidecar.clip_preload = ai.clip_preload;
+  sidecar.clip_startup_timeout =
+      std::chrono::seconds(ai.clip_startup_timeout_seconds);
   return sidecar;
 }
 
@@ -107,6 +113,9 @@ int main() {
             << ((*sidecar)->managed() ? "spawned" : "reused") << std::endl;
 
   auto tagger = std::make_shared<tagimg::WdTagger>(endpoint);
+  // CLIP 与 tagger 共用同一个 sidecar；CPU 上 ViT-L/14 明显更慢，超时单独配置。
+  auto embedder = std::make_shared<tagimg::ClipEmbedder>(
+      endpoint, std::chrono::seconds(config->ai.clip_timeout_seconds));
   const std::filesystem::path work_dir(
       env_or("TAGIMG_WORK_DIR",
              (std::filesystem::temp_directory_path() / "tagimg").string()));
@@ -125,11 +134,12 @@ int main() {
 
   // 扫描任务由 REST 与 GraphQL 共用同一个服务实例。
   auto runtime = std::make_shared<tagimg::ServiceRuntime>(
-      entity_repository_shared, tagimg_repository_shared, tagger, work_dir);
+      entity_repository_shared, tagimg_repository_shared, tagger, embedder,
+      work_dir, config->ai.clip_strict);
 
   auto service = std::make_shared<tagimg::ApiService>(runtime);
   auto graphql_service = std::make_shared<tagimg::GraphQLService>(
-      runtime, tagimg_repository_shared);
+      runtime, tagimg_repository_shared, embedder);
 
   drogon::app().registerHandler(
       "/api/v1",

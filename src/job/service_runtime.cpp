@@ -5,19 +5,23 @@
 #include <utility>
 
 #include "job/add_job.hpp"
+#include "job/rescan_artwork_job.hpp"
 
 namespace tagimg {
 
 struct ServiceRuntime::Impl {
   Impl(std::shared_ptr<const EntityRepository> entity_repository_ref,
        std::shared_ptr<const TagimgRepository> tagimg_repository_ref,
-       std::shared_ptr<WdTagger> tagger_ref, std::filesystem::path work_dir_ref)
+       std::shared_ptr<WdTagger> tagger_ref,
+       std::shared_ptr<ClipEmbedder> embedder_ref,
+       std::filesystem::path work_dir_ref, bool embed_strict_ref)
       : entity_repository(std::move(entity_repository_ref)),
         tagimg_repository(std::move(tagimg_repository_ref)),
-        tagger(std::move(tagger_ref)), work_dir(std::move(work_dir_ref)) {
+        tagger(std::move(tagger_ref)), embedder(std::move(embedder_ref)),
+        work_dir(std::move(work_dir_ref)), embed_strict(embed_strict_ref) {
     JobContext context{std::cref(*entity_repository),
                        std::cref(*tagimg_repository), std::ref(*tagger),
-                       work_dir};
+                       std::ref(*embedder), work_dir, embed_strict};
     worker = std::make_unique<JobWorker>(context);
   }
 
@@ -25,7 +29,9 @@ struct ServiceRuntime::Impl {
   std::shared_ptr<const EntityRepository> entity_repository;
   std::shared_ptr<const TagimgRepository> tagimg_repository;
   std::shared_ptr<WdTagger> tagger;
+  std::shared_ptr<ClipEmbedder> embedder;
   std::filesystem::path work_dir;
+  bool embed_strict = true;
   std::unique_ptr<JobWorker> worker;
 
   mutable std::mutex mutex;
@@ -35,13 +41,16 @@ struct ServiceRuntime::Impl {
 ServiceRuntime::ServiceRuntime(
     std::shared_ptr<const EntityRepository> entity_repository,
     std::shared_ptr<const TagimgRepository> tagimg_repository,
-    std::shared_ptr<WdTagger> tagger, std::filesystem::path work_dir) {
-  if (!entity_repository || !tagimg_repository || !tagger) {
+    std::shared_ptr<WdTagger> tagger,
+    std::shared_ptr<ClipEmbedder> embedder,
+    std::filesystem::path work_dir, bool embed_strict) {
+  if (!entity_repository || !tagimg_repository || !tagger || !embedder) {
     throw std::invalid_argument("ServiceRuntime dependencies must not be null");
   }
   impl_ = std::make_shared<Impl>(std::move(entity_repository),
                                  std::move(tagimg_repository),
-                                 std::move(tagger), std::move(work_dir));
+                                 std::move(tagger), std::move(embedder),
+                                 std::move(work_dir), embed_strict);
 }
 
 ServiceRuntime::~ServiceRuntime() {
@@ -89,6 +98,13 @@ bool ServiceRuntime::submit(
     ImageAddRequest request,
     std::function<void(const Result<JobOutcome, JobError> &)> on_done) {
   return submit_job(std::make_unique<AddJob>(std::move(request)),
+                    std::move(on_done));
+}
+
+bool ServiceRuntime::submit(
+    RescanArtworkRequest request,
+    std::function<void(const Result<JobOutcome, JobError> &)> on_done) {
+  return submit_job(std::make_unique<RescanArtworkJob>(std::move(request)),
                     std::move(on_done));
 }
 

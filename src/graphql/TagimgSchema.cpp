@@ -840,7 +840,11 @@ void AddTypesToSchema(const std::shared_ptr<schema::Schema> &schema) {
         R"md()md"sv, std::nullopt},
        {service::s_namesArtworkOrderField[static_cast<size_t>(
             tagimg::ArtworkOrderField::TITLE)],
-        R"md()md"sv, std::nullopt}});
+        R"md()md"sv, std::nullopt},
+       {service::s_namesArtworkOrderField[static_cast<size_t>(
+            tagimg::ArtworkOrderField::SIMILARITY)],
+        R"md(按 sortText 的语义相似度倒序；没有图片向量的作品排在最后。)md"sv,
+        std::nullopt}});
   typeSortDirection->AddEnumValues(
       {{service::s_namesSortDirection[static_cast<size_t>(
             tagimg::SortDirection::ASC)],

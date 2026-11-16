@@ -208,11 +208,23 @@ ScanJob::scan_location(JobContext &context, const WebdavLocation &location) {
     return map_tagger_error(tags.error());
   }
 
+  // 复用同一个临时文件生成向量，不重复下载。
+  auto embedding = context.embedder.get().embed_file(file->path());
+  if (!embedding) {
+    // 严格模式下向量是入库前置条件，缺失直接让整单失败。
+    if (context.embed_strict) {
+      return JobError::EmbeddingFailed;
+    }
+  }
+
   ScanResult result;
   result.entity_id = entity_id_;
   result.storage_name = location.storage_name;
   result.bytes = file->size();
   result.tags = std::move(*tags);
+  if (embedding) {
+    result.embedding = std::move(embedding->values);
+  }
   return result;
 }
 

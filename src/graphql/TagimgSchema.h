@@ -43,23 +43,25 @@ getTagMatchModeValues() noexcept {
 }
 
 enum class [[nodiscard("unnecessary conversion")]] ArtworkOrderField{
-    CREATED_AT, PUBLISHED_AT, TITLE};
+    CREATED_AT, PUBLISHED_AT, TITLE, SIMILARITY};
 
 [[nodiscard("unnecessary call")]] constexpr auto
 getArtworkOrderFieldNames() noexcept {
   using namespace std::literals;
 
-  return std::array<std::string_view, 3>{
-      R"gql(CREATED_AT)gql"sv, R"gql(PUBLISHED_AT)gql"sv, R"gql(TITLE)gql"sv};
+  return std::array<std::string_view, 4>{
+      R"gql(CREATED_AT)gql"sv, R"gql(PUBLISHED_AT)gql"sv, R"gql(TITLE)gql"sv,
+      R"gql(SIMILARITY)gql"sv};
 }
 
 [[nodiscard("unnecessary call")]] constexpr auto
 getArtworkOrderFieldValues() noexcept {
   using namespace std::literals;
 
-  return std::array<std::pair<std::string_view, ArtworkOrderField>, 3>{
+  return std::array<std::pair<std::string_view, ArtworkOrderField>, 4>{
       std::make_pair(R"gql(TITLE)gql"sv, ArtworkOrderField::TITLE),
       std::make_pair(R"gql(CREATED_AT)gql"sv, ArtworkOrderField::CREATED_AT),
+      std::make_pair(R"gql(SIMILARITY)gql"sv, ArtworkOrderField::SIMILARITY),
       std::make_pair(R"gql(PUBLISHED_AT)gql"sv,
                      ArtworkOrderField::PUBLISHED_AT)};
 }

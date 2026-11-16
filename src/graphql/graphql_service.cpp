@@ -316,6 +316,11 @@ public:
         static_cast<int>(item_.image_ids.size()));
   }
 
+  gql::service::AwaitableScalar<std::optional<double>> getSortScore() const {
+    return gql::service::AwaitableScalar<std::optional<double>>(
+        item_.sort_score);
+  }
+
   gql::service::AwaitableScalar<std::vector<IdType>> getImageIds() const {
     return gql::service::AwaitableScalar<std::vector<IdType>>(
         to_id_list(item_.image_ids));
@@ -531,11 +536,13 @@ private:
 class Root {
 public:
   Root(std::shared_ptr<ServiceRuntime> runtime,
-       std::shared_ptr<const TagimgRepository> repository)
-      : runtime_(std::move(runtime)), repository_(std::move(repository)) {
-    if (!runtime_ || !repository_) {
+       std::shared_ptr<const TagimgRepository> repository,
+       std::shared_ptr<ClipEmbedder> clip_embedder)
+      : runtime_(std::move(runtime)), repository_(std::move(repository)),
+        clip_embedder_(std::move(clip_embedder)) {
+    if (!runtime_ || !repository_ || !clip_embedder_) {
       throw std::invalid_argument(
-          "Root requires ServiceRuntime and repository");
+          "Root requires ServiceRuntime, repository and ClipEmbedder");
     }
   }
 
@@ -617,7 +624,8 @@ public:
               std::optional<gql::tagimg::ArtworkOrderField> order_by,
               std::optional<gql::tagimg::SortDirection> direction,
               std::optional<int> limit, std::optional<int> offset,
-              std::optional<bool> include_total) const {
+              std::optional<bool> include_total,
+              std::optional<std::string> sort_text) const {
     ArtworkSearchQuery query;
     if (filter) {
       if (filter->title) {
@@ -658,19 +666,57 @@ public:
       }
     }
 
-    switch (order_by.value_or(gql::tagimg::ArtworkOrderField::CREATED_AT)) {
-    case gql::tagimg::ArtworkOrderField::CREATED_AT:
-      query.order_by = ArtworkSortField::CreatedAt;
-      break;
-    case gql::tagimg::ArtworkOrderField::PUBLISHED_AT:
-      query.order_by = ArtworkSortField::PublishedAt;
-      break;
-    case gql::tagimg::ArtworkOrderField::TITLE:
-      query.order_by = ArtworkSortField::Title;
-      break;
+    const auto order_field =
+        order_by.value_or(gql::tagimg::ArtworkOrderField::CREATED_AT);
+    if (order_field == gql::tagimg::ArtworkOrderField::SIMILARITY) {
+      if (!sort_text || sort_text->empty()) {
+        fail("INVALID_ARGUMENT", "orderBy SIMILARITY requires sortText");
+      }
+      if (utf8_length(*sort_text) > 512) {
+        fail("INVALID_ARGUMENT", "sortText must be at most 512 characters");
+      }
+      const bool blank =
+          std::all_of(sort_text->begin(), sort_text->end(),
+                      [](unsigned char byte) {
+                        return std::isspace(byte) != 0;
+                      });
+      if (blank) {
+        fail("INVALID_ARGUMENT", "sortText must not be blank");
+      }
+      // 这里同步调用 sidecar 编码文本，会阻塞当前线程直到返回。
+      auto embedding = clip_embedder_->embed_text(*sort_text);
+      if (!embedding) {
+        fail("SERVICE_UNAVAILABLE",
+             std::string("failed to embed sortText: ") +
+                 std::string(to_string(embedding.error())));
+      }
+      query.order_by = ArtworkSortField::Similarity;
+      query.sort_embedding = std::move(embedding->values);
+      // 相似度越高越靠前，方向固定为 DESC。
+      query.descending = true;
+    } else {
+      if (sort_text) {
+        fail("INVALID_ARGUMENT",
+             "sortText is only supported with orderBy SIMILARITY");
+      }
+      switch (order_field) {
+      case gql::tagimg::ArtworkOrderField::CREATED_AT:
+        query.order_by = ArtworkSortField::CreatedAt;
+        break;
+      case gql::tagimg::ArtworkOrderField::PUBLISHED_AT:
+        query.order_by = ArtworkSortField::PublishedAt;
+        break;
+      case gql::tagimg::ArtworkOrderField::TITLE:
+        query.order_by = ArtworkSortField::Title;
+        break;
+      default:
+        // SIMILARITY 已在上面处理，其余枚举值不存在。
+        fail("INVALID_ARGUMENT", "unsupported orderBy");
+      }
+      query.descending =
+          direction.value_or(gql::tagimg::SortDirection::DESC) ==
+          gql::tagimg::SortDirection::DESC;
     }
-    query.descending = direction.value_or(gql::tagimg::SortDirection::DESC) ==
-                       gql::tagimg::SortDirection::DESC;
 
     if (limit) {
       if (*limit < 1 || *limit > 100) {
@@ -827,12 +873,10 @@ public:
       fail("INVALID_ARGUMENT", "id must be a uuid string");
     }
 
-    ArtworkUpdate update;
     bool has_change = false;
 
     if (input.title) {
-      update.title = std::move(*input.title);
-      if (const auto error = validate_title(*update.title)) {
+      if (const auto error = validate_title(*input.title)) {
         fail("INVALID_ARGUMENT", *error);
       }
       has_change = true;
@@ -842,55 +886,57 @@ public:
       if (const auto error = validate_published_at(*input.publishedAt)) {
         fail("INVALID_ARGUMENT", *error);
       }
-      update.published_at = std::move(*input.publishedAt);
       has_change = true;
     }
 
-    if (input.clearPublishedAt.value_or(false)) {
-      update.clear_published_at = true;
+    const bool clear_published_at = input.clearPublishedAt.value_or(false);
+    if (clear_published_at) {
       has_change = true;
     }
-    if (update.clear_published_at && update.published_at) {
+    if (clear_published_at && input.publishedAt) {
       fail("INVALID_ARGUMENT",
            "publishedAt and clearPublishedAt cannot be used together");
     }
 
+    std::vector<std::string> add_tag_ids;
     if (input.addTagIds) {
-      update.add_tag_ids = id_list(*input.addTagIds);
+      add_tag_ids = id_list(*input.addTagIds);
       if (const auto error =
-              validate_tag_update_ids(update.add_tag_ids, "addTagIds")) {
+              validate_tag_update_ids(add_tag_ids, "addTagIds")) {
         fail("INVALID_ARGUMENT", *error);
       }
-      has_change = has_change || !update.add_tag_ids.empty();
-    }
-    if (input.removeTagIds) {
-      update.remove_tag_ids = id_list(*input.removeTagIds);
-      if (const auto error =
-              validate_tag_update_ids(update.remove_tag_ids, "removeTagIds")) {
-        fail("INVALID_ARGUMENT", *error);
-      }
-      has_change = has_change || !update.remove_tag_ids.empty();
+      has_change = has_change || !add_tag_ids.empty();
     }
 
+    std::vector<std::string> remove_tag_ids;
+    if (input.removeTagIds) {
+      remove_tag_ids = id_list(*input.removeTagIds);
+      if (const auto error =
+              validate_tag_update_ids(remove_tag_ids, "removeTagIds")) {
+        fail("INVALID_ARGUMENT", *error);
+      }
+      has_change = has_change || !remove_tag_ids.empty();
+    }
+
+    std::vector<std::string> image_ids;
     if (input.imageIds) {
-      update.image_ids = id_list(*input.imageIds);
-      if (const auto error = validate_artwork_image_order(*update.image_ids)) {
+      image_ids = id_list(*input.imageIds);
+      if (const auto error = validate_artwork_image_order(image_ids)) {
         fail("INVALID_ARGUMENT", *error);
       }
       has_change = true;
     }
 
-    if (update.add_tag_ids.size() + update.remove_tag_ids.size() >
-        kMaxArtworkEditTags) {
+    if (add_tag_ids.size() + remove_tag_ids.size() > kMaxArtworkEditTags) {
       fail("INVALID_ARGUMENT", "tag changes must contain at most " +
                                    std::to_string(kMaxArtworkEditTags) +
                                    " items");
     }
 
     // 同一个标签不能既添加又移除，否则结果取决于执行顺序。
-    const std::set<std::string> add_tags(update.add_tag_ids.begin(),
-                                         update.add_tag_ids.end());
-    for (const std::string &tag_id : update.remove_tag_ids) {
+    const std::set<std::string> add_tags(add_tag_ids.begin(),
+                                         add_tag_ids.end());
+    for (const std::string &tag_id : remove_tag_ids) {
       if (add_tags.count(tag_id) > 0) {
         fail("INVALID_ARGUMENT", "addTagIds and removeTagIds must not overlap");
       }
@@ -900,20 +946,74 @@ public:
       fail("INVALID_ARGUMENT", "at least one change is required");
     }
 
-    const auto result = repository_->update_artwork(text, update);
-    if (!result) {
-      fail_repository(result.error());
+    // 参数全部校验通过后才开事务：事务对象持有连接租约与作品行锁。
+    auto opened = repository_->begin_artwork_update(text);
+    if (!opened) {
+      fail_repository(opened.error());
     }
-    if (!*result) {
+    if (!opened->has_value()) {
       fail("NOT_FOUND", "artwork not found");
     }
+    ArtworkUpdateTransaction &txn = **opened;
+
+    const auto apply = [](Result<void, TagimgRepositoryError> result) {
+      if (!result) {
+        fail_repository(result.error());
+      }
+    };
+
+    if (input.title) {
+      apply(txn.set_title(std::move(*input.title)));
+    }
+    if (input.publishedAt) {
+      apply(txn.set_published_at(std::move(*input.publishedAt)));
+    }
+    if (clear_published_at) {
+      apply(txn.clear_published_at());
+    }
+    if (!add_tag_ids.empty()) {
+      apply(txn.add_tag_ids(add_tag_ids));
+    }
+    if (!remove_tag_ids.empty()) {
+      apply(txn.remove_tag_ids(remove_tag_ids));
+    }
+    if (input.imageIds) {
+      apply(txn.reorder_images(image_ids));
+    }
+    apply(txn.commit());
 
     return id_scalar(text);
+  }
+
+  gql::service::AwaitableScalar<IdType>
+  applyRescanArtwork(IdType artwork_id) const {
+    const std::string text = id_text(artwork_id);
+    if (!is_uuid(text)) {
+      fail("INVALID_ARGUMENT", "artworkId must be a uuid string");
+    }
+
+    const std::string task_id = drogon::utils::getUuid();
+    log_line("[rescan] task " + task_id + " queued: artwork " + text);
+
+    RescanArtworkRequest request;
+    request.artwork_id = text;
+    const bool accepted = runtime_->submit(
+        std::move(request),
+        [task_id](const Result<JobOutcome, JobError> &result) {
+          log_add_outcome(task_id, result);
+        });
+    if (!accepted) {
+      fail("SERVICE_UNAVAILABLE", "job worker is not running");
+    }
+
+    return gql::service::AwaitableScalar<IdType>(
+        IdType(IdType::OpaqueString(task_id)));
   }
 
 private:
   std::shared_ptr<ServiceRuntime> runtime_;
   std::shared_ptr<const TagimgRepository> repository_;
+  std::shared_ptr<ClipEmbedder> clip_embedder_;
 };
 
 Value make_map(MapType fields) {
@@ -1015,13 +1115,16 @@ drogon::HttpResponsePtr json_response(std::string body,
 
 struct GraphQLService::Impl {
   Impl(std::shared_ptr<ServiceRuntime> runtime_ref,
-       std::shared_ptr<const TagimgRepository> repository_ref)
-      : runtime(std::move(runtime_ref)), repository(std::move(repository_ref)) {
-    if (!runtime || !repository) {
+       std::shared_ptr<const TagimgRepository> repository_ref,
+       std::shared_ptr<ClipEmbedder> embedder_ref)
+      : runtime(std::move(runtime_ref)), repository(std::move(repository_ref)),
+        clip_embedder(std::move(embedder_ref)) {
+    if (!runtime || !repository || !clip_embedder) {
       throw std::invalid_argument(
-          "GraphQLService requires a ServiceRuntime and a repository");
+          "GraphQLService requires a ServiceRuntime, a repository and a "
+          "ClipEmbedder");
     }
-    root = std::make_shared<Root>(runtime, repository);
+    root = std::make_shared<Root>(runtime, repository, clip_embedder);
     query = std::make_shared<gql::tagimg::object::Query>(root);
     mutation = std::make_shared<gql::tagimg::object::Mutation>(root);
     operations = std::make_shared<gql::tagimg::Operations>(query, mutation);
@@ -1059,6 +1162,7 @@ struct GraphQLService::Impl {
 
   std::shared_ptr<ServiceRuntime> runtime;
   std::shared_ptr<const TagimgRepository> repository;
+  std::shared_ptr<ClipEmbedder> clip_embedder;
   std::shared_ptr<Root> root;
   std::shared_ptr<gql::tagimg::object::Query> query;
   std::shared_ptr<gql::tagimg::object::Mutation> mutation;
@@ -1067,9 +1171,11 @@ struct GraphQLService::Impl {
 
 GraphQLService::GraphQLService(
     std::shared_ptr<ServiceRuntime> runtime,
-    std::shared_ptr<const TagimgRepository> tagimg_repository)
+    std::shared_ptr<const TagimgRepository> tagimg_repository,
+    std::shared_ptr<ClipEmbedder> clip_embedder)
     : impl_(std::make_shared<Impl>(std::move(runtime),
-                                   std::move(tagimg_repository))) {
+                                   std::move(tagimg_repository),
+                                   std::move(clip_embedder))) {
 }
 
 GraphQLService::~GraphQLService() = default;

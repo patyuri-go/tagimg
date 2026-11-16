@@ -47,6 +47,19 @@ struct AiConfig {
   std::string module = "tagimg_ai.server";
   std::uint32_t threads = 2;
   std::uint32_t startup_timeout_seconds = 90;
+
+  // Chinese-CLIP 图像/文本向量模型（768 维）。
+  std::filesystem::path clip_model_dir =
+      "models/chinese-clip-vit-large-patch14";
+  std::uint32_t clip_threads = 2;
+  // 启动时就加载 CLIP 权重，避免首个扫描任务承担加载耗时。
+  bool clip_preload = true;
+  // 向量生成失败时阻塞入库（整单回滚），保证“有图必有向量”。
+  bool clip_strict = true;
+  // 单次向量请求超时；CPU 上 ViT-L/14 明显慢于 tagger。
+  std::uint32_t clip_timeout_seconds = 60;
+  // 等待 sidecar 报告 clip.loaded 的上限，加载 1.6GB 权重需要时间。
+  std::uint32_t clip_startup_timeout_seconds = 180;
 };
 
 struct AppConfig {

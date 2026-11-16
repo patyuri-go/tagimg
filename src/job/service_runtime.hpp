@@ -18,7 +18,9 @@ public:
   ServiceRuntime(std::shared_ptr<const EntityRepository> entity_repository,
                  std::shared_ptr<const TagimgRepository> tagimg_repository,
                  std::shared_ptr<WdTagger> tagger,
-                 std::filesystem::path work_dir);
+                 std::shared_ptr<ClipEmbedder> embedder,
+                 std::filesystem::path work_dir,
+                 bool embed_strict = true);
 
   ~ServiceRuntime();
 
@@ -36,6 +38,11 @@ public:
   // 用已有图片提交一次 add 任务，语义同 AddJob(ImageAddRequest)。
   bool
   submit(ImageAddRequest request,
+         std::function<void(const Result<JobOutcome, JobError> &)> on_done);
+
+  // 重新扫描一个作品内的全部图片，语义同 RescanArtworkJob。
+  bool
+  submit(RescanArtworkRequest request,
          std::function<void(const Result<JobOutcome, JobError> &)> on_done);
 
   // 停止接收新任务，等待正在执行的任务结束；未完成的直接丢弃。

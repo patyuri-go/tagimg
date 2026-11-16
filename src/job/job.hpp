@@ -11,6 +11,7 @@
 #include <variant>
 #include <vector>
 
+#include "ai/clip_embedder.hpp"
 #include "ai/tagger.hpp"
 #include "common/result.hpp"
 #include "db/entity_repository.hpp"
@@ -29,6 +30,8 @@ enum class JobError {
   ImageTooLarge,
   TaggerUnavailable,
   TaggingFailed,
+  // 生成 Chinese-CLIP 向量失败；严格模式下会阻塞入库。
+  EmbeddingFailed,
   DuplicateImage,
   UnknownTag,
   UnknownArtist,
@@ -49,6 +52,8 @@ struct ScanResult {
   std::string storage_name;
   std::uint64_t bytes = 0;
   TaggingResult tags;
+  // Chinese-CLIP 图像向量（768 维，已 L2 归一化）。
+  std::vector<float> embedding;
 };
 
 // AddJob 的完整输入；entity_ids 与 title 必填。
@@ -85,6 +90,14 @@ struct ScanFailure {
   JobError error = JobError::TaggingFailed;
   // 图片模式下失败的图片 ID；实体模式为空。
   std::string image_id;
+};
+
+// 重新扫描一个作品内全部图片的输入。
+//
+// 语义：先逐张重新扫描，全部成功后才写库；任一图片失败则整单不写，
+// 作品的旧向量与旧标签保持原样。
+struct RescanArtworkRequest {
+  std::string artwork_id;
 };
 
 struct AddResult {
@@ -128,7 +141,10 @@ struct JobContext {
   std::reference_wrapper<const EntityRepository> entity_repository;
   std::reference_wrapper<const TagimgRepository> tagimg_repository;
   std::reference_wrapper<WdTagger> tagger;
+  std::reference_wrapper<ClipEmbedder> embedder;
   std::filesystem::path work_dir;
+  // true 时向量失败会让整单失败；false 时跳过向量继续入库。
+  bool embed_strict = true;
 };
 
 // 一次可执行的工作。

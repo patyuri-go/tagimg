@@ -40,6 +40,12 @@
     }
   `;
 
+  const RESCAN_MUTATION = `
+    mutation RescanArtwork($artworkId: ID!) {
+      rescanArtwork(artworkId: $artworkId)
+    }
+  `;
+
   const statusEl = document.getElementById("status");
   const artworkEl = document.getElementById("artwork");
   const titleEl = document.getElementById("detail-title");
@@ -61,6 +67,7 @@
   const artistsSection = document.getElementById("artists-section");
   const artistsEl = document.getElementById("detail-artists");
   const editButton = document.getElementById("edit-button");
+  const rescanButton = document.getElementById("rescan-button");
   const deleteButton = document.getElementById("delete-button");
   const editSaveBar = document.getElementById("edit-save-bar");
   const editSaveButton = document.getElementById("edit-save");
@@ -77,6 +84,8 @@
   let currentArtwork = null;
   let editing = false;
   let deleting = false;
+  let rescanning = false;
+  let rescanned = false;
   let saving = false;
   // 编辑模式下待删除的已有标签 ID。
   const pendingRemovals = new Set();
@@ -574,7 +583,8 @@
     editing = enabled;
     editButton.textContent = enabled ? "退出编辑" : "编辑";
     editButton.setAttribute("aria-pressed", String(enabled));
-    // 删除属于编辑模式里的破坏性操作，退出编辑时一并收起。
+    // 重扫与删除都属于编辑模式里的操作，退出编辑时一并收起。
+    rescanButton.hidden = !enabled;
     deleteButton.hidden = !enabled;
 
     // 进入或退出编辑都回到服务端当前顺序，未保存的拖动不会留在只读视图。
@@ -769,6 +779,7 @@
   function finishDelete(message, kind) {
     artworkEl.hidden = true;
     editButton.hidden = true;
+    rescanButton.hidden = true;
     deleteButton.hidden = true;
     editSaveBar.hidden = true;
     setStatus(message, kind);
@@ -776,6 +787,63 @@
     window.setTimeout(() => {
       window.location.assign("/");
     }, 1200);
+  }
+
+  async function rescanArtworkImages() {
+    if (rescanning || rescanned || deleting || saving || !currentArtworkId) {
+      return;
+    }
+
+    const count = currentArtwork ? currentArtwork.imageIds.length : 0;
+    if (
+      !window.confirm(
+        `确定重新扫描这个作品的 ${count} 张图片吗？\n` +
+          "会重新下载并打标每一张；全部成功后才替换向量并补充标签，失败时保持原样。\n" +
+          "扫描期间其它扫描/添加任务会排队。",
+      )
+    ) {
+      return;
+    }
+
+    rescanning = true;
+    rescanButton.disabled = true;
+    setStatus("重扫任务提交中…");
+
+    let payload;
+    try {
+      const response = await fetch("/graphql", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          query: RESCAN_MUTATION,
+          variables: { artworkId: currentArtworkId },
+        }),
+      });
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      payload = await response.json();
+    } catch (error) {
+      rescanning = false;
+      rescanButton.disabled = false;
+      setStatus(`重扫提交失败：${error.message}`, "error");
+      return;
+    }
+
+    if (Array.isArray(payload.errors) && payload.errors.length > 0) {
+      rescanning = false;
+      rescanButton.disabled = false;
+      const message = payload.errors[0].message || "未知错误";
+      setStatus(`重扫提交失败：${message}`, "error");
+      return;
+    }
+
+    rescanning = false;
+    rescanned = true;
+    // 没有完成信号：按钮保持置灰，刷新页面才能再提交，避免重复排队。
+    rescanButton.textContent = "重扫已提交";
+    rescanButton.disabled = true;
+    setStatus("重扫已提交，完成后刷新页面查看结果");
   }
 
   async function deleteCurrentArtwork() {
@@ -1015,6 +1083,7 @@
     }
     setEditing(!editing);
   });
+  rescanButton.addEventListener("click", rescanArtworkImages);
   deleteButton.addEventListener("click", deleteCurrentArtwork);
   editSaveButton.addEventListener("click", saveEdits);
 

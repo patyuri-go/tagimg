@@ -56,6 +56,10 @@ struct ArtworkInput {
 
   // 模型扫描得到、已按置信度过滤并去重的标签。
   std::vector<ArtworkTag> scanned_tags;
+
+  // Chinese-CLIP 图像向量，与 entity_ids 顺序一致。
+  // 每项必须是 768 维、已 L2 归一化；空数组表示该图片不写向量。
+  std::vector<std::vector<float>> embeddings;
 };
 
 // 用已有图片新建作品的输入。
@@ -77,6 +81,10 @@ struct ImageArtworkInput {
   // 模型扫描得到、已按置信度过滤并去重的标签。
   std::vector<ArtworkTag> scanned_tags;
 
+  // Chinese-CLIP 图像向量，与 image_ids 顺序一致。
+  // rescan 时是本次重扫结果；否则保持空数组，不覆盖已有向量。
+  std::vector<std::vector<float>> embeddings;
+
   // 是否更新图片的 scan_at。
   bool rescan = false;
 };
@@ -86,20 +94,18 @@ struct SavedArtwork {
   std::vector<std::string> image_ids;
 };
 
-// 一次作品编辑的输入；至少要有一项实际变更。
-struct ArtworkUpdate {
-  // 为空表示不修改标题。
-  std::optional<std::string> title;
-  // 为空表示不修改发布时间。
-  std::optional<std::string> published_at;
-  // 为 true 时把发布时间清空；不能与 published_at 同时有值。
-  bool clear_published_at = false;
-  // 增量添加/移除的标签 ID；不存在的标签会报 UnknownTag。
-  std::vector<std::string> add_tag_ids;
-  std::vector<std::string> remove_tag_ids;
-  // 有值时表示作品图片的完整顺序，仓储层生成 position 0..n-1。
-  // 集合必须与作品当前图片完全一致，不能借此增删图片。
-  std::optional<std::vector<std::string>> image_ids;
+// 一条待写入的图片向量。
+struct ImageEmbeddingInput {
+  std::string image_id;
+  // 768 维、已 L2 归一化。
+  std::vector<float> values;
+};
+
+// 回填时列出的一张缺向量的图片。
+struct ImageEmbeddingRow {
+  std::string image_id;
+  // 为空表示无法重新下载原图。
+  std::optional<std::string> entity_id;
 };
 
 // 查询结果里的标签信息。
@@ -165,12 +171,17 @@ struct ArtworkSummary {
   std::vector<ArtworkTagInfo> tags;
   std::vector<std::string> artist_ids;
   std::vector<ArtworkArtistInfo> artists;
+  // 仅在按相似度排序时有值：作品内所有已向量化图片与该文本的最高余弦
+  // 相似度，也就是排序依据。其它排序方式、或作品还没有向量时为空。
+  std::optional<double> sort_score;
 };
 
 enum class ArtworkSortField {
   CreatedAt,
   PublishedAt,
   Title,
+  // 按 Chinese-CLIP 文本向量与作品图片向量的余弦相似度倒序。
+  Similarity,
 };
 
 // 一次作品查询的条件。
@@ -190,6 +201,9 @@ struct ArtworkSearchQuery {
   std::size_t limit = 20;
   std::size_t offset = 0;
   bool include_total = false;
+  // 仅 order_by == Similarity 时使用：768 维文本向量，已 L2 归一化。
+  // 没有对应图片向量的作品仍会返回，只是排在最后。
+  std::vector<float> sort_embedding;
 };
 
 struct ArtworkSearchResult {
@@ -227,6 +241,70 @@ struct DeleteArtworkResult {
   bool deleted = false;
   // 本次删除后新变成游离的图片数量，不含删除前就已游离的图片。
   std::size_t newly_orphaned_image_count = 0;
+};
+
+// 作品写入事务。
+//
+// begin_artwork_update() 打开事务并锁定作品行，之后所有写入都在同一个
+// 连接、同一个事务里执行；直到 commit() 才提交，析构时未提交则自动回滚。
+// 事务对象持有连接池租约，生命周期必须短：不要跨扫描、下载等耗时操作，
+// 否则会占住池里的连接。
+class ArtworkUpdateTransaction {
+public:
+  ~ArtworkUpdateTransaction();
+
+  ArtworkUpdateTransaction(ArtworkUpdateTransaction &&) noexcept;
+  ArtworkUpdateTransaction &operator=(ArtworkUpdateTransaction &&) = delete;
+  ArtworkUpdateTransaction(const ArtworkUpdateTransaction &) = delete;
+  ArtworkUpdateTransaction &operator=(const ArtworkUpdateTransaction &) =
+      delete;
+
+  // 设置标题，1 到 500 个字符。
+  [[nodiscard]] Result<void, TagimgRepositoryError>
+  set_title(std::string title);
+
+  // 设置发布时间（RFC3339）；与 clear_published_at() 互斥。
+  [[nodiscard]] Result<void, TagimgRepositoryError>
+  set_published_at(std::string published_at);
+
+  // 清空发布时间；与 set_published_at() 互斥。
+  [[nodiscard]] Result<void, TagimgRepositoryError> clear_published_at();
+
+  // 增量挂上/摘掉标签；标签必须已存在，否则返回 UnknownTag。
+  [[nodiscard]] Result<void, TagimgRepositoryError>
+  add_tag_ids(const std::vector<std::string> &tag_ids);
+  [[nodiscard]] Result<void, TagimgRepositoryError>
+  remove_tag_ids(const std::vector<std::string> &tag_ids);
+
+  // 作品图片的完整顺序；集合必须与作品当前图片完全一致。
+  [[nodiscard]] Result<void, TagimgRepositoryError>
+  reorder_images(const std::vector<std::string> &image_ids);
+
+  // 把扫描标签按 (category, name) 解析成标签并挂到作品上，只增不删。
+  // 缺失的标签会新建；分类标签必须已存在，否则返回 TagHierarchyMissing。
+  // 返回这次涉及的标签数量（已按 tag_id 去重）。
+  [[nodiscard]] Result<std::size_t, TagimgRepositoryError>
+  add_scanned_tags(const std::vector<ArtworkTag> &tags);
+
+  // 按 image_id 替换向量；维度不是 768 时返回 InvalidArgument。
+  [[nodiscard]] Result<std::size_t, TagimgRepositoryError>
+  replace_embeddings(const std::vector<ImageEmbeddingInput> &items);
+
+  // 把图片的 scan_at 更新为当前时间。
+  [[nodiscard]] Result<std::size_t, TagimgRepositoryError>
+  touch_image_scans(const std::vector<std::string> &image_ids);
+
+  // 提交事务。没有做过任何修改时返回 InvalidArgument。
+  [[nodiscard]] Result<void, TagimgRepositoryError> commit();
+
+private:
+  struct Impl;
+
+  explicit ArtworkUpdateTransaction(std::unique_ptr<Impl> impl);
+
+  std::unique_ptr<Impl> impl_;
+
+  friend class TagimgRepository;
 };
 
 // 图片库（tagimg）的写入口。
@@ -284,15 +362,30 @@ public:
   [[nodiscard]] Result<DeleteArtworkResult, TagimgRepositoryError>
   delete_artwork(const std::string &artwork_id) const;
 
-  // 更新作品的标题、发布时间和标签。
-  // 返回 true 表示找到并更新；false 表示作品不存在。
-  [[nodiscard]] Result<bool, TagimgRepositoryError>
-  update_artwork(const std::string &artwork_id,
-                 const ArtworkUpdate &update) const;
+  // 打开作品写入事务；作品不存在时返回 std::nullopt。
+  //
+  // 事务打开后立即锁定该作品行，同一作品的并发写入因此串行执行。
+  [[nodiscard]] Result<std::optional<ArtworkUpdateTransaction>,
+                       TagimgRepositoryError>
+  begin_artwork_update(const std::string &artwork_id) const;
 
   // 分页列出不属于任何作品的图片，按入库时间倒序。
   [[nodiscard]] Result<OrphanImageResult, TagimgRepositoryError>
   list_orphan_images(const OrphanImageQuery &query) const;
+
+  // 批量写入图片向量（单事务，按 image_id upsert）。
+  // 任一向量维度不是 768 时返回 InvalidArgument，不写任何数据。
+  [[nodiscard]] Result<std::size_t, TagimgRepositoryError>
+  save_clip_embeddings(const std::vector<ImageEmbeddingInput> &items) const;
+
+  // 读取单张图片的向量；图片没有向量或不存在时返回 std::nullopt。
+  [[nodiscard]] Result<std::optional<std::vector<float>>, TagimgRepositoryError>
+  find_clip_embedding(const std::string &image_id) const;
+
+  // 分页列出还没有向量的图片，按入库时间升序。
+  [[nodiscard]] Result<std::vector<ImageEmbeddingRow>, TagimgRepositoryError>
+  list_images_missing_embedding(std::size_t limit,
+                                std::size_t offset) const;
 
 private:
   struct Impl;

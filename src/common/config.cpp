@@ -200,6 +200,19 @@ Result<AppConfig, ConfigError> load_config(const std::filesystem::path &path) {
       return std::nullopt;
     };
 
+    const auto read_boolean =
+        [&ai](const char *key, bool &output) -> std::optional<ConfigError> {
+      const auto it = ai->find(key);
+      if (it == ai->end()) {
+        return std::nullopt;
+      }
+      if (!it->is_boolean()) {
+        return ConfigError::InvalidField;
+      }
+      output = it->get<bool>();
+      return std::nullopt;
+    };
+
     if (const auto error = read_string("host", config.ai.host)) {
       return *error;
     }
@@ -227,6 +240,28 @@ Result<AppConfig, ConfigError> load_config(const std::filesystem::path &path) {
     }
     if (const auto error = read_integer("startup_timeout_seconds", 1, 600,
                                         config.ai.startup_timeout_seconds)) {
+      return *error;
+    }
+
+    if (const auto error = read_path("clip_model_dir", config.ai.clip_model_dir)) {
+      return *error;
+    }
+    if (const auto error =
+            read_integer("clip_threads", 1, 64, config.ai.clip_threads)) {
+      return *error;
+    }
+    if (const auto error = read_boolean("clip_preload", config.ai.clip_preload)) {
+      return *error;
+    }
+    if (const auto error = read_boolean("clip_strict", config.ai.clip_strict)) {
+      return *error;
+    }
+    if (const auto error = read_integer("clip_timeout_seconds", 1, 600,
+                                        config.ai.clip_timeout_seconds)) {
+      return *error;
+    }
+    if (const auto error = read_integer("clip_startup_timeout_seconds", 1, 1800,
+                                        config.ai.clip_startup_timeout_seconds)) {
       return *error;
     }
   }

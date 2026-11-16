@@ -7,9 +7,6 @@
 
 namespace tagimg {
 
-// 扫描结果的置信度阈值：general / character 达到该分数才写入。
-inline constexpr float kScanTagThreshold = 0.85F;
-
 // 批量新增作品的任务（addArtwork 语义）。
 //
 // 在单个 worker 内同步逐张扫描；全部实体扫描成功后，在同一个事务里写

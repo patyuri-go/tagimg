@@ -12,6 +12,8 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 .clang-format
+.agents/
+skills-lock.json
 
 *.log
 .DS_Store

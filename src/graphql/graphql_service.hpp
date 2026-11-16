@@ -6,6 +6,7 @@
 #include <drogon/HttpRequest.h>
 #include <drogon/HttpResponse.h>
 
+#include "ai/clip_embedder.hpp"
 #include "db/tagimg_repository.hpp"
 #include "job/service_runtime.hpp"
 
@@ -20,7 +21,8 @@ namespace tagimg {
 class GraphQLService {
 public:
   GraphQLService(std::shared_ptr<ServiceRuntime> runtime,
-                 std::shared_ptr<const TagimgRepository> tagimg_repository);
+                 std::shared_ptr<const TagimgRepository> tagimg_repository,
+                 std::shared_ptr<ClipEmbedder> clip_embedder);
 
   ~GraphQLService();
 

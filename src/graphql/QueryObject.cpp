@@ -171,6 +171,12 @@ Query::resolveArtworks(service::ResolverParams &&params) const {
                                : service::ModifiedArgument<bool>::require<
                                      service::TypeModifier::Nullable>(
                                      "includeTotal", defaultArguments));
+  // sortText 没有默认值，只有显式传入时才有值。
+  auto pairSortText =
+      service::ModifiedArgument<std::string>::find<service::TypeModifier::Nullable>(
+          "sortText", params.arguments);
+  auto argSortText = (pairSortText.second ? std::move(pairSortText.first)
+                                         : std::optional<std::string>{});
   std::unique_lock resolverLock(_resolverMutex);
   service::SelectionSetParams selectionSetParams{
       static_cast<const service::SelectionSetParams &>(params)};
@@ -179,7 +185,8 @@ Query::resolveArtworks(service::ResolverParams &&params) const {
       service::FieldParams{std::move(selectionSetParams),
                            std::move(directives)},
       std::move(argFilter), std::move(argOrderBy), std::move(argDirection),
-      std::move(argLimit), std::move(argOffset), std::move(argIncludeTotal));
+      std::move(argLimit), std::move(argOffset), std::move(argIncludeTotal),
+      std::move(argSortText));
   resolverLock.unlock();
 
   return service::ModifiedResult<ArtworkConnection>::convert(std::move(result),
@@ -331,7 +338,10 @@ ID 必须是合法 UUID，否则返回 INVALID_ARGUMENT 错误；
        schema::Field::Make(
            R"gql(artworks)gql"sv, R"md(分页查询已入库的作品。
 
-所有过滤条件之间是 AND 关系；同一个数组内部是 OR 关系。)md"sv,
+所有过滤条件之间是 AND 关系；同一个数组内部是 OR 关系。
+
+orderBy 传 SIMILARITY 时必须同时传 sortText，此时按描述文本与作品图片向量的
+余弦相似度倒序排列，direction 固定为倒序；没有图片向量的作品排在最后。)md"sv,
            std::nullopt,
            schema->WrapType(introspection::TypeKind::NON_NULL,
                             schema->LookupType(R"gql(ArtworkConnection)gql"sv)),
@@ -355,7 +365,13 @@ ID 必须是合法 UUID，否则返回 INVALID_ARGUMENT 错误；
             schema::InputValue::Make(
                 R"gql(includeTotal)gql"sv,
                 R"md(是否统计总数；为 true 时 total 才有值。)md"sv,
-                schema->LookupType(R"gql(Boolean)gql"sv), R"gql(false)gql"sv)}),
+                schema->LookupType(R"gql(Boolean)gql"sv), R"gql(false)gql"sv),
+            schema::InputValue::Make(
+                R"gql(sortText)gql"sv,
+                R"md(按语义相似度排序时使用的描述文本，需配合 orderBy: SIMILARITY。
+
+长度不超过 512 个字符。)md"sv,
+                schema->LookupType(R"gql(String)gql"sv), R"gql()gql"sv)}),
        schema::Field::Make(
            R"gql(tags)gql"sv, R"md(按关键词搜索标签库，用于输入联想。
 

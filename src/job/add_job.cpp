@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "job/scan_job.hpp"
+#include "job/scan_tags.hpp"
 
 namespace tagimg {
 namespace {
@@ -41,42 +42,6 @@ JobError map_lookup_error(TagimgRepositoryError error) {
     return JobError::RepositoryFailed;
   default:
     return JobError::RepositoryFailed;
-  }
-}
-
-// 同一图片里同名标签只保留最高分；跨图片再按 (分类, 名称) 合并。
-using TagKey = std::pair<std::string, std::string>;
-
-void merge_tags(std::map<TagKey, float> &best,
-                const std::vector<TagScore> &tags, const std::string &category,
-                float threshold) {
-  for (const TagScore &tag : tags) {
-    if (tag.score < threshold) {
-      continue;
-    }
-    const TagKey key{category, tag.name};
-    const auto existing = best.find(key);
-    if (existing == best.end() || existing->second < tag.score) {
-      best[key] = tag.score;
-    }
-  }
-}
-
-// rating 只有 4 个候选，概率通常达不到 0.85，因此取概率最高的一个。
-void merge_best_rating(std::map<TagKey, float> &best,
-                       const std::vector<TagScore> &ratings) {
-  const auto best_rating =
-      std::max_element(ratings.begin(), ratings.end(),
-                       [](const TagScore &left, const TagScore &right) {
-                         return left.score < right.score;
-                       });
-  if (best_rating == ratings.end() || best_rating->score <= 0.0F) {
-    return;
-  }
-  const TagKey key{"rating", best_rating->name};
-  const auto existing = best.find(key);
-  if (existing == best.end() || existing->second < best_rating->score) {
-    best[key] = best_rating->score;
   }
 }
 
@@ -176,10 +141,13 @@ void AddJob::finish(JobContext &context) {
     merge_best_rating(best_tags, scan.tags.rating);
   }
 
-  std::vector<ArtworkTag> scanned_tags;
-  scanned_tags.reserve(best_tags.size());
-  for (const auto &entry : best_tags) {
-    scanned_tags.push_back(ArtworkTag{entry.first.second, entry.first.first});
+  std::vector<ArtworkTag> scanned_tags = build_scanned_tags(best_tags);
+
+  // scans 与 entity_ids/image_ids 顺序一致，向量按同一顺序交给仓储层。
+  std::vector<std::vector<float>> embeddings;
+  embeddings.reserve(result.scans.size());
+  for (const ScanResult &scan : result.scans) {
+    embeddings.push_back(scan.embedding);
   }
 
   Result<SavedArtwork, TagimgRepositoryError> saved =
@@ -193,6 +161,7 @@ void AddJob::finish(JobContext &context) {
     input.tag_ids = image_request_->tag_ids;
     input.artist_ids = image_request_->artist_ids;
     input.scanned_tags = std::move(scanned_tags);
+    input.embeddings = std::move(embeddings);
     input.rescan = image_request_->rescan;
     saved = context.tagimg_repository.get().save_artwork_from_images(input);
   } else {
@@ -204,6 +173,7 @@ void AddJob::finish(JobContext &context) {
     input.artist_ids = request_.artist_ids;
     input.entity_ids = result.request.entity_ids;
     input.scanned_tags = std::move(scanned_tags);
+    input.embeddings = std::move(embeddings);
     saved = context.tagimg_repository.get().save_artwork(input);
   }
 

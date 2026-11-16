@@ -22,6 +22,7 @@ find_package(CURL REQUIRED)
 find_package(Threads REQUIRED)
 
 add_library(tagimg_ai STATIC
+    src/ai/clip_embedder.cpp
     src/ai/sidecar_process.cpp
     src/ai/tagger.cpp
 )
@@ -38,6 +39,29 @@ add_executable(tagimg_tag_smoke
 )
 target_link_libraries(tagimg_tag_smoke PRIVATE
     tagimg_ai
+)
+
+add_executable(tagimg_clip_smoke
+    tools/clip_smoke.cpp
+)
+target_link_libraries(tagimg_clip_smoke PRIVATE
+    tagimg_ai
+)
+
+add_executable(tagimg_clip_db_smoke
+    tools/clip_db_smoke.cpp
+)
+target_link_libraries(tagimg_clip_db_smoke PRIVATE
+    tagimg_config
+    tagimg_db
+)
+
+add_executable(tagimg_rescan_db_smoke
+    tools/rescan_db_smoke.cpp
+)
+target_link_libraries(tagimg_rescan_db_smoke PRIVATE
+    tagimg_config
+    tagimg_db
 )
 
 add_library(tagimg_config STATIC
@@ -94,6 +118,7 @@ add_library(tagimg_job STATIC
     src/job/add_job.cpp
     src/job/job.cpp
     src/job/job_worker.cpp
+    src/job/rescan_artwork_job.cpp
     src/job/scan_job.cpp
     src/job/service_runtime.cpp
 )

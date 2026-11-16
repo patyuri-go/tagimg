@@ -145,6 +145,26 @@
           />
           <ul id="tag-suggest" class="tag-suggest" role="listbox" hidden></ul>
         </div>
+        <div id="sort-search" class="sort-search">
+          <label class="visually-hidden" for="sort-input">按文字排序</label>
+          <input
+            id="sort-input"
+            type="search"
+            placeholder="按文字排序…"
+            autocomplete="off"
+            spellcheck="false"
+            title="输入描述后按回车，按作品图片与该描述的语义相似度排序；再次清空可取消"
+          />
+          <button
+            id="sort-clear"
+            class="sort-clear"
+            type="button"
+            aria-label="取消文字排序"
+            hidden
+          >
+            ×
+          </button>
+        </div>
         <div class="topbar-actions">
           <a class="top-link" href="/orphans.html">游离图片</a>
           <button

@@ -1,4 +1,5 @@
 #include <cstdlib>
+#include <cmath>
 #include <filesystem>
 #include <iostream>
 #include <memory>
@@ -9,6 +10,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include "ai/clip_embedder.hpp"
 #include "ai/tagger.hpp"
 #include "common/config.hpp"
 #include "db/entity_repository.hpp"
@@ -45,6 +47,13 @@ nlohmann::json scan_to_json(const tagimg::ScanResult &scan) {
   item["general"] = tags_to_json(scan.tags.general);
   item["character"] = tags_to_json(scan.tags.character);
   item["rating"] = tags_to_json(scan.tags.rating);
+  // 向量本身太大，冒烟只报告维度与模长，确认归一化生效。
+  item["embedding_dim"] = scan.embedding.size();
+  double squared = 0.0;
+  for (float value : scan.embedding) {
+    squared += static_cast<double>(value) * static_cast<double>(value);
+  }
+  item["embedding_norm"] = std::sqrt(squared);
   return item;
 }
 
@@ -142,9 +151,10 @@ int main(int argc, char **argv) {
   }
 
   tagimg::WdTagger tagger(endpoint);
+  tagimg::ClipEmbedder embedder(endpoint);
   tagimg::JobContext context{std::cref(**repository),
                              std::cref(**tagimg_repository), std::ref(tagger),
-                             work_dir};
+                             std::ref(embedder), work_dir};
 
   nlohmann::json output;
   bool failed = false;

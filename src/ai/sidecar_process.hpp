@@ -21,6 +21,13 @@ struct SidecarConfig {
   std::string module = "tagimg_ai.server";
   std::uint32_t threads = 2;
   std::chrono::seconds startup_timeout{90};
+
+  // Chinese-CLIP 向量模型；clip_preload 为 true 时会在 lifespan 阶段加载权重。
+  std::filesystem::path clip_model_dir;
+  std::uint32_t clip_threads = 2;
+  bool clip_preload = true;
+  // 预加载 CLIP 时，启动等待上限要覆盖读入权重的耗时。
+  std::chrono::seconds clip_startup_timeout{180};
 };
 
 enum class SidecarError {

@@ -38,6 +38,18 @@ concept applyAddArtworkFromImages = requires (TImpl impl, AddArtworkFromImagesIn
 };
 
 template <class TImpl>
+concept applyRescanArtworkWithParams = requires (TImpl impl, service::FieldParams params, response::IdType artworkIdArg)
+{
+	{ service::AwaitableScalar<response::IdType> { impl.applyRescanArtwork(std::move(params), std::move(artworkIdArg)) } };
+};
+
+template <class TImpl>
+concept applyRescanArtwork = requires (TImpl impl, response::IdType artworkIdArg)
+{
+	{ service::AwaitableScalar<response::IdType> { impl.applyRescanArtwork(std::move(artworkIdArg)) } };
+};
+
+template <class TImpl>
 concept applyDeleteArtworkWithParams = requires (TImpl impl, service::FieldParams params, response::IdType idArg)
 {
 	{ service::AwaitableObject<std::shared_ptr<DeleteArtworkResult>> { impl.applyDeleteArtwork(std::move(params), std::move(idArg)) } };
@@ -81,6 +93,7 @@ class [[nodiscard("unnecessary construction")]] Mutation final
 private:
 	[[nodiscard("unnecessary call")]] service::AwaitableResolver resolveAddArtwork(service::ResolverParams&& params) const;
 	[[nodiscard("unnecessary call")]] service::AwaitableResolver resolveAddArtworkFromImages(service::ResolverParams&& params) const;
+	[[nodiscard("unnecessary call")]] service::AwaitableResolver resolveRescanArtwork(service::ResolverParams&& params) const;
 	[[nodiscard("unnecessary call")]] service::AwaitableResolver resolveDeleteArtwork(service::ResolverParams&& params) const;
 	[[nodiscard("unnecessary call")]] service::AwaitableResolver resolveUpdateArtwork(service::ResolverParams&& params) const;
 
@@ -95,6 +108,7 @@ private:
 
 		[[nodiscard("unnecessary call")]] virtual service::AwaitableScalar<response::IdType> applyAddArtwork(service::FieldParams&& params, AddArtworkInput&& inputArg) const = 0;
 		[[nodiscard("unnecessary call")]] virtual service::AwaitableScalar<response::IdType> applyAddArtworkFromImages(service::FieldParams&& params, AddArtworkFromImagesInput&& inputArg) const = 0;
+		[[nodiscard("unnecessary call")]] virtual service::AwaitableScalar<response::IdType> applyRescanArtwork(service::FieldParams&& params, response::IdType&& artworkIdArg) const = 0;
 		[[nodiscard("unnecessary call")]] virtual service::AwaitableObject<std::shared_ptr<DeleteArtworkResult>> applyDeleteArtwork(service::FieldParams&& params, response::IdType&& idArg) const = 0;
 		[[nodiscard("unnecessary call")]] virtual service::AwaitableScalar<response::IdType> applyUpdateArtwork(service::FieldParams&& params, response::IdType&& idArg, UpdateArtworkInput&& inputArg) const = 0;
 	};
@@ -131,6 +145,19 @@ private:
 			{
 				static_assert(methods::MutationHas::applyAddArtworkFromImages<T>, R"msg(Mutation::applyAddArtworkFromImages is not implemented)msg");
 				return { _pimpl->applyAddArtworkFromImages(std::move(inputArg)) };
+			}
+		}
+
+		[[nodiscard("unnecessary call")]] service::AwaitableScalar<response::IdType> applyRescanArtwork(service::FieldParams&& params, response::IdType&& artworkIdArg) const override
+		{
+			if constexpr (methods::MutationHas::applyRescanArtworkWithParams<T>)
+			{
+				return { _pimpl->applyRescanArtwork(std::move(params), std::move(artworkIdArg)) };
+			}
+			else
+			{
+				static_assert(methods::MutationHas::applyRescanArtwork<T>, R"msg(Mutation::applyRescanArtwork is not implemented)msg");
+				return { _pimpl->applyRescanArtwork(std::move(artworkIdArg)) };
 			}
 		}
 

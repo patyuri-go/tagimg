@@ -81,6 +81,9 @@ service::ResolverMap Artwork::getResolvers() const noexcept {
            [this](service::ResolverParams &&params) {
              return resolveImageCount(std::move(params));
            }},
+          {R"gql(sortScore)gql"sv, [this](service::ResolverParams &&params) {
+             return resolveSortScore(std::move(params));
+           }},
           {R"gql(description)gql"sv,
            [this](service::ResolverParams &&params) {
              return resolveDescription(std::move(params));
@@ -195,6 +198,20 @@ Artwork::resolveImageCount(service::ResolverParams &&params) const {
 
   return service::ModifiedResult<int>::convert(std::move(result),
                                                std::move(params));
+}
+
+service::AwaitableResolver
+Artwork::resolveSortScore(service::ResolverParams &&params) const {
+  std::unique_lock resolverLock(_resolverMutex);
+  service::SelectionSetParams selectionSetParams{
+      static_cast<const service::SelectionSetParams &>(params)};
+  auto directives = std::move(params.fieldDirectives);
+  auto result = _pimpl->getSortScore(service::FieldParams{
+      std::move(selectionSetParams), std::move(directives)});
+  resolverLock.unlock();
+
+  return service::ModifiedResult<double>::convert<
+      service::TypeModifier::Nullable>(std::move(result), std::move(params));
 }
 
 service::AwaitableResolver
@@ -371,7 +388,11 @@ void AddArtworkDetails(const std::shared_ptr<schema::ObjectType> &typeArtwork,
                    introspection::TypeKind::LIST,
                    schema->WrapType(
                        introspection::TypeKind::NON_NULL,
-                       schema->LookupType(R"gql(Artist)gql"sv)))))});
+                       schema->LookupType(R"gql(Artist)gql"sv))))),
+       schema::Field::Make(
+           R"gql(sortScore)gql"sv,
+           R"md(文本相似度分数，仅在 orderBy: SIMILARITY 且提供 sortText 时有值。作品还没有图片向量时为 null。)md"sv,
+           std::nullopt, schema->LookupType(R"gql(Float)gql"sv))});
 }
 
 } // namespace graphql::tagimg
