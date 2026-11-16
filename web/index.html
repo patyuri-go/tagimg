@@ -12,6 +12,105 @@
     <link rel="stylesheet" href="/style.css" />
   </head>
   <body>
+    <div id="layout-tools" class="layout-tools">
+      <button
+        id="layout-toggle"
+        class="layout-toggle"
+        type="button"
+        aria-expanded="false"
+        aria-controls="layout-panel"
+        title="调整排版"
+      >
+        <span aria-hidden="true">▦</span>
+        <span class="visually-hidden">调整排版</span>
+      </button>
+      <div id="layout-panel" class="layout-panel" hidden>
+        <div class="layout-panel-head">
+          <span>调整排版</span>
+          <button
+            id="layout-close"
+            class="layout-close"
+            type="button"
+            aria-label="关闭排版设置"
+          >
+            ×
+          </button>
+        </div>
+        <label class="layout-field" for="layout-col-gap">
+          <span>列距 <output id="layout-col-gap-value">18</output></span>
+          <input
+            id="layout-col-gap"
+            type="range"
+            min="0"
+            max="40"
+            step="1"
+            value="18"
+          />
+        </label>
+        <label class="layout-field" for="layout-row-gap">
+          <span>行距 <output id="layout-row-gap-value">18</output></span>
+          <input
+            id="layout-row-gap"
+            type="range"
+            min="0"
+            max="40"
+            step="1"
+            value="18"
+          />
+        </label>
+        <label class="layout-field" for="layout-radius">
+          <span>圆角 <output id="layout-radius-value">14</output></span>
+          <input
+            id="layout-radius"
+            type="range"
+            min="0"
+            max="40"
+            step="1"
+            value="14"
+          />
+        </label>
+        <div class="layout-mode" role="group" aria-label="排版方向">
+          <button
+            id="layout-mode-vertical"
+            class="layout-mode-button active"
+            type="button"
+            aria-pressed="true"
+          >
+            纵向
+          </button>
+          <button
+            id="layout-mode-horizontal"
+            class="layout-mode-button"
+            type="button"
+            aria-pressed="false"
+          >
+            横向
+          </button>
+        </div>
+        <label id="layout-columns-field" class="layout-field" for="layout-columns">
+          <span>列数 <output id="layout-columns-value">4</output></span>
+          <input
+            id="layout-columns"
+            type="range"
+            min="1"
+            max="8"
+            step="1"
+            value="4"
+          />
+        </label>
+        <label id="layout-height-field" class="layout-field" for="layout-height" hidden>
+          <span>高度 <output id="layout-height-value">240</output></span>
+          <input
+            id="layout-height"
+            type="range"
+            min="100"
+            max="500"
+            step="10"
+            value="240"
+          />
+        </label>
+      </div>
+    </div>
     <header class="topbar">
       <div class="topbar-inner">
         <div class="brand">
@@ -75,13 +174,11 @@
         <p id="status" class="status" hidden></p>
       </div>
 
-      <section id="results" class="grid" aria-live="polite"></section>
-
-      <div class="more">
-        <button id="load-more" class="load-more" type="button" hidden>
-          加载更多
-        </button>
-      </div>
+      <section
+        id="results"
+        class="masonry-grid"
+        aria-live="polite"
+      ></section>
     </main>
 
     <dialog id="add-dialog" class="dialog">

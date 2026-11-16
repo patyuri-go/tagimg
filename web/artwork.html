@@ -114,6 +114,46 @@
       </div>
     </main>
 
+    <dialog
+      id="image-lightbox"
+      class="dialog lightbox"
+      aria-labelledby="lightbox-caption"
+    >
+      <header class="dialog-head lightbox-head">
+        <h2 id="lightbox-caption" class="lightbox-caption"></h2>
+        <button
+          id="lightbox-close"
+          class="icon-button lightbox-close"
+          type="button"
+          aria-label="关闭图片浏览"
+        >
+          ×
+        </button>
+      </header>
+      <div id="lightbox-stage" class="dialog-body lightbox-stage">
+        <img id="lightbox-image" class="lightbox-image" alt="" />
+        <p id="lightbox-error" class="lightbox-error" hidden>图片无法加载</p>
+        <button
+          id="lightbox-prev"
+          class="lightbox-nav lightbox-prev"
+          type="button"
+          aria-label="上一张图片"
+          title="上一张（←）"
+        >
+          ‹
+        </button>
+        <button
+          id="lightbox-next"
+          class="lightbox-nav lightbox-next"
+          type="button"
+          aria-label="下一张图片"
+          title="下一张（→）"
+        >
+          ›
+        </button>
+      </div>
+    </dialog>
+
     <script src="/tag-search.js"></script>
     <script src="/artwork.js"></script>
   </body>

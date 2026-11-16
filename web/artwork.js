@@ -64,6 +64,14 @@
   const deleteButton = document.getElementById("delete-button");
   const editSaveBar = document.getElementById("edit-save-bar");
   const editSaveButton = document.getElementById("edit-save");
+  const lightboxEl = document.getElementById("image-lightbox");
+  const lightboxImage = document.getElementById("lightbox-image");
+  const lightboxCaption = document.getElementById("lightbox-caption");
+  const lightboxPrev = document.getElementById("lightbox-prev");
+  const lightboxNext = document.getElementById("lightbox-next");
+  const lightboxClose = document.getElementById("lightbox-close");
+  const lightboxStage = document.getElementById("lightbox-stage");
+  const lightboxError = document.getElementById("lightbox-error");
 
   let currentArtworkId = "";
   let currentArtwork = null;
@@ -82,6 +90,9 @@
   let selectionMode = false;
   // 已编号的图片 ID，数组下标 + 1 就是角标上的序号。
   let selectionOrder = [];
+  // 放大浏览弹窗中的图片顺序和当前下标。
+  let lightboxEntries = [];
+  let lightboxIndex = 0;
 
   const tagSuggestWidget = TagSearch.create({
     input: editTagInput,
@@ -142,6 +153,10 @@
     return imageIds.map((imageId) => ({ imageId, missing: false }));
   }
 
+  function imageStreamUrl(imageId) {
+    return `/api/v1/image/${encodeURIComponent(imageId)}`;
+  }
+
   function createMissingGalleryItem(imageId) {
     const placeholder = document.createElement("div");
     placeholder.className = "gallery-item gallery-item-missing";
@@ -168,7 +183,7 @@
 
   function createGalleryItem(entry, index, title) {
     const imageId = entry.imageId || "";
-    const url = `/api/v1/image/${encodeURIComponent(imageId)}`;
+    const url = imageStreamUrl(imageId);
 
     // 重新渲染时保留之前的加载失败状态，避免反复请求已知无法预览的图片。
     if (entry.missing) {
@@ -178,9 +193,7 @@
     const link = document.createElement("a");
     link.className = "gallery-item";
     link.dataset.imageId = imageId;
-    link.href = `${url}?download=1`;
-    link.target = "_blank";
-    link.rel = "noopener";
+    link.href = url;
 
     const image = document.createElement("img");
     image.src = url;
@@ -190,11 +203,18 @@
     image.draggable = false;
     image.addEventListener("error", () => showGalleryPlaceholder(entry, link));
 
-    // 编辑模式下点击图片不应该打开原图，避免和拖动冲突。
+    // 只读视图点击图片打开放大浏览；编辑模式仍然进入选择排序。
     link.addEventListener("click", (event) => {
-      if (editing || link.classList.contains("gallery-item-missing")) {
+      if (link.classList.contains("gallery-item-missing")) {
         event.preventDefault();
+        return;
       }
+      if (editing) {
+        event.preventDefault();
+        return;
+      }
+      event.preventDefault();
+      openLightbox(imageId);
     });
 
     link.appendChild(image);
@@ -211,6 +231,78 @@
     imageCountEl.textContent = `共 ${galleryEntries.length} 张`;
     imagesSection.hidden = galleryEntries.length === 0;
     setGalleryEditing(editing);
+  }
+
+  function lightboxImageId() {
+    return lightboxEntries[lightboxIndex] || "";
+  }
+
+  function renderLightbox() {
+    const imageId = lightboxImageId();
+    if (!imageId) {
+      closeLightbox();
+      return;
+    }
+
+    const title = currentArtwork ? currentArtwork.title : "";
+    lightboxError.hidden = true;
+    lightboxImage.hidden = false;
+    lightboxImage.src = imageStreamUrl(imageId);
+    lightboxImage.alt = `${title || "作品图片"} 第 ${lightboxIndex + 1} 张`;
+    lightboxCaption.textContent = `第 ${lightboxIndex + 1} / ${lightboxEntries.length} 张`;
+
+    // 只有一张图片时不需要左右切换按钮。
+    const multiple = lightboxEntries.length > 1;
+    lightboxPrev.hidden = !multiple;
+    lightboxNext.hidden = !multiple;
+  }
+
+  function openLightbox(imageId) {
+    const available = galleryEntries.filter(
+      (entry) => entry.imageId && !entry.missing,
+    );
+    const index = available.findIndex((entry) => entry.imageId === imageId);
+    if (index < 0) {
+      return;
+    }
+
+    lightboxEntries = available.map((entry) => entry.imageId);
+    lightboxIndex = index;
+    renderLightbox();
+    if (!lightboxEl.open) {
+      lightboxEl.showModal();
+      document.body.classList.add("lightbox-open");
+    }
+    lightboxClose.focus();
+  }
+
+  function moveLightbox(step) {
+    if (lightboxEntries.length === 0) {
+      return;
+    }
+    lightboxIndex =
+      (lightboxIndex + step + lightboxEntries.length) % lightboxEntries.length;
+    renderLightbox();
+  }
+
+  function closeLightbox() {
+    if (lightboxEl.open) {
+      lightboxEl.close();
+    }
+  }
+
+  // 放大浏览时才发现图片无法加载，也把画廊项换成占位符。
+  function markImageMissing(imageId) {
+    const entry = galleryEntries.find((item) => item.imageId === imageId);
+    if (!entry || entry.missing) {
+      return;
+    }
+    for (const link of galleryEl.querySelectorAll(".gallery-item")) {
+      if (link.dataset.imageId === imageId) {
+        showGalleryPlaceholder(entry, link);
+        break;
+      }
+    }
   }
 
   // 把点击顺序编号显示在图片左上角；未编号的图片不显示角标。
@@ -443,6 +535,7 @@
   }
 
   function render(artwork) {
+    closeLightbox();
     currentArtwork = artwork;
     const title = artwork.title || "（无标题）";
     titleEl.textContent = title;
@@ -477,6 +570,7 @@
   }
 
   function setEditing(enabled) {
+    closeLightbox();
     editing = enabled;
     editButton.textContent = enabled ? "退出编辑" : "编辑";
     editButton.setAttribute("aria-pressed", String(enabled));
@@ -923,6 +1017,48 @@
   });
   deleteButton.addEventListener("click", deleteCurrentArtwork);
   editSaveButton.addEventListener("click", saveEdits);
+
+  lightboxPrev.addEventListener("click", () => moveLightbox(-1));
+  lightboxNext.addEventListener("click", () => moveLightbox(1));
+  lightboxClose.addEventListener("click", closeLightbox);
+  lightboxStage.addEventListener("click", (event) => {
+    if (event.target === lightboxStage) {
+      closeLightbox();
+    }
+  });
+  lightboxEl.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeLightbox();
+    } else if (event.key === "ArrowLeft") {
+      event.preventDefault();
+      moveLightbox(-1);
+    } else if (event.key === "ArrowRight") {
+      event.preventDefault();
+      moveLightbox(1);
+    }
+  });
+  lightboxEl.addEventListener("close", () => {
+    document.body.classList.remove("lightbox-open");
+    lightboxEntries = [];
+    lightboxIndex = 0;
+    lightboxImage.removeAttribute("src");
+    lightboxImage.alt = "";
+    lightboxImage.hidden = false;
+    lightboxError.hidden = true;
+  });
+  lightboxImage.addEventListener("load", () => {
+    lightboxImage.hidden = false;
+    lightboxError.hidden = true;
+  });
+  lightboxImage.addEventListener("error", () => {
+    const imageId = lightboxImageId();
+    if (imageId) {
+      markImageMissing(imageId);
+    }
+    lightboxImage.hidden = true;
+    lightboxError.hidden = false;
+  });
 
   load();
 })();

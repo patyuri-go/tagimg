@@ -56,7 +56,24 @@
   const input = document.getElementById("search-input");
   const results = document.getElementById("results");
   const status = document.getElementById("status");
-  const loadMore = document.getElementById("load-more");
+  const layoutTools = document.getElementById("layout-tools");
+  const layoutToggle = document.getElementById("layout-toggle");
+  const layoutPanel = document.getElementById("layout-panel");
+  const layoutClose = document.getElementById("layout-close");
+  const layoutColGap = document.getElementById("layout-col-gap");
+  const layoutColGapValue = document.getElementById("layout-col-gap-value");
+  const layoutRowGap = document.getElementById("layout-row-gap");
+  const layoutRowGapValue = document.getElementById("layout-row-gap-value");
+  const layoutRadius = document.getElementById("layout-radius");
+  const layoutRadiusValue = document.getElementById("layout-radius-value");
+  const layoutModeVertical = document.getElementById("layout-mode-vertical");
+  const layoutModeHorizontal = document.getElementById("layout-mode-horizontal");
+  const layoutColumnsField = document.getElementById("layout-columns-field");
+  const layoutColumns = document.getElementById("layout-columns");
+  const layoutColumnsValue = document.getElementById("layout-columns-value");
+  const layoutHeightField = document.getElementById("layout-height-field");
+  const layoutHeight = document.getElementById("layout-height");
+  const layoutHeightValue = document.getElementById("layout-height-value");
   const tagInput = document.getElementById("tag-input");
   const tagSuggest = document.getElementById("tag-suggest");
   const tagStaging = document.getElementById("tag-staging");
@@ -87,10 +104,28 @@
   const addTagSuggest = document.getElementById("add-tag-suggest");
   const addTagStage = document.getElementById("add-tag-stage");
 
+  // 无限滚动提前量：滚动到距底部这个距离时开始下一页。
+  const LOAD_MORE_MARGIN = 400;
+
   let offset = 0;
   let inFlight = null;
   let debounceTimer = 0;
   let scanToken = 0;
+  let hasMore = false;
+  let columns = [];
+  let allCards = [];
+  let resizeTimer = 0;
+  const imageSizeCache = new Map();
+
+  // 排版设置只影响卡片排列和外观，不改动后端数据。
+  const layoutSettings = {
+    mode: "vertical",
+    colGap: 18,
+    rowGap: 18,
+    radius: 14,
+    columns: 4,
+    height: 240,
+  };
 
   // 标签输入联想与路径解析统一放在 tag-search.js，主搜索框和弹窗各建一个实例。
   const tagSuggestWidget = TagSearch.create({
@@ -372,32 +407,93 @@
     return value.replace("T", " ").replace("Z", "").slice(0, 16);
   }
 
-  function createThumb(item) {
+  function imageStreamUrl(imageId) {
+    return `/api/v1/image/${encodeURIComponent(imageId)}`;
+  }
+
+  // 先离屏探测图片尺寸，卡片插入前就确定宽高比，避免图片加载后把下方内容顶走。
+  function probeImageSize(imageId) {
+    const cached = imageSizeCache.get(imageId);
+    if (cached) {
+      return cached;
+    }
+
+    const promise = new Promise((resolve) => {
+      const image = new Image();
+      let settled = false;
+      let timeout = 0;
+      const finish = (size) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(timeout);
+        image.onload = null;
+        image.onerror = null;
+        resolve(size);
+      };
+      timeout = setTimeout(() => finish(null), 30000);
+      image.onload = () => {
+        if (image.naturalWidth > 0 && image.naturalHeight > 0) {
+          finish({ width: image.naturalWidth, height: image.naturalHeight });
+        } else {
+          finish(null);
+        }
+      };
+      image.onerror = () => finish(null);
+      image.src = imageStreamUrl(imageId);
+    });
+    imageSizeCache.set(imageId, promise);
+    return promise;
+  }
+
+  async function resolveThumbInfo(item) {
+    const imageIds = Array.isArray(item.imageIds) ? item.imageIds : [];
+    if (imageIds.length === 0) {
+      return { kind: "empty" };
+    }
+    const imageId = imageIds[0];
+    const size = await probeImageSize(imageId);
+    if (!size) {
+      return { kind: "error" };
+    }
+    return { kind: "image", imageId, ...size };
+  }
+
+  // 用图片 ID 的宽度和高度先把缩略图比例固定下来。
+  function createThumb(item, thumbInfo) {
     const thumb = document.createElement("div");
     thumb.className = "thumb";
 
-    const imageIds = Array.isArray(item.imageIds) ? item.imageIds : [];
-    if (imageIds.length === 0) {
+    if (thumbInfo.kind === "empty") {
       thumb.classList.add("placeholder");
       thumb.textContent = "无预览";
       return thumb;
     }
+    if (thumbInfo.kind === "error") {
+      thumb.classList.add("placeholder");
+      thumb.textContent = "图片加载失败";
+      return thumb;
+    }
+
+    thumb.classList.add("loaded");
+    thumb.style.aspectRatio = `${thumbInfo.width} / ${thumbInfo.height}`;
 
     const image = document.createElement("img");
     image.loading = "lazy";
     image.decoding = "async";
     image.alt = item.title || "作品图片";
-    // 缩略图接口还没实现，先直接用图片 ID 取原图。
-    image.src = `/api/v1/image/${encodeURIComponent(imageIds[0])}`;
     image.addEventListener(
       "error",
       () => {
+        // 保留占位比例，避免图片失败时下方卡片跳动。
         image.remove();
         thumb.classList.add("placeholder");
         thumb.textContent = "图片加载失败";
       },
       { once: true },
     );
+    image.src = imageStreamUrl(thumbInfo.imageId);
     thumb.appendChild(image);
     return thumb;
   }
@@ -418,7 +514,7 @@
     return lines.join("\n");
   }
 
-  function createCard(item) {
+  function createCard(item, thumbInfo) {
     // 整张卡片就是详情页链接，语义上用 a。
     const card = document.createElement("a");
     card.className = "card";
@@ -468,19 +564,153 @@
       body.appendChild(list);
     }
 
-    card.append(createThumb(item), body);
+    const ratio =
+      thumbInfo.kind === "image" &&
+      thumbInfo.width > 0 &&
+      thumbInfo.height > 0
+        ? thumbInfo.width / thumbInfo.height
+        : 3 / 2;
+    card.dataset.aspectRatio = String(ratio);
+    card.append(createThumb(item, thumbInfo), body);
     return card;
   }
 
-  function render(items, append) {
-    if (!append) {
-      results.replaceChildren();
+  function desiredColumnCount() {
+    return Math.max(1, Math.min(8, Math.round(layoutSettings.columns)));
+  }
+
+  // 追加新卡片时只放到当前最短的列，已有卡片不会被重新洗牌。
+  function shortestColumn() {
+    let target = columns[0];
+    let minHeight = target.offsetHeight;
+    for (let index = 1; index < columns.length; index += 1) {
+      const height = columns[index].offsetHeight;
+      if (height < minHeight) {
+        minHeight = height;
+        target = columns[index];
+      }
     }
-    const fragment = document.createDocumentFragment();
-    for (const item of items) {
-      fragment.appendChild(createCard(item));
+    return target;
+  }
+
+  // 横向模式按宽高比分配 flex 宽度，行高由设置项控制。
+  function applyCardLayout(card) {
+    if (layoutSettings.mode !== "horizontal") {
+      card.style.removeProperty("flex-basis");
+      card.style.removeProperty("flex-grow");
+      card.style.removeProperty("flex-shrink");
+      return;
     }
-    results.appendChild(fragment);
+    const ratio = Number(card.dataset.aspectRatio) || 1.5;
+    card.style.flexBasis = `${ratio * layoutSettings.height}px`;
+    card.style.flexGrow = String(ratio);
+    card.style.flexShrink = "1";
+  }
+
+  function placeCard(card) {
+    applyCardLayout(card);
+    if (layoutSettings.mode === "horizontal") {
+      results.appendChild(card);
+      return;
+    }
+    shortestColumn().appendChild(card);
+  }
+
+  // 间距和圆角只改 CSS 变量；模式、列数变化才重建容器。
+  function applyLayoutSettings() {
+    results.dataset.layout = layoutSettings.mode;
+    results.style.setProperty("--col-gap", `${layoutSettings.colGap}px`);
+    results.style.setProperty("--row-gap", `${layoutSettings.rowGap}px`);
+    results.style.setProperty("--img-radius", `${layoutSettings.radius}px`);
+    for (const card of allCards) {
+      applyCardLayout(card);
+    }
+  }
+
+  function rebuildLayout() {
+    results.replaceChildren();
+    columns = [];
+    if (layoutSettings.mode === "vertical") {
+      const count = desiredColumnCount();
+      for (let index = 0; index < count; index += 1) {
+        const column = document.createElement("div");
+        column.className = "masonry-column";
+        columns.push(column);
+      }
+      results.append(...columns);
+    }
+    applyLayoutSettings();
+    for (const card of allCards) {
+      placeCard(card);
+    }
+  }
+
+  function layoutNeedsRebuild() {
+    if (layoutSettings.mode === "horizontal") {
+      return results.dataset.layout !== "horizontal" || columns.length !== 0;
+    }
+    return (
+      results.dataset.layout !== "vertical" ||
+      columns.length !== desiredColumnCount()
+    );
+  }
+
+  function relayout() {
+    if (layoutNeedsRebuild()) {
+      rebuildLayout();
+    }
+  }
+
+  // 按后端顺序渐进插入：只有当前页开头连续就绪的卡片才能出现。
+  // 例如顺序 1/2/3/4，2 和 4 先加载不插入；1 就绪后插入 1、2，4 仍等待 3。
+  async function prepareCards(items, signal, onCard) {
+    const entries = items.map((item) => ({
+      item,
+      card: null,
+      ready: false,
+    }));
+    let next = 0;
+
+    const flushReadyPrefix = () => {
+      if (signal.aborted) {
+        return;
+      }
+      while (next < entries.length && entries[next].ready) {
+        onCard(entries[next].card);
+        next += 1;
+      }
+    };
+
+    await Promise.all(
+      entries.map(async (entry) => {
+        const thumbInfo = await resolveThumbInfo(entry.item);
+        if (signal.aborted) {
+          return;
+        }
+        entry.card = createCard(entry.item, thumbInfo);
+        entry.ready = true;
+        // 单线程事件循环里同步推进，保证不会把后面的卡片插到缺口前。
+        flushReadyPrefix();
+      }),
+    );
+
+    return next;
+  }
+
+  function nearBottom() {
+    const scrollBottom = window.innerHeight + window.scrollY;
+    const pageHeight = Math.max(
+      document.documentElement.scrollHeight,
+      document.body.scrollHeight,
+    );
+    return scrollBottom + LOAD_MORE_MARGIN >= pageHeight;
+  }
+
+  function maybeLoadMore() {
+    if (!hasMore || inFlight || !nearBottom()) {
+      return;
+    }
+    search(false);
   }
 
   async function search(reset) {
@@ -488,6 +718,9 @@
 
     if (reset) {
       offset = 0;
+      hasMore = false;
+      allCards = [];
+      columns = [];
       results.replaceChildren();
     }
 
@@ -497,8 +730,7 @@
     const controller = new AbortController();
     inFlight = controller;
 
-    loadMore.hidden = true;
-    setStatus("搜索中…");
+    setStatus(reset ? "搜索中…" : "加载中…");
 
     try {
       const data = await requestArtworks(filter, offset, controller.signal);
@@ -506,17 +738,40 @@
         return;
       }
 
-      if (data.items.length === 0 && offset === 0) {
-        setStatus(filter ? "没有符合条件的作品" : "还没有作品");
-      } else if (typeof data.total === "number") {
-        setStatus(`共 ${data.total} 个作品`);
-      } else {
-        setStatus(`已加载 ${offset + data.items.length} 个作品`);
+      // 第一页还没有列时先建列；后续分页只追加，不重排旧卡片。
+      if (data.items.length > 0 && layoutNeedsRebuild()) {
+        rebuildLayout();
       }
 
-      render(data.items, offset > 0);
+      const inserted = await prepareCards(
+        data.items,
+        controller.signal,
+        (card) => {
+          allCards.push(card);
+          placeCard(card);
+        },
+      );
+      if (controller.signal.aborted || inFlight !== controller) {
+        return;
+      }
+      // 请求被替换或中途失败时，当前页没有完整插入，不能推进 offset。
+      if (inserted !== data.items.length) {
+        return;
+      }
+
       offset += data.items.length;
-      loadMore.hidden = !data.hasMore;
+      hasMore = Boolean(data.hasMore) && data.items.length > 0;
+
+      if (offset === 0) {
+        setStatus(filter ? "没有符合条件的作品" : "还没有作品");
+      } else if (reset && typeof data.total === "number") {
+        setStatus(`共 ${data.total} 个作品`);
+      } else {
+        setStatus(`已加载 ${offset} 个作品`);
+      }
+
+      // 当前请求的 inFlight 要到 finally 才释放，延后一拍再判断是否需要续页。
+      setTimeout(maybeLoadMore, 0);
     } catch (error) {
       if (error.name === "AbortError" || inFlight !== controller) {
         return;
@@ -835,8 +1090,112 @@
     modeInput.addEventListener("change", updateAddMode);
   }
 
-  loadMore.addEventListener("click", () => {
-    search(false);
+  function syncLayoutSettings() {
+    const vertical = layoutSettings.mode === "vertical";
+    layoutColGap.value = String(layoutSettings.colGap);
+    layoutColGapValue.textContent = String(layoutSettings.colGap);
+    layoutRowGap.value = String(layoutSettings.rowGap);
+    layoutRowGapValue.textContent = String(layoutSettings.rowGap);
+    layoutRadius.value = String(layoutSettings.radius);
+    layoutRadiusValue.textContent = String(layoutSettings.radius);
+    layoutColumns.value = String(layoutSettings.columns);
+    layoutColumnsValue.textContent = String(layoutSettings.columns);
+    layoutHeight.value = String(layoutSettings.height);
+    layoutHeightValue.textContent = String(layoutSettings.height);
+    layoutModeVertical.classList.toggle("active", vertical);
+    layoutModeHorizontal.classList.toggle("active", !vertical);
+    layoutModeVertical.setAttribute("aria-pressed", String(vertical));
+    layoutModeHorizontal.setAttribute("aria-pressed", String(!vertical));
+    layoutColumnsField.hidden = !vertical;
+    layoutHeightField.hidden = vertical;
+  }
+
+  function setLayoutPanelOpen(open) {
+    layoutPanel.hidden = !open;
+    layoutToggle.setAttribute("aria-expanded", String(open));
+    layoutTools.classList.toggle("is-open", open);
+  }
+
+  function setLayoutMode(mode) {
+    if (layoutSettings.mode === mode) {
+      return;
+    }
+    layoutSettings.mode = mode;
+    syncLayoutSettings();
+    rebuildLayout();
+  }
+
+  function bindLayoutRange(input, output, key, afterChange) {
+    input.addEventListener("input", () => {
+      const value = Number(input.value);
+      layoutSettings[key] = value;
+      output.textContent = String(value);
+      afterChange();
+    });
+  }
+
+  bindLayoutRange(
+    layoutColGap,
+    layoutColGapValue,
+    "colGap",
+    applyLayoutSettings,
+  );
+  bindLayoutRange(
+    layoutRowGap,
+    layoutRowGapValue,
+    "rowGap",
+    applyLayoutSettings,
+  );
+  bindLayoutRange(
+    layoutRadius,
+    layoutRadiusValue,
+    "radius",
+    applyLayoutSettings,
+  );
+  bindLayoutRange(
+    layoutHeight,
+    layoutHeightValue,
+    "height",
+    applyLayoutSettings,
+  );
+
+  layoutColumns.addEventListener("input", () => {
+    layoutSettings.columns = Number(layoutColumns.value);
+    layoutColumnsValue.textContent = String(layoutSettings.columns);
+    rebuildLayout();
+  });
+
+  layoutModeVertical.addEventListener("click", () => {
+    setLayoutMode("vertical");
+  });
+  layoutModeHorizontal.addEventListener("click", () => {
+    setLayoutMode("horizontal");
+  });
+
+  layoutToggle.addEventListener("click", () => {
+    setLayoutPanelOpen(layoutPanel.hidden);
+  });
+  layoutClose.addEventListener("click", () => {
+    setLayoutPanelOpen(false);
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !layoutPanel.hidden) {
+      setLayoutPanelOpen(false);
+    }
+  });
+  document.addEventListener("pointerdown", (event) => {
+    if (!layoutPanel.hidden && !layoutTools.contains(event.target)) {
+      setLayoutPanelOpen(false);
+    }
+  });
+
+  syncLayoutSettings();
+  applyLayoutSettings();
+
+  window.addEventListener("scroll", maybeLoadMore, { passive: true });
+  window.addEventListener("resize", () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(relayout, 150);
   });
 
   addButton.addEventListener("click", () => {

@@ -64,6 +64,165 @@ body {
   border: 0;
 }
 
+/* 排版设置：左上角悬浮按钮，鼠标靠近时变清晰 */
+.layout-tools {
+  position: fixed;
+  top: 20px;
+  left: 20px;
+  z-index: 20;
+}
+
+.layout-toggle {
+  display: grid;
+  place-items: center;
+  width: 50px;
+  height: 50px;
+  padding: 0;
+  border: 1px solid rgb(255 255 255 / 55%);
+  border-radius: 50%;
+  background: rgb(8 10 14 / 55%);
+  color: #fff;
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0.25;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 18%);
+  backdrop-filter: blur(8px);
+  transition:
+    opacity 0.18s ease,
+    background 0.18s ease;
+}
+
+.layout-tools:hover .layout-toggle,
+.layout-tools:focus-within .layout-toggle,
+.layout-tools.is-open .layout-toggle {
+  opacity: 1;
+}
+
+.layout-toggle:hover {
+  background: rgb(8 10 14 / 82%);
+}
+
+.layout-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.layout-panel {
+  position: absolute;
+  top: 60px;
+  left: 0;
+  width: min(300px, calc(100vw - 40px));
+  max-height: calc(100vh - 100px);
+  overflow-y: auto;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow);
+}
+
+/* 触屏没有 hover，按钮保持可见 */
+@media (hover: none) {
+  .layout-toggle {
+    opacity: 0.85;
+  }
+}
+
+.layout-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.layout-panel-head > span {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.layout-close {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.layout-close:hover {
+  background: var(--chip-bg);
+  color: var(--text);
+}
+
+.layout-close:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.layout-field {
+  display: grid;
+  gap: 6px;
+  margin-top: 14px;
+}
+
+/* display:grid 会覆盖 [hidden] 的默认 display:none，这里显式处理 */
+.layout-field[hidden],
+.layout-panel[hidden] {
+  display: none;
+}
+
+.layout-field > span {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.layout-field output {
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+
+.layout-field input[type="range"] {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+.layout-mode {
+  display: flex;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.layout-mode-button {
+  flex: 1;
+  height: 34px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.layout-mode-button.active {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+}
+
+.layout-mode-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 /* 顶栏 */
 .topbar {
   position: sticky;
@@ -460,6 +619,131 @@ a.brand {
   border: 1px dashed var(--border);
 }
 
+/* 首页瀑布流：JS 按最短列插入卡片，新增图片不会改变已有卡片布局 */
+.masonry-grid {
+  /* 列距 / 行距 / 圆角由排版面板写入，未设置时用默认值 */
+  --col-gap: 18px;
+  --row-gap: 18px;
+  --img-radius: 14px;
+  display: flex;
+  align-items: flex-start;
+  column-gap: var(--col-gap);
+}
+
+.masonry-column {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  row-gap: var(--row-gap);
+  min-width: 0;
+}
+
+.masonry-grid .card {
+  position: relative;
+  display: block;
+  width: 100%;
+  border-radius: var(--img-radius);
+}
+
+.masonry-grid .card:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  outline-offset: 2px;
+}
+
+.masonry-grid .thumb {
+  aspect-ratio: 3 / 2;
+  border-radius: var(--img-radius);
+}
+
+/* 横向模式：卡片按宽高比铺满整行，最后一行用伪元素补位 */
+.masonry-grid[data-layout="horizontal"] {
+  flex-wrap: wrap;
+  row-gap: var(--row-gap);
+}
+
+.masonry-grid[data-layout="horizontal"]::after {
+  content: "";
+  flex-grow: 1000000;
+}
+
+.masonry-grid[data-layout="horizontal"] .card {
+  width: auto;
+  min-width: 0;
+}
+
+.masonry-grid .thumb img {
+  height: auto;
+  object-fit: contain;
+  transition: transform 0.25s ease;
+}
+
+.masonry-grid .card:hover .thumb img {
+  transform: scale(1.025);
+}
+
+.masonry-grid .card-body {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 1;
+  gap: 8px;
+  padding: 56px 14px 14px;
+  background: linear-gradient(
+    to top,
+    rgb(8 10 14 / 92%),
+    rgb(8 10 14 / 58%) 55%,
+    transparent
+  );
+  color: #fff;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(8px);
+  transition:
+    opacity 0.18s ease,
+    transform 0.18s ease;
+}
+
+.masonry-grid .card:hover .card-body,
+.masonry-grid .card:focus-visible .card-body {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.masonry-grid .card-title {
+  display: -webkit-box;
+  overflow: hidden;
+  color: #fff;
+  font-size: 15px;
+  line-height: 1.35;
+  text-overflow: clip;
+  white-space: normal;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.masonry-grid .meta {
+  color: rgb(255 255 255 / 72%);
+  font-size: 11px;
+}
+
+.masonry-grid .card-body .chip {
+  background: rgb(255 255 255 / 18%);
+  color: #fff;
+}
+
+.masonry-grid .card-body .chip-more {
+  background: transparent;
+  border: 1px dashed rgb(255 255 255 / 40%);
+}
+
+@media (hover: none) {
+  .masonry-grid .card-body {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 /* 详情页可点击的标签 */
 a.chip {
   color: var(--chip-text);
@@ -474,32 +758,6 @@ a.chip:hover {
 a.chip:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
-}
-
-/* 加载更多 */
-.more {
-  display: flex;
-  justify-content: center;
-  padding: 28px 0 8px;
-}
-
-.load-more {
-  height: 40px;
-  padding: 0 28px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--surface);
-  color: var(--text);
-  font-size: 14px;
-  cursor: pointer;
-  transition:
-    border-color 0.15s ease,
-    color 0.15s ease;
-}
-
-.load-more:hover {
-  border-color: var(--accent);
-  color: var(--accent);
 }
 
 /* 添加按钮与弹窗 */
@@ -894,6 +1152,102 @@ a.card:focus-visible {
   font-size: 13px;
 }
 
+/* 图片放大浏览 */
+body.lightbox-open {
+  overflow: hidden;
+}
+
+.lightbox {
+  width: min(1100px, calc(100vw - 48px));
+  height: min(88vh, 900px);
+  max-width: none;
+  max-height: calc(100vh - 48px);
+  padding: 0;
+  overflow: hidden;
+}
+
+.lightbox[open] {
+  display: flex;
+  flex-direction: column;
+}
+
+.lightbox-head {
+  flex: 0 0 auto;
+  gap: 16px;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.lightbox-caption {
+  margin: 0;
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.lightbox-stage {
+  position: relative;
+  display: grid;
+  flex: 1 1 auto;
+  place-items: center;
+  min-height: 0;
+  padding: 16px 72px 20px;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+.lightbox-image {
+  display: block;
+  width: auto;
+  height: auto;
+  min-width: 0;
+  min-height: 0;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: 8px;
+  box-shadow: 0 8px 28px rgb(16 24 40 / 18%);
+}
+
+.lightbox-error {
+  margin: 0;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.lightbox-nav {
+  position: absolute;
+  top: 50%;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  color: var(--text);
+  font-size: 30px;
+  line-height: 1;
+  box-shadow: 0 6px 18px rgb(16 24 40 / 18%);
+  cursor: pointer;
+  transform: translateY(-50%);
+  backdrop-filter: blur(4px);
+}
+
+.lightbox-nav:hover {
+  border-color: var(--accent);
+  background: var(--chip-bg);
+  color: var(--accent);
+}
+
+.lightbox-prev {
+  left: 16px;
+}
+
+.lightbox-next {
+  right: 16px;
+}
+
 /* 游离图片页 */
 .orphan-head {
   display: flex;
@@ -1167,5 +1521,33 @@ a.card:focus-visible {
   .edit-save-bar {
     right: 16px;
     bottom: 16px;
+  }
+
+  .lightbox {
+    width: calc(100vw - 24px);
+    height: 86vh;
+    max-height: calc(100vh - 24px);
+  }
+
+  .lightbox-head {
+    padding: 12px 14px;
+  }
+
+  .lightbox-stage {
+    padding: 12px 8px 16px;
+  }
+
+  .lightbox-nav {
+    width: 40px;
+    height: 40px;
+    font-size: 26px;
+  }
+
+  .lightbox-prev {
+    left: 4px;
+  }
+
+  .lightbox-next {
+    right: 4px;
   }
 }
