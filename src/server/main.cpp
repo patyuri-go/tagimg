@@ -120,7 +120,8 @@ int main() {
 
   // 图片流管理器要活到 Drogon 停止之后，因此声明在 service 之前。
   auto image_streamer = std::make_shared<tagimg::ImageStreamer>(
-      entity_repository_shared, tagimg_repository_shared);
+      entity_repository_shared, tagimg_repository_shared,
+      config->http.image_mode);
 
   // 扫描任务由 REST 与 GraphQL 共用同一个服务实例。
   auto runtime = std::make_shared<tagimg::ServiceRuntime>(

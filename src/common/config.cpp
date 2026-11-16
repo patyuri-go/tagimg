@@ -121,6 +121,22 @@ Result<AppConfig, ConfigError> load_config(const std::filesystem::path &path) {
       return ConfigError::InvalidField;
     }
     config.http.port = static_cast<std::uint16_t>(http_port_value);
+
+    // 图片流模式可选，缺省保持本机代理；值只能是 proxy 或 redirect。
+    const auto image_mode = http->find("imageMode");
+    if (image_mode != http->end()) {
+      if (!image_mode->is_string()) {
+        return ConfigError::InvalidField;
+      }
+      const std::string value = image_mode->get<std::string>();
+      if (value == "proxy") {
+        config.http.image_mode = ImageStreamMode::Proxy;
+      } else if (value == "redirect") {
+        config.http.image_mode = ImageStreamMode::Redirect;
+      } else {
+        return ConfigError::InvalidField;
+      }
+    }
   }
 
   // ai 段同样是可选项；写了的字段会做类型校验，没写的用默认值。

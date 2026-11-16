@@ -7,6 +7,7 @@
 
 #include <drogon/HttpResponse.h>
 
+#include "common/config.hpp"
 #include "db/entity_repository.hpp"
 #include "db/tagimg_repository.hpp"
 
@@ -34,7 +35,8 @@ struct ImageStreamOptions {
 class ImageStreamer {
 public:
   ImageStreamer(std::shared_ptr<const EntityRepository> entities,
-                std::shared_ptr<const TagimgRepository> images);
+                std::shared_ptr<const TagimgRepository> images,
+                ImageStreamMode mode = ImageStreamMode::Proxy);
 
   ~ImageStreamer();
 

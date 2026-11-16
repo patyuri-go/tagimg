@@ -18,10 +18,20 @@ struct DatabaseConfig {
   std::string entity_dbname;
 };
 
+// 图片流接口的服务模式。
+enum class ImageStreamMode {
+  // 服务端读取上游字节再转发给客户端，即现有行为。
+  Proxy,
+  // 服务端先跟随上游重定向拿到直链，再返回 302 让客户端直连。
+  Redirect,
+};
+
 // HTTP 服务的监听配置。
 struct HttpConfig {
   std::string host = "127.0.0.1";
   std::uint16_t port = 8080;
+  // 缺省为本机代理，保证旧配置文件行为不变。
+  ImageStreamMode image_mode = ImageStreamMode::Proxy;
 };
 
 // Python 推理服务（sidecar）的启动参数。

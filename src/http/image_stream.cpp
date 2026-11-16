@@ -122,13 +122,15 @@ struct ImageStreamer::Impl : std::enable_shared_from_this<ImageStreamer::Impl> {
   };
 
   Impl(std::shared_ptr<const EntityRepository> entities_repository,
-       std::shared_ptr<const TagimgRepository> image_repository)
+       std::shared_ptr<const TagimgRepository> image_repository,
+       ImageStreamMode stream_mode)
       : entities(std::move(entities_repository)),
-        images(std::move(image_repository)) {
+        images(std::move(image_repository)), mode(stream_mode) {
   }
 
   std::shared_ptr<const EntityRepository> entities;
   std::shared_ptr<const TagimgRepository> images;
+  ImageStreamMode mode = ImageStreamMode::Proxy;
 
   mutable std::mutex mutex;
   std::condition_variable idle;
@@ -145,6 +147,11 @@ struct ImageStreamer::Impl : std::enable_shared_from_this<ImageStreamer::Impl> {
   void respond_ok(
       const std::shared_ptr<StreamSession> &session,
       const EntityMetadata &metadata, const ImageStreamOptions &options,
+      const std::function<void(const drogon::HttpResponsePtr &)> &callback);
+
+  // 302 模式下把解析出的直链交给客户端。
+  void respond_redirect(
+      const std::shared_ptr<StreamSession> &session, std::string location,
       const std::function<void(const drogon::HttpResponsePtr &)> &callback);
 
   // 在 IO 线程构造错误响应；可以安全地从工作线程调用。
@@ -274,7 +281,9 @@ void ImageStreamer::Impl::resolve(
   }
 
   const std::string etag = make_etag(session->image_id, metadata->size);
-  if (options.if_none_match && etag_matches(*options.if_none_match, etag)) {
+  // 302 模式不返回图片字节，也不发 ETag，避免客户端缓存住短期直链。
+  if (mode == ImageStreamMode::Proxy && options.if_none_match &&
+      etag_matches(*options.if_none_match, etag)) {
     post([callback, etag]() mutable {
       auto response = drogon::HttpResponse::newHttpResponse();
       response->setStatusCode(drogon::k304NotModified);
@@ -314,6 +323,24 @@ void ImageStreamer::Impl::resolve(
     matched_storage = true;
     if (session->stop.load(std::memory_order_relaxed)) {
       finish(session);
+      return;
+    }
+
+    if (mode == ImageStreamMode::Redirect) {
+      // 先跟随上游全部重定向拿到最终直链，再让客户端直接访问。
+      const auto resolved = resolve_redirect_url(location.url);
+      if (!resolved) {
+        continue;
+      }
+      if (session->stop.load(std::memory_order_relaxed)) {
+        finish(session);
+        return;
+      }
+      auto self = shared_from_this();
+      post([self, session, location = *resolved,
+            callback = std::move(callback)]() mutable {
+        self->respond_redirect(session, std::move(location), callback);
+      });
       return;
     }
 
@@ -403,6 +430,20 @@ void ImageStreamer::Impl::respond_ok(
   });
 
   callback(response);
+}
+
+void ImageStreamer::Impl::respond_redirect(
+    const std::shared_ptr<StreamSession> &session, std::string location,
+    const std::function<void(const drogon::HttpResponsePtr &)> &callback) {
+  post([location = std::move(location), callback]() mutable {
+    auto response = drogon::HttpResponse::newHttpResponse();
+    response->setStatusCode(drogon::k302Found);
+    response->addHeader("Location", location);
+    // 直链可能带有时效签名，不缓存，避免客户端拿到过期地址。
+    response->addHeader("Cache-Control", "no-store");
+    callback(response);
+  });
+  finish(session);
 }
 
 void ImageStreamer::Impl::fail(
@@ -509,8 +550,10 @@ void ImageStreamer::Impl::shutdown() {
 }
 
 ImageStreamer::ImageStreamer(std::shared_ptr<const EntityRepository> entities,
-                             std::shared_ptr<const TagimgRepository> images)
-    : impl_(std::make_shared<Impl>(std::move(entities), std::move(images))) {
+                             std::shared_ptr<const TagimgRepository> images,
+                             ImageStreamMode mode)
+    : impl_(std::make_shared<Impl>(std::move(entities), std::move(images),
+                                   mode)) {
 }
 
 ImageStreamer::~ImageStreamer() {

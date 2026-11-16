@@ -46,6 +46,71 @@ ByteStreamError map_curl_error(CURLcode code) {
   }
 }
 
+// 直链解析最多跟随的重定向次数。
+constexpr long kResolveMaxRedirects = 20;
+constexpr long kResolveConnectTimeoutSeconds = 10;
+constexpr long kResolveTimeoutSeconds = 20;
+
+struct RedirectProbe {
+  CURLcode code = CURLE_FAILED_INIT;
+  long status = 0;
+  std::string final_url;
+};
+
+// GET 探测时只要收到首块数据就返回 0 中止，避免下载完整文件。
+std::size_t discard_body(char * /*data*/, std::size_t /*size*/,
+                         std::size_t /*count*/, void * /*user_data*/) {
+  return 0;
+}
+
+RedirectProbe probe_redirects(const std::string &url) {
+  RedirectProbe result;
+  CURL *handle = curl_easy_init();
+  if (handle == nullptr) {
+    return result;
+  }
+
+  const auto set = [handle](CURLoption option, auto value) {
+    return curl_easy_setopt(handle, option, value) == CURLE_OK;
+  };
+  const bool configured =
+      set(CURLOPT_URL, url.c_str()) && set(CURLOPT_FOLLOWLOCATION, 1L) &&
+      set(CURLOPT_MAXREDIRS, kResolveMaxRedirects) &&
+      set(CURLOPT_CONNECTTIMEOUT, kResolveConnectTimeoutSeconds) &&
+      set(CURLOPT_TIMEOUT, kResolveTimeoutSeconds) &&
+      set(CURLOPT_NOSIGNAL, 1L) && set(CURLOPT_ACCEPT_ENCODING, "") &&
+      set(CURLOPT_USERAGENT, "tagimg/0.1") &&
+      // 只允许 HTTP(S)，避免上游把探测重定向到本地协议。
+      set(CURLOPT_PROTOCOLS_STR, "http,https") &&
+      set(CURLOPT_REDIR_PROTOCOLS_STR, "http,https") &&
+      // Range 只取一个字节；服务器忽略 Range 时由写回调立即中止。
+      set(CURLOPT_RANGE, "0-0") && set(CURLOPT_WRITEFUNCTION, discard_body);
+  if (!configured) {
+    curl_easy_cleanup(handle);
+    return result;
+  }
+
+  result.code = curl_easy_perform(handle);
+  curl_easy_getinfo(handle, CURLINFO_RESPONSE_CODE, &result.status);
+  char *effective = nullptr;
+  if (curl_easy_getinfo(handle, CURLINFO_EFFECTIVE_URL, &effective) ==
+          CURLE_OK &&
+      effective != nullptr) {
+    result.final_url = effective;
+  }
+  curl_easy_cleanup(handle);
+  return result;
+}
+
+bool redirect_probe_ok(const RedirectProbe &probe) {
+  // GET 探测主动中止会得到
+  // CURLE_WRITE_ERROR，只要响应头和直链已经拿到就算成功。
+  const bool transport_ok =
+      probe.code == CURLE_OK || probe.code == CURLE_WRITE_ERROR;
+  return transport_ok && probe.status >= 200 && probe.status < 300 &&
+         is_http_url(probe.final_url);
+}
+
 } // namespace
 
 std::string_view to_string(ByteStreamError error) noexcept {
@@ -66,6 +131,44 @@ std::string_view to_string(ByteStreamError error) noexcept {
     return "ReadFailed";
   }
   return "Unknown";
+}
+
+std::string_view to_string(RedirectResolveError error) noexcept {
+  switch (error) {
+  case RedirectResolveError::InvalidUrl:
+    return "InvalidUrl";
+  case RedirectResolveError::RequestFailed:
+    return "RequestFailed";
+  case RedirectResolveError::HttpError:
+    return "HttpError";
+  case RedirectResolveError::TooManyRedirects:
+    return "TooManyRedirects";
+  }
+  return "Unknown";
+}
+
+Result<std::string, RedirectResolveError>
+resolve_redirect_url(const std::string &url) {
+  ensure_curl_initialized();
+  if (g_curl_init_result != CURLE_OK) {
+    return RedirectResolveError::RequestFailed;
+  }
+  if (!is_http_url(url)) {
+    return RedirectResolveError::InvalidUrl;
+  }
+
+  const RedirectProbe get = probe_redirects(url);
+  if (redirect_probe_ok(get)) {
+    return get.final_url;
+  }
+
+  if (get.code == CURLE_TOO_MANY_REDIRECTS) {
+    return RedirectResolveError::TooManyRedirects;
+  }
+  if (get.status >= 400) {
+    return RedirectResolveError::HttpError;
+  }
+  return RedirectResolveError::RequestFailed;
 }
 
 Result<std::unique_ptr<WebdavByteStream>, ByteStreamError>

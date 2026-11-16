@@ -544,7 +544,9 @@ void ApiService::handle_schema(
   Json resource;
   resource["method"] = "GET";
   resource["path"] = "/api/v1/image/{imageId}";
-  resource["description"] = "按图片 ID 流式返回图片的原始字节";
+  resource["description"] =
+      "按图片 ID 返回图片；proxy 模式流式返回原始字节，redirect 模式返回 302 "
+      "到服务端解析好的直链";
   resource["body"] = "binary";
   resource["parameters"] = Json::array(
       {{{"name", "storageId"},
@@ -554,7 +556,8 @@ void ApiService::handle_schema(
        {{"name", "download"},
         {"in", "query"},
         {"required", false},
-        {"description", "为 1 时使用 Content-Disposition: attachment"}},
+        {"description",
+         "为 1 时使用 Content-Disposition: attachment，仅 proxy 模式生效"}},
        {{"name", "requestId"},
         {"in", "query"},
         {"required", false},

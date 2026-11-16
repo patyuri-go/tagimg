@@ -32,6 +32,23 @@ enum class ByteStreamError {
 
 [[nodiscard]] std::string_view to_string(ByteStreamError error) noexcept;
 
+// 跟随上游重定向直到拿到最终直链时的错误。
+enum class RedirectResolveError {
+  InvalidUrl,
+  RequestFailed,
+  HttpError,
+  TooManyRedirects,
+};
+
+[[nodiscard]] std::string_view to_string(RedirectResolveError error) noexcept;
+
+// 跟随 URL 上的所有重定向，返回最终可直连的绝对地址。
+//
+// 使用 Range: bytes=0-0 的 GET 探测：预签名地址通常只允许 GET，
+// 且拿到首块数据后立即中止，不会真的把整个文件下载下来。
+[[nodiscard]] Result<std::string, RedirectResolveError>
+resolve_redirect_url(const std::string &url);
+
 // 顺序读取字节的抽象。read() 返回 0 表示流正常结束，返回错误表示
 // 连接中断、HTTP 失败或超过大小限制。
 class ByteStream {
