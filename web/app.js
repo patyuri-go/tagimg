@@ -6,6 +6,9 @@
   // 扫描任务没有终态查询，靠轮询作品是否出现来判断完成。
   const SCAN_POLL_INTERVAL = 2500;
   const SCAN_POLL_ATTEMPTS = 24;
+  // 悬停放大预览：指针静止多久触发、离开卡片后多久失去「秒开」资格。
+  const HOVER_PREVIEW_DELAY = 1500;
+  const HOVER_PREVIEW_WARM = 800;
   const SEARCH_QUERY = `
     query SearchArtworks(
       $filter: ArtworkFilter
@@ -69,6 +72,7 @@
   const form = document.getElementById("search-form");
   const input = document.getElementById("search-input");
   const results = document.getElementById("results");
+  const hoverPreview = document.getElementById("hover-preview");
   const status = document.getElementById("status");
   const layoutTools = document.getElementById("layout-tools");
   const layoutToggle = document.getElementById("layout-toggle");
@@ -518,6 +522,10 @@
       { once: true },
     );
     image.src = imageStreamUrl(thumbInfo.imageId, "small");
+    // 悬停放大预览靠这些属性还原比例，避免重新探测或请求原图。
+    image.dataset.imageId = thumbInfo.imageId;
+    image.dataset.imageWidth = String(thumbInfo.width);
+    image.dataset.imageHeight = String(thumbInfo.height);
     thumb.appendChild(image);
     return thumb;
   }
@@ -1271,6 +1279,200 @@
   document.addEventListener("pointerdown", (event) => {
     if (!layoutPanel.hidden && !layoutTools.contains(event.target)) {
       setLayoutPanelOpen(false);
+    }
+  });
+
+  // ---- 悬停放大预览 ----
+  // 指针在缩略图上完全静止 1.5s 后，把这张图等比放大到「鼠标到屏幕对侧
+  // 边缘」与「满屏高」构成的框内，贴住鼠标的那条边正好落在鼠标 x 上。
+  // 进入大图模式后换图不再等待；离开卡片立刻收起，0.8s 内落到别的卡片
+  // 仍可秒开。整个过程只复用已加载的缩略图，不额外请求原图。
+  const hoverPreviewImage = hoverPreview.querySelector("img");
+  // 指针在空白处停留多久后，大图模式失效（需要重新等 1.5s）。
+  const hoverState = {
+    active: false,
+    shown: false,
+    imageId: "",
+    naturalWidth: 1,
+    naturalHeight: 1,
+    pointerX: 0,
+    pointerY: 0,
+    delayTimer: 0,
+    warmTimer: 0,
+  };
+  // 按 imageId 缓存 regular 尺寸的大图，来回移动时不重复下载。
+  const hoverRegularImages = new Map();
+
+  function hideHoverPreview() {
+    if (!hoverState.shown) {
+      return;
+    }
+    hoverState.shown = false;
+    hoverState.imageId = "";
+    hoverPreview.hidden = true;
+  }
+
+  function exitHoverPreview() {
+    clearTimeout(hoverState.delayTimer);
+    clearTimeout(hoverState.warmTimer);
+    hoverState.active = false;
+    hideHoverPreview();
+  }
+
+  // 把浮层摆到鼠标的对侧：鼠标在左半屏，图贴右侧边缘，左边贴鼠标。
+  function positionHoverPreview(x, y) {
+    const viewportWidth = window.innerWidth;
+    const viewportHeight = window.innerHeight;
+    const onLeftHalf = x < viewportWidth / 2;
+    // 鼠标到它对侧边缘的距离，就是图可用的最大宽度。
+    const boxWidth = onLeftHalf ? viewportWidth - x : x;
+    const scale = Math.min(
+      boxWidth / hoverState.naturalWidth,
+      viewportHeight / hoverState.naturalHeight,
+    );
+    const width = Math.max(1, hoverState.naturalWidth * scale);
+    const height = Math.max(1, hoverState.naturalHeight * scale);
+    const left = onLeftHalf ? x : x - width;
+    // 贴鼠标那条边的中心对齐鼠标 y，越界时夹回视口内。
+    const top = Math.min(
+      Math.max(y - height / 2, 0),
+      Math.max(0, viewportHeight - height),
+    );
+
+    hoverPreview.style.left = `${left}px`;
+    hoverPreview.style.top = `${top}px`;
+    hoverPreview.style.width = `${width}px`;
+    hoverPreview.style.height = `${height}px`;
+  }
+
+  // 先用卡片上已经加载好的 small 图顶上，再在后台换成 regular。
+  function upgradeHoverPreview(imageId) {
+    if (!imageId) {
+      return;
+    }
+    let loader = hoverRegularImages.get(imageId);
+    if (!loader) {
+      loader = new Image();
+      loader.decoding = "async";
+      loader.src = imageStreamUrl(imageId, "regular");
+      hoverRegularImages.set(imageId, loader);
+    }
+
+    const apply = () => {
+      if (!hoverState.shown || hoverState.imageId !== imageId) {
+        return;
+      }
+      if (loader.naturalWidth > 0 && loader.naturalHeight > 0) {
+        hoverState.naturalWidth = loader.naturalWidth;
+        hoverState.naturalHeight = loader.naturalHeight;
+      }
+      hoverPreviewImage.src = loader.src;
+      positionHoverPreview(hoverState.pointerX, hoverState.pointerY);
+    };
+
+    if (loader.complete && loader.naturalWidth > 0) {
+      apply();
+    } else {
+      loader.onload = apply;
+    }
+  }
+
+  function showHoverPreview(image, x, y) {
+    hoverState.shown = true;
+    hoverState.imageId = image.dataset.imageId || "";
+    hoverState.naturalWidth =
+      image.naturalWidth || Number(image.dataset.imageWidth) || 1;
+    hoverState.naturalHeight =
+      image.naturalHeight || Number(image.dataset.imageHeight) || 1;
+    hoverState.pointerX = x;
+    hoverState.pointerY = y;
+
+    hoverPreviewImage.src = image.currentSrc || image.src;
+    hoverPreview.hidden = false;
+    positionHoverPreview(x, y);
+    upgradeHoverPreview(hoverState.imageId);
+  }
+
+  function hoverThumbImageAt(target) {
+    if (!target || typeof target.closest !== "function") {
+      return null;
+    }
+    const thumb = target.closest(".thumb");
+    if (!thumb || !results.contains(thumb)) {
+      return null;
+    }
+    // 占位卡片没有 img，自然也不该触发预览。
+    return thumb.querySelector("img");
+  }
+
+  // 指针落到空白处：立刻收起，并开始计算「秒开」余温。
+  function hoverPreviewBlank() {
+    clearTimeout(hoverState.delayTimer);
+    clearTimeout(hoverState.warmTimer);
+    hideHoverPreview();
+    if (hoverState.active) {
+      hoverState.warmTimer = setTimeout(() => {
+        hoverState.active = false;
+      }, HOVER_PREVIEW_WARM);
+    }
+  }
+
+  results.addEventListener("pointermove", (event) => {
+    if (event.pointerType === "touch") {
+      exitHoverPreview();
+      return;
+    }
+    const image = hoverThumbImageAt(event.target);
+    if (!image) {
+      hoverPreviewBlank();
+      return;
+    }
+
+    // 必须完全静止：任何一次移动都重新计时。
+    clearTimeout(hoverState.delayTimer);
+    clearTimeout(hoverState.warmTimer);
+    hoverState.pointerX = event.clientX;
+    hoverState.pointerY = event.clientY;
+
+    if (hoverState.shown && hoverState.imageId === (image.dataset.imageId || "")) {
+      // 同一张图：贴着鼠标连续移动。
+      positionHoverPreview(event.clientX, event.clientY);
+      return;
+    }
+
+    if (hoverState.active) {
+      // 已经进入大图模式，换图不等延迟。
+      showHoverPreview(image, event.clientX, event.clientY);
+      return;
+    }
+
+    hoverState.delayTimer = setTimeout(() => {
+      if (!document.contains(image)) {
+        return;
+      }
+      hoverState.active = true;
+      showHoverPreview(
+        image,
+        hoverState.pointerX,
+        hoverState.pointerY,
+      );
+    }, HOVER_PREVIEW_DELAY);
+  });
+
+  results.addEventListener("pointerleave", hoverPreviewBlank);
+
+  // 点击空白区域退出大图模式；点卡片照常跳转。
+  document.addEventListener("pointerdown", (event) => {
+    if (!hoverThumbImageAt(event.target)) {
+      exitHoverPreview();
+    }
+  });
+
+  window.addEventListener("scroll", hideHoverPreview, { passive: true });
+
+  window.addEventListener("resize", () => {
+    if (hoverState.shown) {
+      positionHoverPreview(hoverState.pointerX, hoverState.pointerY);
     }
   });
 
