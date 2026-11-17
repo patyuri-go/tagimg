@@ -137,6 +137,56 @@ Result<AppConfig, ConfigError> load_config(const std::filesystem::path &path) {
         return ConfigError::InvalidField;
       }
     }
+
+    // 图片转码参数可选，缺省使用 HttpConfig 里的默认值。
+    const auto read_http_integer =
+        [&http](const char *key, long long minimum, long long maximum,
+                std::uint32_t &output) -> std::optional<ConfigError> {
+      const auto it = http->find(key);
+      if (it == http->end()) {
+        return std::nullopt;
+      }
+      if (!it->is_number_integer()) {
+        return ConfigError::InvalidField;
+      }
+      const auto value = it->get<long long>();
+      if (value < minimum || value > maximum) {
+        return ConfigError::InvalidField;
+      }
+      output = static_cast<std::uint32_t>(value);
+      return std::nullopt;
+    };
+
+    if (const auto error = read_http_integer(
+            "imageQuality", 1, 100, config.http.image_quality)) {
+      return *error;
+    }
+    if (const auto error =
+            read_http_integer("imageSpeed", 0, 9, config.http.image_speed)) {
+      return *error;
+    }
+    if (const auto error = read_http_integer(
+            "imageMaxConcurrency", 1, 64, config.http.image_max_concurrency)) {
+      return *error;
+    }
+    if (const auto error = read_http_integer(
+            "imageTimeoutSeconds", 1, 300,
+            config.http.image_timeout_seconds)) {
+      return *error;
+    }
+
+    // 像素上限用 64 位存放，但 JSON 配置里限制在合理范围内。
+    const auto max_pixels = http->find("imageMaxPixels");
+    if (max_pixels != http->end()) {
+      if (!max_pixels->is_number_integer()) {
+        return ConfigError::InvalidField;
+      }
+      const auto value = max_pixels->get<long long>();
+      if (value < 1 || value > 1'000'000'000LL) {
+        return ConfigError::InvalidField;
+      }
+      config.http.image_max_pixels = static_cast<std::uint64_t>(value);
+    }
   }
 
   // ai 段同样是可选项；写了的字段会做类型校验，没写的用默认值。

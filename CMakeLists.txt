@@ -21,6 +21,14 @@ find_package(GTest CONFIG REQUIRED)
 find_package(CURL REQUIRED)
 find_package(Threads REQUIRED)
 
+# vcpkg 的 libvips 只安装 pkg-config 文件，没有 CMake config。
+if(DEFINED VCPKG_INSTALLED_DIR AND DEFINED VCPKG_TARGET_TRIPLET)
+    set(ENV{PKG_CONFIG_PATH}
+        "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/lib/pkgconfig:$ENV{PKG_CONFIG_PATH}")
+endif()
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(VIPS REQUIRED IMPORTED_TARGET vips)
+
 add_library(tagimg_ai STATIC
     src/ai/clip_embedder.cpp
     src/ai/sidecar_process.cpp
@@ -114,6 +122,16 @@ target_link_libraries(tagimg_io PUBLIC
     CURL::libcurl
 )
 
+add_library(tagimg_image STATIC
+    src/image/image_processor.cpp
+)
+target_include_directories(tagimg_image PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+target_link_libraries(tagimg_image PUBLIC
+    PkgConfig::VIPS
+)
+
 add_library(tagimg_job STATIC
     src/job/add_job.cpp
     src/job/job.cpp
@@ -157,6 +175,7 @@ target_include_directories(tagimg_http PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 target_link_libraries(tagimg_http PUBLIC
+    tagimg_image
     tagimg_job
     Drogon::Drogon
     nlohmann_json::nlohmann_json
@@ -194,6 +213,13 @@ target_link_libraries(tagimg_server PRIVATE
     tagimg_graphql
     tagimg_http
     tagimg_config
+)
+
+add_executable(tagimg_vips_smoke
+    tools/vips_smoke.cpp
+)
+target_link_libraries(tagimg_vips_smoke PRIVATE
+    tagimg_image
 )
 
 message(STATUS "tagimg: C++ dependencies resolved")

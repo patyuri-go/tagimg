@@ -13,6 +13,27 @@
     },
     "curl",
     "drogon",
+    {
+      "name": "libheif",
+      "default-features": false,
+      "features": [
+        "aom"
+      ]
+    },
+    {
+      "name": "libvips",
+      "default-features": false,
+      "features": [
+        "exif",
+        "heif",
+        "jpeg",
+        "nsgif",
+        "png",
+        "tiff",
+        "webp",
+        "zlib"
+      ]
+    },
     "nlohmann-json",
     "pugixml",
     {

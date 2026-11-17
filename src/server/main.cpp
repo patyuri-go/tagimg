@@ -16,6 +16,7 @@
 #include "graphql/graphql_service.hpp"
 #include "http/api_service.hpp"
 #include "http/image_stream.hpp"
+#include "image/image_processor.hpp"
 #include "job/service_runtime.hpp"
 
 namespace {
@@ -127,10 +128,24 @@ int main() {
       std::shared_ptr<const tagimg::TagimgRepository>(
           std::move(*tagimg_repository));
 
+  // libvips 必须在任何转码请求之前初始化；失败时直接退出，避免运行中
+  // 才发现 AVIF 编码器不可用。
+  if (!tagimg::initialize_image_processing()) {
+    std::cerr << "image processing initialization failed" << std::endl;
+    return 2;
+  }
+
+  tagimg::ImageProcessingConfig image_processing;
+  image_processing.quality = config->http.image_quality;
+  image_processing.speed = config->http.image_speed;
+  image_processing.max_concurrency = config->http.image_max_concurrency;
+  image_processing.max_pixels = config->http.image_max_pixels;
+  image_processing.timeout_seconds = config->http.image_timeout_seconds;
+
   // 图片流管理器要活到 Drogon 停止之后，因此声明在 service 之前。
   auto image_streamer = std::make_shared<tagimg::ImageStreamer>(
       entity_repository_shared, tagimg_repository_shared,
-      config->http.image_mode);
+      config->http.image_mode, image_processing, work_dir);
 
   // 扫描任务由 REST 与 GraphQL 共用同一个服务实例。
   auto runtime = std::make_shared<tagimg::ServiceRuntime>(
@@ -177,6 +192,7 @@ int main() {
         tagimg::ImageStreamOptions options;
         options.image_id = std::move(image_id);
         options.storage_id = request->getParameter("storageId");
+        options.size = request->getParameter("size");
 
         const std::string &download = request->getParameter("download");
         options.download = download == "1" || download == "true";

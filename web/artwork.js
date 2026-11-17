@@ -162,8 +162,9 @@
     return imageIds.map((imageId) => ({ imageId, missing: false }));
   }
 
-  function imageStreamUrl(imageId) {
-    return `/api/v1/image/${encodeURIComponent(imageId)}`;
+  function imageStreamUrl(imageId, size) {
+    const url = `/api/v1/image/${encodeURIComponent(imageId)}`;
+    return size ? `${url}?size=${encodeURIComponent(size)}` : url;
   }
 
   function createMissingGalleryItem(imageId) {
@@ -192,7 +193,7 @@
 
   function createGalleryItem(entry, index, title) {
     const imageId = entry.imageId || "";
-    const url = imageStreamUrl(imageId);
+    const url = imageStreamUrl(imageId, "small");
 
     // 重新渲染时保留之前的加载失败状态，避免反复请求已知无法预览的图片。
     if (entry.missing) {
@@ -202,7 +203,8 @@
     const link = document.createElement("a");
     link.className = "gallery-item";
     link.dataset.imageId = imageId;
-    link.href = url;
+    // 新标签页/中键打开时拿原图，网格内仍用小图。
+    link.href = imageStreamUrl(imageId, "original");
 
     const image = document.createElement("img");
     image.src = url;
@@ -256,7 +258,7 @@
     const title = currentArtwork ? currentArtwork.title : "";
     lightboxError.hidden = true;
     lightboxImage.hidden = false;
-    lightboxImage.src = imageStreamUrl(imageId);
+    lightboxImage.src = imageStreamUrl(imageId, "regular");
     lightboxImage.alt = `${title || "作品图片"} 第 ${lightboxIndex + 1} 张`;
     lightboxCaption.textContent = `第 ${lightboxIndex + 1} / ${lightboxEntries.length} 张`;
 

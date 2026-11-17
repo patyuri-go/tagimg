@@ -215,7 +215,7 @@
     const thumb = document.createElement("div");
     thumb.className = "thumb";
     const image = document.createElement("img");
-    image.src = `/api/v1/image/${encodeURIComponent(item.id)}`;
+    image.src = `/api/v1/image/${encodeURIComponent(item.id)}?size=thumb`;
     image.alt = "游离图片";
     image.loading = "lazy";
     image.decoding = "async";

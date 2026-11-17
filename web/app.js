@@ -429,8 +429,9 @@
     return value.replace("T", " ").replace("Z", "").slice(0, 16);
   }
 
-  function imageStreamUrl(imageId) {
-    return `/api/v1/image/${encodeURIComponent(imageId)}`;
+  function imageStreamUrl(imageId, size) {
+    const url = `/api/v1/image/${encodeURIComponent(imageId)}`;
+    return size ? `${url}?size=${encodeURIComponent(size)}` : url;
   }
 
   // 先离屏探测图片尺寸，卡片插入前就确定宽高比，避免图片加载后把下方内容顶走。
@@ -463,7 +464,8 @@
         }
       };
       image.onerror = () => finish(null);
-      image.src = imageStreamUrl(imageId);
+      // 等比缩放不会改变宽高比，用 thumb 探测足够，且比原图省带宽。
+      image.src = imageStreamUrl(imageId, "thumb");
     });
     imageSizeCache.set(imageId, promise);
     return promise;
@@ -515,7 +517,7 @@
       },
       { once: true },
     );
-    image.src = imageStreamUrl(thumbInfo.imageId);
+    image.src = imageStreamUrl(thumbInfo.imageId, "small");
     thumb.appendChild(image);
     return thumb;
   }

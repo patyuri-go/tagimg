@@ -545,27 +545,42 @@ void ApiService::handle_schema(
   resource["method"] = "GET";
   resource["path"] = "/api/v1/image/{imageId}";
   resource["description"] =
-      "按图片 ID 返回图片；proxy 模式流式返回原始字节，redirect 模式返回 302 "
-      "到服务端解析好的直链";
+      "按图片 ID 返回图片；size=original 时 proxy 模式流式返回原始字节、"
+      "redirect 模式返回 302 直链；其他 size 预设由服务端等比缩放并编码为 "
+      "AVIF。动图（GIF、动态 WebP、APNG、AVIF 序列）忽略 size，按 "
+      "imageMode 返回原图。";
   resource["body"] = "binary";
   resource["parameters"] = Json::array(
       {{{"name", "storageId"},
         {"in", "query"},
         {"required", false},
         {"description", "只从指定存储节点读取"}},
+       {{"name", "size"},
+        {"in", "query"},
+        {"required", false},
+        {"type", "string"},
+        {"enum",
+         Json::array({"mini", "thumb", "small", "regular", "original"})},
+        {"default", "regular"},
+        {"description",
+         "输出尺寸预设：mini 48px、thumb 250px、small 540px、regular 长边 "
+         "1200px、original 原始字节；非 original 静态图转码为 AVIF，动图"
+         "始终返回原图"}},
        {{"name", "download"},
         {"in", "query"},
         {"required", false},
         {"description",
-         "为 1 时使用 Content-Disposition: attachment，仅 proxy 模式生效"}},
+         "为 1 时使用 Content-Disposition: attachment 并强制 original（忽略 "
+         "size）；redirect 模式仍可能返回 302，不保证 attachment"}},
        {{"name", "requestId"},
         {"in", "query"},
         {"required", false},
         {"description", "回显到错误响应"}}});
   resource["errors"] = Json::array(
       {"INVALID_ARGUMENT", "IMAGE_NOT_FOUND", "ENTITY_NOT_FOUND",
-       "STORAGE_NOT_FOUND", "NOT_IMAGE", "IMAGE_TOO_LARGE", "REPOSITORY_FAILED",
-       "STORAGE_UNAVAILABLE", "SERVICE_UNAVAILABLE"});
+       "STORAGE_NOT_FOUND", "NOT_IMAGE", "IMAGE_TOO_LARGE",
+       "IMAGE_PROCESSING_FAILED", "IMAGE_PROCESSING_TIMEOUT",
+       "REPOSITORY_FAILED", "STORAGE_UNAVAILABLE", "SERVICE_UNAVAILABLE"});
 
   Json body;
   body["transport"] = {{"method", "POST"},
