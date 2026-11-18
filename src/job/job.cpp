@@ -20,8 +20,8 @@ std::string_view to_string(JobError error) noexcept {
     return "FileError";
   case JobError::ImageTooLarge:
     return "ImageTooLarge";
-  case JobError::TaggerUnavailable:
-    return "TaggerUnavailable";
+  case JobError::AiUnavailable:
+    return "AiUnavailable";
   case JobError::TaggingFailed:
     return "TaggingFailed";
   case JobError::EmbeddingFailed:

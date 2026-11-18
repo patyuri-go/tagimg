@@ -88,7 +88,7 @@ StepResult AddJob::step(JobContext &context, const JobRun &run) {
       }
 
       // 已有图片本身就在 images 表中，rescan 时不能按实体查重。
-      auto scan = ScanJob::rescan_entity(context, **entity_id);
+      auto scan = ScanJob::rescan_entity(context, **entity_id, ai_);
       if (!scan) {
         failures_.push_back(ScanFailure{**entity_id, scan.error(), image_id});
         continue;
@@ -102,7 +102,7 @@ StepResult AddJob::step(JobContext &context, const JobRun &run) {
 
   for (const std::string &entity_id : request_.entity_ids) {
     // 实体模式下在下载前检查是否已入库。
-    auto scan = ScanJob::scan_entity(context, entity_id);
+    auto scan = ScanJob::scan_entity(context, entity_id, ai_);
     if (!scan) {
       if (scan.error() == JobError::DuplicateImage) {
         outcome_ = Result<JobOutcome, JobError>::err(scan.error());

@@ -8,6 +8,7 @@
 #include <drogon/drogon.h>
 
 #include "ai/clip_embedder.hpp"
+#include "ai/health.hpp"
 #include "ai/sidecar_process.hpp"
 #include "ai/tagger.hpp"
 #include "common/config.hpp"
@@ -57,6 +58,15 @@ tagimg::SidecarConfig make_sidecar_config(const tagimg::AiConfig &ai,
   return sidecar;
 }
 
+// 远程模式下只根据 host/port 拼 endpoint，不触碰任何本地路径。
+std::string remote_ai_endpoint(const tagimg::AiConfig &ai) {
+  std::string host = ai.host;
+  if (host == "0.0.0.0" || host == "::" || host == "[::]") {
+    host = "127.0.0.1";
+  }
+  return "http://" + host + ":" + std::to_string(ai.port);
+}
+
 } // namespace
 
 int main() {
@@ -102,16 +112,49 @@ int main() {
   }
 
   // sidecar 必须声明在 service 之前：析构顺序相反，先停 worker 再杀 Python。
-  auto sidecar = tagimg::SidecarProcess::start(
-      make_sidecar_config(config->ai, config_dir));
-  if (!sidecar) {
-    std::cerr << "sidecar error: " << tagimg::to_string(sidecar.error())
-              << '\n';
-    return 2;
+  // ai.local=false 时完全不创建 SidecarProcess，也不会校验本地路径。
+  std::unique_ptr<tagimg::SidecarProcess> sidecar;
+  std::string endpoint;
+  if (config->ai.local) {
+    auto started = tagimg::SidecarProcess::start(
+        make_sidecar_config(config->ai, config_dir));
+    if (!started) {
+      std::cerr << "sidecar error: " << tagimg::to_string(started.error())
+                << '\n';
+      return 2;
+    }
+    sidecar = std::move(*started);
+    endpoint = sidecar->endpoint();
+    std::cout << "sidecar " << endpoint << ' '
+              << (sidecar->managed() ? "spawned" : "reused") << std::endl;
+  } else {
+    endpoint = remote_ai_endpoint(config->ai);
+    std::cout << "ai remote " << endpoint << std::endl;
   }
-  const std::string endpoint = (*sidecar)->endpoint();
-  std::cout << "sidecar " << endpoint << ' '
-            << ((*sidecar)->managed() ? "spawned" : "reused") << std::endl;
+
+  if (config->ai.clip_strict_configured) {
+    std::cerr
+        << "warning: ai.clip_strict is deprecated and ignored; CLIP is always "
+           "required"
+        << std::endl;
+  }
+
+  // 远程模式下这次探测失败只打印警告，服务照常启动；具体任务会在
+  // 下载前再做一次预检并返回 AI_UNAVAILABLE。
+  const tagimg::AiHealthClient ai_health(
+      endpoint, std::chrono::milliseconds(config->ai.health_timeout_ms));
+  const auto health = ai_health.check();
+  if (health && health->ready()) {
+    std::cout << "ai models ready" << std::endl;
+  } else if (health) {
+    std::cerr << "warning: ai models not ready (tagger="
+              << (health->tagger_loaded ? "loaded" : "unavailable")
+              << ", clip=" << (health->clip_loaded ? "loaded" : "unavailable")
+              << ')' << std::endl;
+  } else {
+    std::cerr << "warning: ai health check failed: "
+              << tagimg::to_string(health.error()) << std::endl;
+  }
 
   auto tagger = std::make_shared<tagimg::WdTagger>(endpoint);
   // CLIP 与 tagger 共用同一个 sidecar；CPU 上 ViT-L/14 明显更慢，超时单独配置。
@@ -150,7 +193,7 @@ int main() {
   // 扫描任务由 REST 与 GraphQL 共用同一个服务实例。
   auto runtime = std::make_shared<tagimg::ServiceRuntime>(
       entity_repository_shared, tagimg_repository_shared, tagger, embedder,
-      work_dir, config->ai.clip_strict);
+      work_dir, ai_health);
 
   auto service = std::make_shared<tagimg::ApiService>(runtime);
   auto graphql_service = std::make_shared<tagimg::GraphQLService>(

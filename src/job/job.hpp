@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "ai/clip_embedder.hpp"
+#include "ai/health.hpp"
 #include "ai/tagger.hpp"
 #include "common/result.hpp"
 #include "db/entity_repository.hpp"
@@ -28,9 +29,10 @@ enum class JobError {
   DownloadFailed,
   FileError,
   ImageTooLarge,
-  TaggerUnavailable,
+  // AI 服务不可达，或 tagger / CLIP 模型尚未就绪。
+  AiUnavailable,
   TaggingFailed,
-  // 生成 Chinese-CLIP 向量失败；严格模式下会阻塞入库。
+  // 生成 Chinese-CLIP 向量失败；向量是入库前置条件。
   EmbeddingFailed,
   DuplicateImage,
   UnknownTag,
@@ -142,9 +144,8 @@ struct JobContext {
   std::reference_wrapper<const TagimgRepository> tagimg_repository;
   std::reference_wrapper<WdTagger> tagger;
   std::reference_wrapper<ClipEmbedder> embedder;
+  std::reference_wrapper<const AiHealthClient> ai_health;
   std::filesystem::path work_dir;
-  // true 时向量失败会让整单失败；false 时跳过向量继续入库。
-  bool embed_strict = true;
 };
 
 // 一次可执行的工作。

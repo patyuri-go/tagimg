@@ -47,8 +47,13 @@ struct HttpConfig {
 //
 // 相对路径按配置文件所在目录解析。`module` 是 python -m 的模块名。
 struct AiConfig {
+  // true：启动/复用本地 Python sidecar（旧行为）。
+  // false：不启动 Python，只使用 host:port 指向的远程 AI 服务。
+  bool local = true;
   std::string host = "127.0.0.1";
   std::uint16_t port = 8001;
+  // 启动探测与每个任务预检 /health 的超时时间。
+  std::uint32_t health_timeout_ms = 1000;
   std::filesystem::path python = ".venv/bin/python";
   // 传给子进程的 PYTHONPATH。
   std::filesystem::path python_path = "python";
@@ -63,8 +68,10 @@ struct AiConfig {
   std::uint32_t clip_threads = 2;
   // 启动时就加载 CLIP 权重，避免首个扫描任务承担加载耗时。
   bool clip_preload = true;
-  // 向量生成失败时阻塞入库（整单回滚），保证“有图必有向量”。
+  // 已弃用：CLIP 现在始终是入库前置条件，该字段只为兼容旧配置保留。
   bool clip_strict = true;
+  // 配置文件里是否显式写了 clip_strict，用于启动时打印弃用警告。
+  bool clip_strict_configured = false;
   // 单次向量请求超时；CPU 上 ViT-L/14 明显慢于 tagger。
   std::uint32_t clip_timeout_seconds = 60;
   // 等待 sidecar 报告 clip.loaded 的上限，加载 1.6GB 权重需要时间。

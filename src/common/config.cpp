@@ -263,20 +263,26 @@ Result<AppConfig, ConfigError> load_config(const std::filesystem::path &path) {
       return std::nullopt;
     };
 
+    if (const auto error = read_boolean("local", config.ai.local)) {
+      return *error;
+    }
     if (const auto error = read_string("host", config.ai.host)) {
       return *error;
     }
     if (const auto error = read_string("module", config.ai.module)) {
       return *error;
     }
-    if (const auto error = read_path("python", config.ai.python)) {
-      return *error;
-    }
-    if (const auto error = read_path("python_path", config.ai.python_path)) {
-      return *error;
-    }
-    if (const auto error = read_path("model_dir", config.ai.model_dir)) {
-      return *error;
+    // 远程模式下不启动 Python，因此本地路径可以缺省甚至为空。
+    if (config.ai.local) {
+      if (const auto error = read_path("python", config.ai.python)) {
+        return *error;
+      }
+      if (const auto error = read_path("python_path", config.ai.python_path)) {
+        return *error;
+      }
+      if (const auto error = read_path("model_dir", config.ai.model_dir)) {
+        return *error;
+      }
     }
 
     std::uint32_t port_value = config.ai.port;
@@ -285,6 +291,11 @@ Result<AppConfig, ConfigError> load_config(const std::filesystem::path &path) {
     }
     config.ai.port = static_cast<std::uint16_t>(port_value);
 
+    if (const auto error =
+            read_integer("health_timeout_ms", 100, 10000,
+                         config.ai.health_timeout_ms)) {
+      return *error;
+    }
     if (const auto error = read_integer("threads", 1, 64, config.ai.threads)) {
       return *error;
     }
@@ -293,8 +304,11 @@ Result<AppConfig, ConfigError> load_config(const std::filesystem::path &path) {
       return *error;
     }
 
-    if (const auto error = read_path("clip_model_dir", config.ai.clip_model_dir)) {
-      return *error;
+    if (config.ai.local) {
+      if (const auto error =
+              read_path("clip_model_dir", config.ai.clip_model_dir)) {
+        return *error;
+      }
     }
     if (const auto error =
             read_integer("clip_threads", 1, 64, config.ai.clip_threads)) {
@@ -306,6 +320,7 @@ Result<AppConfig, ConfigError> load_config(const std::filesystem::path &path) {
     if (const auto error = read_boolean("clip_strict", config.ai.clip_strict)) {
       return *error;
     }
+    config.ai.clip_strict_configured = ai->contains("clip_strict");
     if (const auto error = read_integer("clip_timeout_seconds", 1, 600,
                                         config.ai.clip_timeout_seconds)) {
       return *error;

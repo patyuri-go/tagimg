@@ -3,6 +3,7 @@
 #include <optional>
 #include <vector>
 
+#include "job/ai_preflight.hpp"
 #include "job/job.hpp"
 
 namespace tagimg {
@@ -33,6 +34,8 @@ private:
   std::vector<ScanResult> scans_;
   std::vector<ScanFailure> failures_;
   std::optional<Result<JobOutcome, JobError>> outcome_;
+  // 整个 add 任务共享一次 /health 预检。
+  AiPreflight ai_;
 };
 
 } // namespace tagimg

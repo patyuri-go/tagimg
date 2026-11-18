@@ -7,6 +7,8 @@
 
 namespace tagimg {
 
+class AiPreflight;
+
 // 扫描单个实体：确认是图片、从 WebDAV 下载到临时文件、调用 tagger。
 //
 // 下载成功后临时文件在扫描结束（对象析构）时自动删除。step() 本身会
@@ -19,9 +21,18 @@ public:
   [[nodiscard]] static Result<ScanResult, JobError>
   scan_entity(JobContext &context, const std::string &entity_id);
 
+  // 复用调用方的一次 AI 预检；批量 add 用这个重载，避免逐张探测 /health。
+  [[nodiscard]] static Result<ScanResult, JobError>
+  scan_entity(JobContext &context, const std::string &entity_id,
+              AiPreflight &ai);
+
   // 重新扫描已有图片对应的实体，不检查实体是否已经入库。
   [[nodiscard]] static Result<ScanResult, JobError>
   rescan_entity(JobContext &context, const std::string &entity_id);
+
+  [[nodiscard]] static Result<ScanResult, JobError>
+  rescan_entity(JobContext &context, const std::string &entity_id,
+                AiPreflight &ai);
 
   [[nodiscard]] StepResult step(JobContext &context,
                                 const JobRun &run) override;
@@ -30,7 +41,8 @@ public:
 
 private:
   [[nodiscard]] Result<ScanResult, JobError> scan(JobContext &context,
-                                                  bool check_duplicate);
+                                                  bool check_duplicate,
+                                                  AiPreflight &ai);
 
   [[nodiscard]] Result<ScanResult, JobError>
   scan_location(JobContext &context, const WebdavLocation &location);

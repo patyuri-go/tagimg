@@ -70,8 +70,8 @@ const char *job_error_code(JobError error) {
     return "FILE_ERROR";
   case JobError::ImageTooLarge:
     return "IMAGE_TOO_LARGE";
-  case JobError::TaggerUnavailable:
-    return "TAGGER_UNAVAILABLE";
+  case JobError::AiUnavailable:
+    return "AI_UNAVAILABLE";
   case JobError::TaggingFailed:
     return "TAGGING_FAILED";
   case JobError::DuplicateImage:
@@ -95,7 +95,7 @@ bool job_error_retryable(JobError error) {
   switch (error) {
   case JobError::RepositoryFailed:
   case JobError::DownloadFailed:
-  case JobError::TaggerUnavailable:
+  case JobError::AiUnavailable:
   case JobError::TaggingFailed:
   case JobError::WriteFailed:
   case JobError::InternalError:
@@ -124,8 +124,8 @@ std::string job_error_message(JobError error) {
     return "temporary file error";
   case JobError::ImageTooLarge:
     return "image exceeds the size limit";
-  case JobError::TaggerUnavailable:
-    return "tagger sidecar is unavailable";
+  case JobError::AiUnavailable:
+    return "AI service is unavailable or models are not ready";
   case JobError::TaggingFailed:
     return "image tagging failed";
   case JobError::DuplicateImage:
@@ -537,7 +537,7 @@ void ApiService::handle_schema(
   operation["errors"] = Json::array(
       {"INVALID_ARGUMENT", "INVALID_ENTITY_ID", "ENTITY_NOT_FOUND", "NOT_IMAGE",
        "IMAGE_TOO_LARGE", "REPOSITORY_FAILED", "DOWNLOAD_FAILED", "FILE_ERROR",
-       "TAGGER_UNAVAILABLE", "TAGGING_FAILED", "DUPLICATE_IMAGE", "UNKNOWN_TAG",
+       "AI_UNAVAILABLE", "TAGGING_FAILED", "DUPLICATE_IMAGE", "UNKNOWN_TAG",
        "UNKNOWN_ARTIST", "TAG_HIERARCHY_MISSING", "WRITE_FAILED",
        "INTERNAL_ERROR", "TIMEOUT"});
 

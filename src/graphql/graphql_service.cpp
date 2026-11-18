@@ -844,7 +844,7 @@ public:
       // 这里同步调用 sidecar 编码文本，会阻塞当前线程直到返回。
       auto embedding = clip_embedder_->embed_text(*sort_text);
       if (!embedding) {
-        fail("SERVICE_UNAVAILABLE",
+        fail("AI_UNAVAILABLE",
              std::string("failed to embed sortText: ") +
                  std::string(to_string(embedding.error())));
       }
@@ -1329,9 +1329,9 @@ Value attach_error_codes(Value response) {
 
   static constexpr std::string_view kWrapper = "unknown error: ";
   static constexpr std::string_view kCodes[] = {
-      "INVALID_ARGUMENT", "SERVICE_UNAVAILABLE", "INTERNAL_ERROR",
-      "QUERY_FAILED",     "UNKNOWN_TAG",         "UNKNOWN_ARTIST",
-      "NOT_FOUND"};
+      "INVALID_ARGUMENT", "SERVICE_UNAVAILABLE", "AI_UNAVAILABLE",
+      "INTERNAL_ERROR",   "QUERY_FAILED",        "UNKNOWN_TAG",
+      "UNKNOWN_ARTIST",   "NOT_FOUND"};
 
   auto fields = response.release<MapType>();
   for (auto &[name, value] : fields) {

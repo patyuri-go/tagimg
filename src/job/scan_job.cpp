@@ -9,6 +9,7 @@
 
 #include "io/byte_stream.hpp"
 #include "io/temp_file.hpp"
+#include "job/ai_preflight.hpp"
 
 namespace tagimg {
 namespace {
@@ -47,7 +48,7 @@ JobError map_tagger_error(TaggerError error) {
   switch (error) {
   case TaggerError::SidecarUnavailable:
   case TaggerError::Timeout:
-    return JobError::TaggerUnavailable;
+    return JobError::AiUnavailable;
   case TaggerError::ImageTooLarge:
     return JobError::ImageTooLarge;
   case TaggerError::FileReadError:
@@ -58,6 +59,25 @@ JobError map_tagger_error(TaggerError error) {
     return JobError::TaggingFailed;
   }
   return JobError::TaggingFailed;
+}
+
+JobError map_embedder_error(EmbedderError error) {
+  switch (error) {
+  case EmbedderError::SidecarUnavailable:
+  case EmbedderError::Timeout:
+    return JobError::AiUnavailable;
+  case EmbedderError::ImageTooLarge:
+    return JobError::ImageTooLarge;
+  case EmbedderError::FileReadError:
+    return JobError::FileError;
+  case EmbedderError::InvalidImage:
+  case EmbedderError::InvalidText:
+  case EmbedderError::HttpError:
+  case EmbedderError::InvalidResponse:
+  case EmbedderError::DimensionMismatch:
+    return JobError::EmbeddingFailed;
+  }
+  return JobError::EmbeddingFailed;
 }
 
 JobError map_tagimg_lookup_error(TagimgRepositoryError error) {
@@ -94,19 +114,34 @@ ScanJob::ScanJob(std::string entity_id) : entity_id_(std::move(entity_id)) {
 
 Result<ScanResult, JobError>
 ScanJob::scan_entity(JobContext &context, const std::string &entity_id) {
+  AiPreflight ai;
+  return scan_entity(context, entity_id, ai);
+}
+
+Result<ScanResult, JobError>
+ScanJob::scan_entity(JobContext &context, const std::string &entity_id,
+                     AiPreflight &ai) {
   ScanJob job(entity_id);
-  return job.scan(context, true);
+  return job.scan(context, true, ai);
 }
 
 Result<ScanResult, JobError>
 ScanJob::rescan_entity(JobContext &context, const std::string &entity_id) {
+  AiPreflight ai;
+  return rescan_entity(context, entity_id, ai);
+}
+
+Result<ScanResult, JobError>
+ScanJob::rescan_entity(JobContext &context, const std::string &entity_id,
+                       AiPreflight &ai) {
   ScanJob job(entity_id);
-  return job.scan(context, false);
+  return job.scan(context, false, ai);
 }
 
 StepResult ScanJob::step(JobContext &context, const JobRun &run) {
   (void)run;
-  result_ = scan(context, true);
+  AiPreflight ai;
+  result_ = scan(context, true, ai);
   return StepResult::Done;
 }
 
@@ -121,7 +156,8 @@ Result<JobOutcome, JobError> ScanJob::take_outcome() {
 }
 
 Result<ScanResult, JobError> ScanJob::scan(JobContext &context,
-                                           bool check_duplicate) {
+                                           bool check_duplicate,
+                                           AiPreflight &ai) {
   const EntityRepository &repository = context.entity_repository.get();
 
   auto metadata = repository.find_entity(entity_id_);
@@ -144,6 +180,12 @@ Result<ScanResult, JobError> ScanJob::scan(JobContext &context,
     if (*exists) {
       return JobError::DuplicateImage;
     }
+  }
+
+  // 下载前确认 AI 可用。这里的预检按 job 缓存：批量 add 的多次调用
+  // 只会真正请求一次 /health。
+  if (!ai.ensure(context)) {
+    return JobError::AiUnavailable;
   }
 
   auto locations = repository.find_webdav_locations(entity_id_);
@@ -211,10 +253,8 @@ ScanJob::scan_location(JobContext &context, const WebdavLocation &location) {
   // 复用同一个临时文件生成向量，不重复下载。
   auto embedding = context.embedder.get().embed_file(file->path());
   if (!embedding) {
-    // 严格模式下向量是入库前置条件，缺失直接让整单失败。
-    if (context.embed_strict) {
-      return JobError::EmbeddingFailed;
-    }
+    // CLIP 向量是入库前置条件，缺失直接让整单失败。
+    return map_embedder_error(embedding.error());
   }
 
   ScanResult result;

@@ -3,6 +3,7 @@
 #include <optional>
 #include <string>
 
+#include "job/ai_preflight.hpp"
 #include "job/job.hpp"
 
 namespace tagimg {
@@ -24,6 +25,8 @@ public:
 private:
   RescanArtworkRequest request_;
   std::optional<Result<JobOutcome, JobError>> outcome_;
+  // 整个 rescan 任务共享一次 /health 预检。
+  AiPreflight ai_;
 };
 
 } // namespace tagimg

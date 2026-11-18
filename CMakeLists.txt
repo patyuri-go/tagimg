@@ -31,6 +31,7 @@ pkg_check_modules(VIPS REQUIRED IMPORTED_TARGET vips)
 
 add_library(tagimg_ai STATIC
     src/ai/clip_embedder.cpp
+    src/ai/health.cpp
     src/ai/sidecar_process.cpp
     src/ai/tagger.cpp
 )
@@ -134,6 +135,7 @@ target_link_libraries(tagimg_image PUBLIC
 
 add_library(tagimg_job STATIC
     src/job/add_job.cpp
+    src/job/ai_preflight.cpp
     src/job/job.cpp
     src/job/job_worker.cpp
     src/job/rescan_artwork_job.cpp

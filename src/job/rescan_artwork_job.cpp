@@ -93,7 +93,7 @@ StepResult RescanArtworkJob::step(JobContext &context, const JobRun &run) {
       break;
     }
 
-    auto scan = ScanJob::rescan_entity(context, **entity_id);
+    auto scan = ScanJob::rescan_entity(context, **entity_id, ai_);
     if (!scan) {
       result.failures.push_back(
           ScanFailure{**entity_id, scan.error(), image_id});

@@ -11,6 +11,7 @@
 #include <nlohmann/json.hpp>
 
 #include "ai/clip_embedder.hpp"
+#include "ai/health.hpp"
 #include "ai/tagger.hpp"
 #include "common/config.hpp"
 #include "db/entity_repository.hpp"
@@ -100,9 +101,11 @@ int main(int argc, char **argv) {
 
   tagimg::WdTagger tagger(endpoint);
   tagimg::ClipEmbedder embedder(endpoint);
+  tagimg::AiHealthClient ai_health(endpoint);
   tagimg::JobContext context{std::cref(**repository),
                              std::cref(**tagimg_repository), std::ref(tagger),
-                             std::ref(embedder), work_dir};
+                             std::ref(embedder), std::cref(ai_health),
+                             work_dir};
 
   tagimg::JobWorker worker(context);
 

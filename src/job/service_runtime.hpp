@@ -20,7 +20,7 @@ public:
                  std::shared_ptr<WdTagger> tagger,
                  std::shared_ptr<ClipEmbedder> embedder,
                  std::filesystem::path work_dir,
-                 bool embed_strict = true);
+                 const AiHealthClient &ai_health);
 
   ~ServiceRuntime();
 
