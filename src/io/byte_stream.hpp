@@ -32,23 +32,6 @@ enum class ByteStreamError {
 
 [[nodiscard]] std::string_view to_string(ByteStreamError error) noexcept;
 
-// 跟随上游重定向直到拿到最终直链时的错误。
-enum class RedirectResolveError {
-  InvalidUrl,
-  RequestFailed,
-  HttpError,
-  TooManyRedirects,
-};
-
-[[nodiscard]] std::string_view to_string(RedirectResolveError error) noexcept;
-
-// 跟随 URL 上的所有重定向，返回最终可直连的绝对地址。
-//
-// 使用 Range: bytes=0-0 的 GET 探测：预签名地址通常只允许 GET，
-// 且拿到首块数据后立即中止，不会真的把整个文件下载下来。
-[[nodiscard]] Result<std::string, RedirectResolveError>
-resolve_redirect_url(const std::string &url);
-
 // 顺序读取字节的抽象。read() 返回 0 表示流正常结束，返回错误表示
 // 连接中断、HTTP 失败或超过大小限制。
 class ByteStream {
@@ -73,31 +56,30 @@ struct ByteStreamOptions {
   std::chrono::seconds idle_timeout{30};
 };
 
-// WebDAV 直链的字节流。
+// 上游 HTTP 内容流的字节流。
 //
 // 内部用一个后台线程执行 libcurl 传输，写回调把数据放进有界队列，
 // read() 从队列取数据。因此内存占用只与队列长度有关，不会把整个
-// 文件读进内存。URL 里可以直接带 user:password，libcurl 会把它当成
-// HTTP Basic 凭据。对象析构时中断传输并回收线程。
-class WebdavByteStream final : public ByteStream {
+// 文件读进内存。对象析构时中断传输并回收线程。
+class HttpByteStream final : public ByteStream {
 public:
-  static Result<std::unique_ptr<WebdavByteStream>, ByteStreamError>
+  static Result<std::unique_ptr<HttpByteStream>, ByteStreamError>
   open(std::string url, ByteStreamOptions options = {});
 
-  ~WebdavByteStream() override;
+  ~HttpByteStream() override;
 
-  WebdavByteStream(const WebdavByteStream &) = delete;
-  WebdavByteStream &operator=(const WebdavByteStream &) = delete;
-  WebdavByteStream(WebdavByteStream &&) = delete;
-  WebdavByteStream &operator=(WebdavByteStream &&) = delete;
+  HttpByteStream(const HttpByteStream &) = delete;
+  HttpByteStream &operator=(const HttpByteStream &) = delete;
+  HttpByteStream(HttpByteStream &&) = delete;
+  HttpByteStream &operator=(HttpByteStream &&) = delete;
 
   [[nodiscard]] Result<std::size_t, ByteStreamError>
   read(std::span<std::byte> buffer) override;
 
   // 等到首批数据到达或传输结束，用于在发出响应前确认节点确实可用。
   //
-  // open() 只是启动后台传输，HTTP 状态码要等传输开始才知道，所以需要
-  // 这一步。已有数据排队时视为成功，数据不会被消耗。
+  // open() 只是启动后台传输，HTTP 状态码与响应头要等传输开始才知道，
+  // 所以需要这一步。已有数据排队时视为成功，数据不会被消耗。
   [[nodiscard]] Result<void, ByteStreamError> wait_started();
 
   // 中断传输并唤醒阻塞中的 read()/wait_started()。
@@ -108,14 +90,24 @@ public:
   // 已经从网络收到的总字节数，包含还没被 read() 取走的部分。
   [[nodiscard]] std::uint64_t bytes_received() const noexcept;
 
+  // 上游最终响应的 Content-Type / Content-Length；缺失时分别为空/nullopt。
+  [[nodiscard]] std::string content_type() const;
+  [[nodiscard]] std::optional<std::uint64_t> content_length() const;
+
+  // 上游最终 HTTP 状态码；wait_started() 失败时也能取到。
+  [[nodiscard]] long http_status() const;
+
 private:
   // 队列里最多保留的块数，每块通常不超过 16 KB。
   static constexpr std::size_t kMaxQueuedChunks = 8;
 
-  WebdavByteStream(std::string url, ByteStreamOptions options, void *handle);
+  HttpByteStream(std::string url, ByteStreamOptions options, void *handle);
 
   static std::size_t write_callback(char *data, std::size_t size,
                                     std::size_t count, void *user_data);
+
+  static std::size_t header_callback(char *data, std::size_t size,
+                                     std::size_t count, void *user_data);
 
   // curl 的进度回调，返回非 0 会中断传输；析构时用它打断还在跑的下载。
   static int progress_callback(void *user_data, std::int64_t download_total,
@@ -125,6 +117,9 @@ private:
 
   // libcurl 写回调的入口，返回实际接收的字节数，返回 0 表示中止传输。
   std::size_t on_data(const char *data, std::size_t size);
+
+  // 解析一行响应头；返回 false 会中止传输。
+  bool on_header(std::string_view line);
 
   // 后台线程：执行 curl_easy_perform，结束后标记流状态。
   void run();
@@ -144,6 +139,12 @@ private:
   bool finished_ = false;
   bool aborted_ = false;
   std::optional<ByteStreamError> error_;
+
+  // 响应头与状态码由 header 回调写入，单独加锁避免和队列等待互相阻塞。
+  mutable std::mutex header_mutex_;
+  std::string content_type_;
+  std::optional<std::uint64_t> content_length_;
+  long http_status_ = 0;
 };
 
 } // namespace tagimg

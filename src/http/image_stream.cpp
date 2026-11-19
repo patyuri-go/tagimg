@@ -104,11 +104,10 @@ std::string content_disposition(std::string_view image_id,
   return value;
 }
 
-std::string make_etag(std::string_view image_id, std::uint64_t size,
-                      ImageSizePreset preset,
+std::string make_etag(std::string_view image_id, ImageSizePreset preset,
                       const ImageProcessingConfig &processing) {
-  std::string value = '"' + std::string(image_id) + '-' + std::to_string(size) +
-                      '-' + std::string(to_string(preset));
+  std::string value = '"' + std::string(image_id) + '-' +
+                      std::string(to_string(preset));
   if (preset != ImageSizePreset::Original) {
     value += "-q";
     value += std::to_string(processing.quality);
@@ -151,6 +150,23 @@ bool is_image_mime(std::string_view mime_type) {
   return mime_type.rfind("image/", 0) == 0;
 }
 
+// 去掉 Content-Type 的参数部分和首尾空白，得到纯媒体类型。
+std::string media_type(std::string_view content_type) {
+  const std::size_t semicolon = content_type.find(';');
+  std::string_view value = content_type.substr(0, semicolon);
+  while (!value.empty() &&
+         (value.front() == ' ' || value.front() == '\t' ||
+          value.front() == '\r' || value.front() == '\n')) {
+    value.remove_prefix(1);
+  }
+  while (!value.empty() &&
+         (value.back() == ' ' || value.back() == '\t' ||
+          value.back() == '\r' || value.back() == '\n')) {
+    value.remove_suffix(1);
+  }
+  return std::string(value);
+}
+
 void log_vips_error(std::string_view context) {
   const char *message = vips_error_buffer();
   std::cerr << "image streamer: " << context;
@@ -183,7 +199,7 @@ bool image_is_animated(VipsImage *image, std::string_view mime_type) {
 }
 
 struct SourceContext {
-  std::shared_ptr<WebdavByteStream> stream;
+  std::shared_ptr<HttpByteStream> stream;
   std::atomic<bool> *stop = nullptr;
   bool failed = false;
 };
@@ -299,7 +315,7 @@ private:
 struct ImageStreamer::Impl : std::enable_shared_from_this<ImageStreamer::Impl> {
   struct StreamSession {
     std::string image_id;
-    std::shared_ptr<WebdavByteStream> stream;
+    std::shared_ptr<HttpByteStream> stream;
     VipsImagePtr image;
     VipsSourcePtr source;
     std::atomic<bool> stop{false};
@@ -317,13 +333,13 @@ struct ImageStreamer::Impl : std::enable_shared_from_this<ImageStreamer::Impl> {
     TimedOut,
   };
 
-  Impl(std::shared_ptr<const EntityRepository> entities_repository,
-       std::shared_ptr<const TagimgRepository> image_repository,
-       ImageStreamMode stream_mode, ImageProcessingConfig processing_config,
+  Impl(std::shared_ptr<const TagimgRepository> image_repository,
+       StorageConfig storage_config, ImageStreamMode stream_mode,
+       ImageProcessingConfig processing_config,
        std::filesystem::path work_dir_value)
-      : entities(std::move(entities_repository)),
-        images(std::move(image_repository)), mode(stream_mode),
-        processing(processing_config), work_dir(std::move(work_dir_value)) {
+      : images(std::move(image_repository)), storage(std::move(storage_config)),
+        mode(stream_mode), processing(processing_config),
+        work_dir(std::move(work_dir_value)) {
     const std::uint32_t count =
         processing.max_concurrency == 0 ? 1 : processing.max_concurrency;
     encode_limit = count;
@@ -337,8 +353,8 @@ struct ImageStreamer::Impl : std::enable_shared_from_this<ImageStreamer::Impl> {
     shutdown();
   }
 
-  std::shared_ptr<const EntityRepository> entities;
   std::shared_ptr<const TagimgRepository> images;
+  StorageConfig storage;
   ImageStreamMode mode = ImageStreamMode::Proxy;
   ImageProcessingConfig processing;
   std::filesystem::path work_dir;
@@ -381,28 +397,26 @@ struct ImageStreamer::Impl : std::enable_shared_from_this<ImageStreamer::Impl> {
                std::function<void(const drogon::HttpResponsePtr &)> callback);
 
   ProcessResult process_streaming(
-      const std::shared_ptr<StreamSession> &session,
-      const WebdavLocation &location, const EntityMetadata &metadata,
-      const ImageStreamOptions &options, const std::string &etag,
-      Clock::time_point deadline,
+      const std::shared_ptr<StreamSession> &session, const std::string &url,
+      const std::string &mime_type, const ImageStreamOptions &options,
+      const std::string &etag, Clock::time_point deadline,
       std::function<void(const drogon::HttpResponsePtr &)> callback);
 
   ProcessResult process_temp(
-      const std::shared_ptr<StreamSession> &session,
-      const WebdavLocation &location, const EntityMetadata &metadata,
-      const ImageStreamOptions &options, const std::string &etag,
-      Clock::time_point deadline,
+      const std::shared_ptr<StreamSession> &session, const std::string &url,
+      const std::string &mime_type, const ImageStreamOptions &options,
+      const std::string &etag, Clock::time_point deadline,
       std::function<void(const drogon::HttpResponsePtr &)> callback);
 
   void respond_ok(
       const std::shared_ptr<StreamSession> &session,
-      const EntityMetadata &metadata, const ImageStreamOptions &options,
+      const std::string &mime_type, const ImageStreamOptions &options,
       std::string etag,
       const std::function<void(const drogon::HttpResponsePtr &)> &callback);
 
   void respond_temp_ok(
       const std::shared_ptr<StreamSession> &session, TempFilePtr temp,
-      const EntityMetadata &metadata, const ImageStreamOptions &options,
+      const std::string &mime_type, const ImageStreamOptions &options,
       std::string etag,
       const std::function<void(const drogon::HttpResponsePtr &)> &callback);
 
@@ -413,9 +427,9 @@ struct ImageStreamer::Impl : std::enable_shared_from_this<ImageStreamer::Impl> {
       std::string etag, Clock::time_point deadline,
       const std::function<void(const drogon::HttpResponsePtr &)> &callback);
 
-  // 302 模式下把解析出的直链交给客户端。
+  // 302 模式下把上游内容地址交给客户端直连。
   void respond_redirect(
-      const std::shared_ptr<StreamSession> &session, std::string location,
+      const std::shared_ptr<StreamSession> &session, std::string url,
       const std::function<void(const drogon::HttpResponsePtr &)> &callback);
 
   // 在 IO 线程构造错误响应；可以安全地从工作线程调用。
@@ -444,7 +458,7 @@ struct ImageStreamer::Impl : std::enable_shared_from_this<ImageStreamer::Impl> {
     drogon::app().getLoop()->runInLoop(std::move(task));
   }
 
-  std::shared_ptr<WebdavByteStream> session_stream(
+  std::shared_ptr<HttpByteStream> session_stream(
       const std::shared_ptr<StreamSession> &session) {
     std::lock_guard lock(mutex);
     return session->stream;
@@ -492,16 +506,6 @@ void ImageStreamer::Impl::handle(
                          single_error(error_object(
                              "INVALID_ARGUMENT", "image id is not a valid uuid",
                              Json(), {{"retryable", false}})));
-    callback(json_response(std::move(body), drogon::k400BadRequest));
-    return;
-  }
-
-  if (!options.storage_id.empty() && !is_uuid(options.storage_id)) {
-    auto body =
-        envelope(options.request_id, nullptr,
-                 single_error(error_object("INVALID_ARGUMENT",
-                                           "storageId is not a valid uuid",
-                                           Json(), {{"retryable", false}})));
     callback(json_response(std::move(body), drogon::k400BadRequest));
     return;
   }
@@ -578,48 +582,23 @@ void ImageStreamer::Impl::resolve(
     return;
   }
 
-  const auto metadata = entities->find_entity(**entity_id);
-  if (!metadata) {
-    switch (metadata.error()) {
-    case EntityRepositoryError::NotFound:
-      fail(session, options, drogon::k404NotFound, "ENTITY_NOT_FOUND",
-           "entity not found", false, callback);
-      return;
-    case EntityRepositoryError::InvalidEntityId:
-      fail(session, options, drogon::k400BadRequest, "INVALID_ARGUMENT",
-           "entity id is not a valid uuid", false, callback);
-      return;
-    case EntityRepositoryError::ConnectionFailed:
-    case EntityRepositoryError::QueryFailed:
-      fail(session, options, drogon::k503ServiceUnavailable,
-           "REPOSITORY_FAILED", "entity repository query failed", true,
-           callback);
-      return;
-    }
-    fail(session, options, drogon::k503ServiceUnavailable, "REPOSITORY_FAILED",
-         "entity repository query failed", true, callback);
-    return;
-  }
-
-  if (!is_image_mime(metadata->mime_type)) {
-    fail(session, options, drogon::k415UnsupportedMediaType, "NOT_IMAGE",
-         "entity is not an image", false, callback);
-    return;
-  }
-
-  // 超过单流上限时直接拒绝，避免传输到一半才中断。
-  if (metadata->size > kMaxImageBytes) {
-    fail(session, options, drogon::k413RequestEntityTooLarge, "IMAGE_TOO_LARGE",
-         "image exceeds the size limit", false, callback);
-    return;
-  }
-
+  // 上游内容端点直接按实体 ID 取原始字节，不再查实体库。
+  const std::string url = entity_content_url(storage, **entity_id);
   const bool original = options.preset == ImageSizePreset::Original;
-  // original 在 redirect 模式下直接返回 302；其他预设无论如何都要服务端
-  // 拉到字节后转码，因此同样适用 ETag/304。
-  const bool proxied = mode == ImageStreamMode::Proxy || !original;
+  // 只有内联原图走 302；download 和需要转码的预设都由服务端代理。
+  if (mode == ImageStreamMode::Redirect && original && !options.download) {
+    auto self = shared_from_this();
+    post([self, session, url, callback = std::move(callback)]() mutable {
+      self->respond_redirect(session, url, callback);
+    });
+    return;
+  }
+
+  // 只有 302 不经过服务端处理；其余响应都适用 ETag/304。
+  const bool proxied =
+      !(mode == ImageStreamMode::Redirect && original && !options.download);
   const std::string etag =
-      make_etag(session->image_id, metadata->size, options.preset, processing);
+      make_etag(session->image_id, options.preset, processing);
   if (proxied && options.if_none_match &&
       etag_matches(*options.if_none_match, etag)) {
     post([callback, etag]() mutable {
@@ -638,124 +617,97 @@ void ImageStreamer::Impl::resolve(
     return;
   }
 
-  const auto locations = entities->find_webdav_locations(**entity_id);
-  if (!locations) {
-    if (locations.error() == EntityRepositoryError::NotFound) {
+  auto opened = HttpByteStream::open(url);
+  if (!opened) {
+    const bool too_large = opened.error() == ByteStreamError::TooLarge;
+    fail(session, options,
+         too_large ? drogon::k413RequestEntityTooLarge
+                   : drogon::k503ServiceUnavailable,
+         too_large ? "IMAGE_TOO_LARGE" : "STORAGE_UNAVAILABLE",
+         too_large ? "image exceeds the size limit"
+                   : "storage service is unavailable",
+         !too_large, callback);
+    return;
+  }
+
+  // 确认上游真的开始返回数据；HTTP 状态码与响应头到这里才可知。
+  const auto started = (*opened)->wait_started();
+  if (!started) {
+    if (started.error() == ByteStreamError::TooLarge) {
+      fail(session, options, drogon::k413RequestEntityTooLarge,
+           "IMAGE_TOO_LARGE", "image exceeds the size limit", false, callback);
+      return;
+    }
+    if ((*opened)->http_status() == 404) {
       fail(session, options, drogon::k404NotFound, "STORAGE_NOT_FOUND",
-           "no available storage location", false, callback);
-    } else {
-      fail(session, options, drogon::k503ServiceUnavailable,
-           "REPOSITORY_FAILED", "entity repository query failed", true,
+           "entity content not found", false, callback);
+      return;
+    }
+    fail(session, options, drogon::k503ServiceUnavailable,
+         "STORAGE_UNAVAILABLE", "storage service is unavailable", true,
+         callback);
+    return;
+  }
+
+  auto source = std::shared_ptr<HttpByteStream>(std::move(*opened));
+  const std::string mime_type = media_type(source->content_type());
+  if (!mime_type.empty() && !is_image_mime(mime_type)) {
+    fail(session, options, drogon::k502BadGateway, "STORAGE_INVALID_RESPONSE",
+         "storage service did not return an image", false, callback);
+    return;
+  }
+  const auto content_length = source->content_length();
+  if (content_length && *content_length > kMaxImageBytes) {
+    fail(session, options, drogon::k413RequestEntityTooLarge, "IMAGE_TOO_LARGE",
+         "image exceeds the size limit", false, callback);
+    return;
+  }
+
+  {
+    std::lock_guard lock(mutex);
+    session->stream = source;
+  }
+  if (session->stop.load(std::memory_order_relaxed)) {
+    finish(session);
+    return;
+  }
+
+  if (original) {
+    auto self = shared_from_this();
+    post([self, session, mime_type, options, etag,
+          callback = std::move(callback)]() mutable {
+      self->respond_ok(session, mime_type, options, std::move(etag), callback);
+    });
+    return;
+  }
+
+  auto result = process_streaming(session, url, mime_type, options, etag,
+                                  deadline, callback);
+  if (result == ProcessResult::Fallback) {
+    result = process_temp(session, url, mime_type, options, etag, deadline,
+                          callback);
+  }
+  if (result == ProcessResult::Retry) {
+    fail(session, options, drogon::k503ServiceUnavailable,
+         "STORAGE_UNAVAILABLE", "storage service is unavailable", true,
+         callback);
+    return;
+  }
+  if (result == ProcessResult::TimedOut) {
+    if (session->timed_out.load(std::memory_order_relaxed)) {
+      fail(session, options, drogon::k504GatewayTimeout,
+           "IMAGE_PROCESSING_TIMEOUT", "image processing timed out", false,
            callback);
-    }
-    return;
-  }
-
-  bool matched_storage = false;
-  std::optional<ByteStreamError> last_error;
-  for (const WebdavLocation &location : *locations) {
-    if (!options.storage_id.empty() &&
-        location.storage_id != options.storage_id) {
-      continue;
-    }
-    matched_storage = true;
-    if (session->stop.load(std::memory_order_relaxed)) {
+    } else {
       finish(session);
-      return;
     }
-
-    if (mode == ImageStreamMode::Redirect && original) {
-      // 先跟随上游全部重定向拿到最终直链，再让客户端直接访问。
-      const auto resolved = resolve_redirect_url(location.url);
-      if (!resolved) {
-        continue;
-      }
-      if (session->stop.load(std::memory_order_relaxed)) {
-        finish(session);
-        return;
-      }
-      auto self = shared_from_this();
-      post([self, session, location = *resolved,
-            callback = std::move(callback)]() mutable {
-        self->respond_redirect(session, std::move(location), callback);
-      });
-      return;
-    }
-
-    auto opened = WebdavByteStream::open(location.url);
-    if (!opened) {
-      last_error = opened.error();
-      continue;
-    }
-    // 确认节点真的开始返回数据，否则换下一个位置。
-    const auto started = (*opened)->wait_started();
-    if (!started) {
-      last_error = started.error();
-      continue;
-    }
-
-    auto source = std::shared_ptr<WebdavByteStream>(std::move(*opened));
-    {
-      std::lock_guard lock(mutex);
-      session->stream = source;
-    }
-    if (session->stop.load(std::memory_order_relaxed)) {
-      finish(session);
-      return;
-    }
-
-    if (original) {
-      auto self = shared_from_this();
-      post([self, session, metadata = *metadata, options, etag,
-            callback = std::move(callback)]() mutable {
-        self->respond_ok(session, metadata, options, std::move(etag), callback);
-      });
-      return;
-    }
-
-    auto result = process_streaming(session, location, *metadata, options, etag,
-                                    deadline, callback);
-    if (result == ProcessResult::Fallback) {
-      result = process_temp(session, location, *metadata, options, etag,
-                            deadline, callback);
-    }
-    if (result == ProcessResult::Retry) {
-      continue;
-    }
-    if (result == ProcessResult::TimedOut) {
-      if (session->timed_out.load(std::memory_order_relaxed)) {
-        fail(session, options, drogon::k504GatewayTimeout,
-             "IMAGE_PROCESSING_TIMEOUT", "image processing timed out", false,
-             callback);
-      } else {
-        finish(session);
-      }
-      return;
-    }
-    return;
   }
-
-  if (!matched_storage) {
-    fail(session, options, drogon::k404NotFound, "STORAGE_NOT_FOUND",
-         "no available storage location", false, callback);
-    return;
-  }
-
-  const bool too_large = last_error == ByteStreamError::TooLarge;
-  fail(session, options,
-       too_large ? drogon::k413RequestEntityTooLarge
-                 : drogon::k503ServiceUnavailable,
-       too_large ? "IMAGE_TOO_LARGE" : "STORAGE_UNAVAILABLE",
-       too_large ? "image exceeds the size limit"
-                 : "all storage locations are unavailable",
-       !too_large, callback);
 }
 
 ImageStreamer::Impl::ProcessResult ImageStreamer::Impl::process_streaming(
-    const std::shared_ptr<StreamSession> &session,
-    const WebdavLocation &location, const EntityMetadata &metadata,
-    const ImageStreamOptions &options, const std::string &etag,
-    Clock::time_point deadline,
+    const std::shared_ptr<StreamSession> &session, const std::string &url,
+    const std::string &mime_type, const ImageStreamOptions &options,
+    const std::string &etag, Clock::time_point deadline,
     std::function<void(const drogon::HttpResponsePtr &)> callback) {
   if (session->stop.load(std::memory_order_relaxed) ||
       Clock::now() >= deadline) {
@@ -800,9 +752,9 @@ ImageStreamer::Impl::ProcessResult ImageStreamer::Impl::process_streaming(
     return ProcessResult::Fallback;
   }
 
-  if (image_is_animated(image.get(), metadata.mime_type)) {
+  if (image_is_animated(image.get(), mime_type)) {
     reset_session_image(session);
-    std::shared_ptr<WebdavByteStream> old = session_stream(session);
+    std::shared_ptr<HttpByteStream> old = session_stream(session);
     {
       std::lock_guard lock(mutex);
       session->stream.reset();
@@ -812,34 +764,29 @@ ImageStreamer::Impl::ProcessResult ImageStreamer::Impl::process_streaming(
     }
 
     if (mode == ImageStreamMode::Redirect) {
-      const auto resolved = resolve_redirect_url(location.url);
-      if (!resolved) {
-        return ProcessResult::Retry;
-      }
       auto self = shared_from_this();
-      post([self, session, location = *resolved,
-            callback = std::move(callback)]() mutable {
-        self->respond_redirect(session, std::move(location), callback);
+      post([self, session, url, callback = std::move(callback)]() mutable {
+        self->respond_redirect(session, url, callback);
       });
       return ProcessResult::Done;
     }
 
-    auto opened = WebdavByteStream::open(location.url);
+    auto opened = HttpByteStream::open(url);
     if (!opened) {
       return ProcessResult::Retry;
     }
     if (!(*opened)->wait_started()) {
       return ProcessResult::Retry;
     }
-    auto stream = std::shared_ptr<WebdavByteStream>(std::move(*opened));
+    auto stream = std::shared_ptr<HttpByteStream>(std::move(*opened));
     {
       std::lock_guard lock(mutex);
       session->stream = stream;
     }
     auto self = shared_from_this();
-    post([self, session, metadata, options, etag,
+    post([self, session, mime_type, options, etag,
           callback = std::move(callback)]() mutable {
-      self->respond_ok(session, metadata, options, etag, callback);
+      self->respond_ok(session, mime_type, options, etag, callback);
     });
     return ProcessResult::Done;
   }
@@ -880,10 +827,9 @@ ImageStreamer::Impl::ProcessResult ImageStreamer::Impl::process_streaming(
 }
 
 ImageStreamer::Impl::ProcessResult ImageStreamer::Impl::process_temp(
-    const std::shared_ptr<StreamSession> &session,
-    const WebdavLocation &location, const EntityMetadata &metadata,
-    const ImageStreamOptions &options, const std::string &etag,
-    Clock::time_point deadline,
+    const std::shared_ptr<StreamSession> &session, const std::string &url,
+    const std::string &mime_type, const ImageStreamOptions &options,
+    const std::string &etag, Clock::time_point deadline,
     std::function<void(const drogon::HttpResponsePtr &)> callback) {
   if (session->stop.load(std::memory_order_relaxed) ||
       Clock::now() >= deadline) {
@@ -893,7 +839,7 @@ ImageStreamer::Impl::ProcessResult ImageStreamer::Impl::process_temp(
   }
 
   reset_session_image(session);
-  std::shared_ptr<WebdavByteStream> old = session_stream(session);
+  std::shared_ptr<HttpByteStream> old = session_stream(session);
   {
     std::lock_guard lock(mutex);
     session->stream.reset();
@@ -902,14 +848,14 @@ ImageStreamer::Impl::ProcessResult ImageStreamer::Impl::process_temp(
     old->cancel();
   }
 
-  auto opened = WebdavByteStream::open(location.url);
+  auto opened = HttpByteStream::open(url);
   if (!opened) {
     return ProcessResult::Retry;
   }
   if (!(*opened)->wait_started()) {
     return ProcessResult::Retry;
   }
-  auto source = std::shared_ptr<WebdavByteStream>(std::move(*opened));
+  auto source = std::shared_ptr<HttpByteStream>(std::move(*opened));
   {
     std::lock_guard lock(mutex);
     session->stream = source;
@@ -1013,23 +959,18 @@ ImageStreamer::Impl::ProcessResult ImageStreamer::Impl::process_temp(
     return ProcessResult::Done;
   }
 
-  if (image_is_animated(image.get(), metadata.mime_type)) {
+  if (image_is_animated(image.get(), mime_type)) {
     if (mode == ImageStreamMode::Redirect) {
-      const auto resolved = resolve_redirect_url(location.url);
-      if (!resolved) {
-        return ProcessResult::Retry;
-      }
       auto self = shared_from_this();
-      post([self, session, location = *resolved,
-            callback = std::move(callback)]() mutable {
-        self->respond_redirect(session, std::move(location), callback);
+      post([self, session, url, callback = std::move(callback)]() mutable {
+        self->respond_redirect(session, url, callback);
       });
       return ProcessResult::Done;
     }
     auto self = shared_from_this();
-    post([self, session, temp, metadata, options, etag,
+    post([self, session, temp, mime_type, options, etag,
           callback = std::move(callback)]() mutable {
-      self->respond_temp_ok(session, temp, metadata, options, etag, callback);
+      self->respond_temp_ok(session, temp, mime_type, options, etag, callback);
     });
     return ProcessResult::Done;
   }
@@ -1070,12 +1011,11 @@ ImageStreamer::Impl::ProcessResult ImageStreamer::Impl::process_temp(
 
 void ImageStreamer::Impl::respond_ok(
     const std::shared_ptr<StreamSession> &session,
-    const EntityMetadata &metadata, const ImageStreamOptions &options,
+    const std::string &mime_type, const ImageStreamOptions &options,
     std::string etag,
     const std::function<void(const drogon::HttpResponsePtr &)> &callback) {
-  const std::string content_type = metadata.mime_type.empty()
-                                       ? "application/octet-stream"
-                                       : metadata.mime_type;
+  const std::string content_type =
+      mime_type.empty() ? "application/octet-stream" : mime_type;
 
   auto self = shared_from_this();
   auto response = drogon::HttpResponse::newAsyncStreamResponse(
@@ -1085,7 +1025,7 @@ void ImageStreamer::Impl::respond_ok(
   response->setStatusCode(drogon::k200OK);
   response->setContentTypeString(content_type);
   response->addHeader("Content-Disposition",
-                      content_disposition(session->image_id, metadata.mime_type,
+                      content_disposition(session->image_id, mime_type,
                                           options.download));
   response->addHeader("ETag", etag);
   response->addHeader("Cache-Control", "private, max-age=3600");
@@ -1110,12 +1050,11 @@ void ImageStreamer::Impl::respond_ok(
 
 void ImageStreamer::Impl::respond_temp_ok(
     const std::shared_ptr<StreamSession> &session, TempFilePtr temp,
-    const EntityMetadata &metadata, const ImageStreamOptions &options,
+    const std::string &mime_type, const ImageStreamOptions &options,
     std::string etag,
     const std::function<void(const drogon::HttpResponsePtr &)> &callback) {
-  const std::string content_type = metadata.mime_type.empty()
-                                       ? "application/octet-stream"
-                                       : metadata.mime_type;
+  const std::string content_type =
+      mime_type.empty() ? "application/octet-stream" : mime_type;
 
   auto self = shared_from_this();
   auto response = drogon::HttpResponse::newAsyncStreamResponse(
@@ -1125,7 +1064,7 @@ void ImageStreamer::Impl::respond_temp_ok(
   response->setStatusCode(drogon::k200OK);
   response->setContentTypeString(content_type);
   response->addHeader("Content-Disposition",
-                      content_disposition(session->image_id, metadata.mime_type,
+                      content_disposition(session->image_id, mime_type,
                                           options.download));
   response->addHeader("ETag", etag);
   response->addHeader("Cache-Control", "private, max-age=3600");
@@ -1184,13 +1123,13 @@ void ImageStreamer::Impl::respond_avif_stream(
 }
 
 void ImageStreamer::Impl::respond_redirect(
-    const std::shared_ptr<StreamSession> &session, std::string location,
+    const std::shared_ptr<StreamSession> &session, std::string url,
     const std::function<void(const drogon::HttpResponsePtr &)> &callback) {
-  post([location = std::move(location), callback]() mutable {
+  post([url = std::move(url), callback]() mutable {
     auto response = drogon::HttpResponse::newHttpResponse();
     response->setStatusCode(drogon::k302Found);
-    response->addHeader("Location", location);
-    // 直链可能带有时效签名，不缓存，避免客户端拿到过期地址。
+    response->addHeader("Location", url);
+    // 上游内容地址可能随配置变化，不缓存，避免客户端拿到过期地址。
     response->addHeader("Cache-Control", "no-store");
     callback(response);
   });
@@ -1421,12 +1360,11 @@ void ImageStreamer::Impl::shutdown() {
   }
 }
 
-ImageStreamer::ImageStreamer(std::shared_ptr<const EntityRepository> entities,
-                             std::shared_ptr<const TagimgRepository> images,
-                             ImageStreamMode mode,
+ImageStreamer::ImageStreamer(std::shared_ptr<const TagimgRepository> images,
+                             StorageConfig storage, ImageStreamMode mode,
                              ImageProcessingConfig processing,
                              std::filesystem::path work_dir)
-    : impl_(std::make_shared<Impl>(std::move(entities), std::move(images), mode,
+    : impl_(std::make_shared<Impl>(std::move(images), std::move(storage), mode,
                                    processing, std::move(work_dir))) {
 }
 

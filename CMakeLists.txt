@@ -84,6 +84,7 @@ target_link_libraries(tagimg_config PUBLIC
 )
 
 add_library(tagimg_common STATIC
+    src/common/storage.cpp
     src/common/uuid.cpp
     src/common/validation.cpp
 )
@@ -92,7 +93,6 @@ target_include_directories(tagimg_common PUBLIC
 )
 
 add_library(tagimg_db STATIC
-    src/db/entity_repository.cpp
     src/db/tagimg_repository.cpp
 )
 target_include_directories(tagimg_db PUBLIC
@@ -102,14 +102,6 @@ target_link_libraries(tagimg_db PUBLIC
     tagimg_common
     SOCI::Core
     SOCI::PostgreSQL
-)
-
-add_executable(tagimg_entity_lookup
-    tools/entity_lookup.cpp
-)
-target_link_libraries(tagimg_entity_lookup PRIVATE
-    tagimg_db
-    tagimg_config
 )
 
 add_library(tagimg_io STATIC

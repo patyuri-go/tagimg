@@ -546,16 +546,12 @@ void ApiService::handle_schema(
   resource["path"] = "/api/v1/image/{imageId}";
   resource["description"] =
       "按图片 ID 返回图片；size=original 时 proxy 模式流式返回原始字节、"
-      "redirect 模式返回 302 直链；其他 size 预设由服务端等比缩放并编码为 "
-      "AVIF。动图（GIF、动态 WebP、APNG、AVIF 序列）忽略 size，按 "
-      "imageMode 返回原图。";
+      "redirect 模式返回 302 指向存储服务的内容地址；其他 size 预设由"
+      "服务端等比缩放并编码为 AVIF。动图（GIF、动态 WebP、APNG、AVIF "
+      "序列）忽略 size，按 imageMode 返回原图。";
   resource["body"] = "binary";
   resource["parameters"] = Json::array(
-      {{{"name", "storageId"},
-        {"in", "query"},
-        {"required", false},
-        {"description", "只从指定存储节点读取"}},
-       {{"name", "size"},
+      {{{"name", "size"},
         {"in", "query"},
         {"required", false},
         {"type", "string"},

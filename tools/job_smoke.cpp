@@ -14,7 +14,6 @@
 #include "ai/health.hpp"
 #include "ai/tagger.hpp"
 #include "common/config.hpp"
-#include "db/entity_repository.hpp"
 #include "db/tagimg_repository.hpp"
 #include "job/add_job.hpp"
 #include "job/job.hpp"
@@ -71,20 +70,6 @@ int main(int argc, char **argv) {
     return 2;
   }
 
-  tagimg::EntityDbConfig entity_db_config;
-  entity_db_config.host = config->database.host;
-  entity_db_config.port = config->database.port;
-  entity_db_config.user = config->database.user;
-  entity_db_config.password = config->database.password;
-  entity_db_config.dbname = config->database.entity_dbname;
-
-  auto repository = tagimg::EntityRepository::connect(entity_db_config);
-  if (!repository) {
-    std::cerr << "connect error: " << tagimg::to_string(repository.error())
-              << '\n';
-    return 2;
-  }
-
   tagimg::TagimgDbConfig tagimg_db_config;
   tagimg_db_config.host = config->database.host;
   tagimg_db_config.port = config->database.port;
@@ -102,7 +87,7 @@ int main(int argc, char **argv) {
   tagimg::WdTagger tagger(endpoint, config->ai.wd14_threshold);
   tagimg::ClipEmbedder embedder(endpoint);
   tagimg::AiHealthClient ai_health(endpoint);
-  tagimg::JobContext context{std::cref(**repository),
+  tagimg::JobContext context{config->storage,
                              std::cref(**tagimg_repository), std::ref(tagger),
                              std::ref(embedder), std::cref(ai_health),
                              work_dir};

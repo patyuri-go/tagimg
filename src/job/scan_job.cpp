@@ -7,6 +7,7 @@
 #include <utility>
 #include <vector>
 
+#include "common/uuid.hpp"
 #include "io/byte_stream.hpp"
 #include "io/temp_file.hpp"
 #include "job/ai_preflight.hpp"
@@ -15,19 +16,6 @@ namespace tagimg {
 namespace {
 
 constexpr std::size_t kReadBufferSize = 64 * 1024;
-
-JobError map_repository_error(EntityRepositoryError error) {
-  switch (error) {
-  case EntityRepositoryError::InvalidEntityId:
-    return JobError::InvalidEntityId;
-  case EntityRepositoryError::NotFound:
-    return JobError::EntityNotFound;
-  case EntityRepositoryError::ConnectionFailed:
-  case EntityRepositoryError::QueryFailed:
-    return JobError::RepositoryFailed;
-  }
-  return JobError::RepositoryFailed;
-}
 
 JobError map_stream_error(ByteStreamError error) {
   switch (error) {
@@ -107,6 +95,23 @@ bool is_image_mime(std::string_view mime_type) {
   return true;
 }
 
+// 去掉 Content-Type 的参数部分和首尾空白，得到纯媒体类型。
+std::string media_type(std::string_view content_type) {
+  const std::size_t semicolon = content_type.find(';');
+  std::string_view value = content_type.substr(0, semicolon);
+  while (!value.empty() &&
+         (value.front() == ' ' || value.front() == '\t' ||
+          value.front() == '\r' || value.front() == '\n')) {
+    value.remove_prefix(1);
+  }
+  while (!value.empty() &&
+         (value.back() == ' ' || value.back() == '\t' ||
+          value.back() == '\r' || value.back() == '\n')) {
+    value.remove_suffix(1);
+  }
+  return std::string(value);
+}
+
 } // namespace
 
 ScanJob::ScanJob(std::string entity_id) : entity_id_(std::move(entity_id)) {
@@ -158,18 +163,10 @@ Result<JobOutcome, JobError> ScanJob::take_outcome() {
 Result<ScanResult, JobError> ScanJob::scan(JobContext &context,
                                            bool check_duplicate,
                                            AiPreflight &ai) {
-  const EntityRepository &repository = context.entity_repository.get();
+  if (!is_uuid(entity_id_)) {
+    return JobError::InvalidEntityId;
+  }
 
-  auto metadata = repository.find_entity(entity_id_);
-  if (!metadata) {
-    return map_repository_error(metadata.error());
-  }
-  if (!is_image_mime(metadata->mime_type)) {
-    return JobError::NotImage;
-  }
-  if (metadata->size > WdTagger::kMaxImageBytes) {
-    return JobError::ImageTooLarge;
-  }
   // 在下载和推理之前判断实体是否已经入库，避免重复扫描。
   if (check_duplicate) {
     auto exists =
@@ -188,35 +185,38 @@ Result<ScanResult, JobError> ScanJob::scan(JobContext &context,
     return JobError::AiUnavailable;
   }
 
-  auto locations = repository.find_webdav_locations(entity_id_);
-  if (!locations) {
-    return map_repository_error(locations.error());
-  }
-
-  // 同一实体可能有多个位置；第一个下载失败时继续试下一个。
-  JobError last_error = JobError::DownloadFailed;
-  for (const WebdavLocation &location : *locations) {
-    auto result = scan_location(context, location);
-    if (result) {
-      return result;
-    }
-    last_error = result.error();
-    if (last_error == JobError::ImageTooLarge ||
-        last_error == JobError::FileError) {
-      break;
-    }
-  }
-  return last_error;
+  return scan_content(context);
 }
 
 Result<ScanResult, JobError>
-ScanJob::scan_location(JobContext &context, const WebdavLocation &location) {
+ScanJob::scan_content(JobContext &context) {
+  const std::string url = entity_content_url(context.storage, entity_id_);
+
   ByteStreamOptions options;
   options.max_bytes = WdTagger::kMaxImageBytes;
 
-  auto stream = WebdavByteStream::open(location.url, options);
+  auto stream = HttpByteStream::open(url, options);
   if (!stream) {
     return map_stream_error(stream.error());
+  }
+
+  // 拿到响应头后才能判断内容类型和长度。
+  const auto started = (*stream)->wait_started();
+  if (!started) {
+    if (started.error() == ByteStreamError::HttpError &&
+        (*stream)->http_status() == 404) {
+      return JobError::EntityNotFound;
+    }
+    return map_stream_error(started.error());
+  }
+
+  const std::string mime_type = media_type((*stream)->content_type());
+  if (!mime_type.empty() && !is_image_mime(mime_type)) {
+    return JobError::NotImage;
+  }
+  const auto content_length = (*stream)->content_length();
+  if (content_length && *content_length > WdTagger::kMaxImageBytes) {
+    return JobError::ImageTooLarge;
   }
 
   auto file = TempFile::create(context.work_dir, ".img");
@@ -259,7 +259,6 @@ ScanJob::scan_location(JobContext &context, const WebdavLocation &location) {
 
   ScanResult result;
   result.entity_id = entity_id_;
-  result.storage_name = location.storage_name;
   result.bytes = file->size();
   result.tags = std::move(*tags);
   if (embedding) {

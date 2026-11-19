@@ -10,24 +10,24 @@
 namespace tagimg {
 
 struct ServiceRuntime::Impl {
-  Impl(std::shared_ptr<const EntityRepository> entity_repository_ref,
+  Impl(StorageConfig storage_config,
        std::shared_ptr<const TagimgRepository> tagimg_repository_ref,
        std::shared_ptr<WdTagger> tagger_ref,
        std::shared_ptr<ClipEmbedder> embedder_ref,
        std::filesystem::path work_dir_ref,
        const AiHealthClient &ai_health_ref)
-      : entity_repository(std::move(entity_repository_ref)),
+      : storage(std::move(storage_config)),
         tagimg_repository(std::move(tagimg_repository_ref)),
         tagger(std::move(tagger_ref)), embedder(std::move(embedder_ref)),
         ai_health(&ai_health_ref), work_dir(std::move(work_dir_ref)) {
-    JobContext context{std::cref(*entity_repository),
-                       std::cref(*tagimg_repository), std::ref(*tagger),
-                       std::ref(*embedder), std::cref(*ai_health), work_dir};
+    JobContext context{storage, std::cref(*tagimg_repository),
+                       std::ref(*tagger), std::ref(*embedder),
+                       std::cref(*ai_health), work_dir};
     worker = std::make_unique<JobWorker>(context);
   }
 
   // 依赖必须比 worker 活得久，声明顺序已保证析构时先停 worker。
-  std::shared_ptr<const EntityRepository> entity_repository;
+  StorageConfig storage;
   std::shared_ptr<const TagimgRepository> tagimg_repository;
   std::shared_ptr<WdTagger> tagger;
   std::shared_ptr<ClipEmbedder> embedder;
@@ -40,15 +40,15 @@ struct ServiceRuntime::Impl {
 };
 
 ServiceRuntime::ServiceRuntime(
-    std::shared_ptr<const EntityRepository> entity_repository,
+    StorageConfig storage,
     std::shared_ptr<const TagimgRepository> tagimg_repository,
     std::shared_ptr<WdTagger> tagger,
     std::shared_ptr<ClipEmbedder> embedder,
     std::filesystem::path work_dir, const AiHealthClient &ai_health) {
-  if (!entity_repository || !tagimg_repository || !tagger || !embedder) {
+  if (!tagimg_repository || !tagger || !embedder) {
     throw std::invalid_argument("ServiceRuntime dependencies must not be null");
   }
-  impl_ = std::make_shared<Impl>(std::move(entity_repository),
+  impl_ = std::make_shared<Impl>(std::move(storage),
                                  std::move(tagimg_repository),
                                  std::move(tagger), std::move(embedder),
                                  std::move(work_dir), ai_health);

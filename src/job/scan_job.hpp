@@ -9,7 +9,7 @@ namespace tagimg {
 
 class AiPreflight;
 
-// 扫描单个实体：确认是图片、从 WebDAV 下载到临时文件、调用 tagger。
+// 扫描单个实体：确认是图片、从存储服务下载到临时文件、调用 tagger。
 //
 // 下载成功后临时文件在扫描结束（对象析构）时自动删除。step() 本身会
 // 同步完成下载和推理，因此会占用 worker 的一个线程。
@@ -45,7 +45,7 @@ private:
                                                   AiPreflight &ai);
 
   [[nodiscard]] Result<ScanResult, JobError>
-  scan_location(JobContext &context, const WebdavLocation &location);
+  scan_content(JobContext &context);
 
   std::string entity_id_;
   std::optional<Result<ScanResult, JobError>> result_;

@@ -12,7 +12,6 @@
 #include "ai/sidecar_process.hpp"
 #include "ai/tagger.hpp"
 #include "common/config.hpp"
-#include "db/entity_repository.hpp"
 #include "db/tagimg_repository.hpp"
 #include "graphql/graphql_service.hpp"
 #include "http/api_service.hpp"
@@ -83,20 +82,6 @@ int main() {
   const std::filesystem::path config_dir =
       std::filesystem::absolute(config_path, path_error).parent_path();
 
-  tagimg::EntityDbConfig entity_db;
-  entity_db.host = config->database.host;
-  entity_db.port = config->database.port;
-  entity_db.user = config->database.user;
-  entity_db.password = config->database.password;
-  entity_db.dbname = config->database.entity_dbname;
-
-  auto entity_repository = tagimg::EntityRepository::connect(entity_db);
-  if (!entity_repository) {
-    std::cerr << "entity database error: "
-              << tagimg::to_string(entity_repository.error()) << '\n';
-    return 2;
-  }
-
   tagimg::TagimgDbConfig tagimg_db;
   tagimg_db.host = config->database.host;
   tagimg_db.port = config->database.port;
@@ -165,9 +150,6 @@ int main() {
       env_or("TAGIMG_WORK_DIR",
              (std::filesystem::temp_directory_path() / "tagimg").string()));
 
-  auto entity_repository_shared =
-      std::shared_ptr<const tagimg::EntityRepository>(
-          std::move(*entity_repository));
   auto tagimg_repository_shared =
       std::shared_ptr<const tagimg::TagimgRepository>(
           std::move(*tagimg_repository));
@@ -188,13 +170,13 @@ int main() {
 
   // 图片流管理器要活到 Drogon 停止之后，因此声明在 service 之前。
   auto image_streamer = std::make_shared<tagimg::ImageStreamer>(
-      entity_repository_shared, tagimg_repository_shared,
-      config->http.image_mode, image_processing, work_dir);
+      tagimg_repository_shared, config->storage, config->http.image_mode,
+      image_processing, work_dir);
 
   // 扫描任务由 REST 与 GraphQL 共用同一个服务实例。
   auto runtime = std::make_shared<tagimg::ServiceRuntime>(
-      entity_repository_shared, tagimg_repository_shared, tagger, embedder,
-      work_dir, ai_health);
+      config->storage, tagimg_repository_shared, tagger, embedder, work_dir,
+      ai_health);
 
   auto service = std::make_shared<tagimg::ApiService>(runtime);
   auto graphql_service = std::make_shared<tagimg::GraphQLService>(
@@ -235,7 +217,6 @@ int main() {
           std::string image_id) {
         tagimg::ImageStreamOptions options;
         options.image_id = std::move(image_id);
-        options.storage_id = request->getParameter("storageId");
         options.size = request->getParameter("size");
 
         const std::string &download = request->getParameter("download");

@@ -82,8 +82,6 @@ Result<AppConfig, ConfigError> load_config(const std::filesystem::path &path) {
       !read_required_string(*database, "user", db.user, false) ||
       !read_required_string(*database, "password", db.password, true) ||
       !read_required_string(*database, "image_dbname", db.image_dbname,
-                            false) ||
-      !read_required_string(*database, "entity_dbname", db.entity_dbname,
                             false)) {
     return ConfigError::MissingField;
   }
@@ -100,6 +98,41 @@ Result<AppConfig, ConfigError> load_config(const std::filesystem::path &path) {
     return ConfigError::InvalidField;
   }
   db.port = static_cast<std::uint16_t>(port_value);
+
+  // storage 段必填：没有存储源就无法读取图片内容。
+  const auto storage = root.find("storage");
+  if (storage == root.end() || !storage->is_object()) {
+    return ConfigError::MissingField;
+  }
+
+  auto &source = config.storage;
+  if (!read_required_string(*storage, "host", source.host, false)) {
+    return ConfigError::MissingField;
+  }
+
+  const auto storage_port = storage->find("port");
+  if (storage_port == storage->end()) {
+    return ConfigError::MissingField;
+  }
+  if (!storage_port->is_number_integer()) {
+    return ConfigError::InvalidField;
+  }
+  const auto storage_port_value = storage_port->get<long long>();
+  if (storage_port_value < 1 || storage_port_value > 65535) {
+    return ConfigError::InvalidField;
+  }
+  source.port = static_cast<std::uint16_t>(storage_port_value);
+
+  const auto storage_scheme = storage->find("scheme");
+  if (storage_scheme != storage->end()) {
+    if (!storage_scheme->is_string()) {
+      return ConfigError::InvalidField;
+    }
+    source.scheme = storage_scheme->get<std::string>();
+    if (source.scheme != "http" && source.scheme != "https") {
+      return ConfigError::InvalidField;
+    }
+  }
 
   // http 段是可选配置；写了就必须完整，避免监听地址悄悄退回默认值。
   const auto http = root.find("http");

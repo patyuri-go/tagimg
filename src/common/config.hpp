@@ -6,6 +6,7 @@
 #include <string_view>
 
 #include "common/result.hpp"
+#include "common/storage.hpp"
 
 namespace tagimg {
 
@@ -15,14 +16,13 @@ struct DatabaseConfig {
   std::string user;
   std::string password;
   std::string image_dbname;
-  std::string entity_dbname;
 };
 
 // 图片流接口的服务模式。
 enum class ImageStreamMode {
-  // 服务端读取上游字节再转发给客户端，即现有行为。
+  // 服务端读取上游字节再转发给客户端。
   Proxy,
-  // 服务端先跟随上游重定向拿到直链，再返回 302 让客户端直连。
+  // 直接返回 302，让客户端访问存储服务的内容地址。
   Redirect,
 };
 
@@ -30,7 +30,7 @@ enum class ImageStreamMode {
 struct HttpConfig {
   std::string host = "127.0.0.1";
   std::uint16_t port = 8080;
-  // 缺省为本机代理，保证旧配置文件行为不变。
+  // 缺省为服务端代理，保证旧配置文件行为不变。
   ImageStreamMode image_mode = ImageStreamMode::Proxy;
   // AVIF 编码参数；具体含义见 ImageProcessingConfig。
   std::uint32_t image_quality = 65;
@@ -84,6 +84,8 @@ struct AiConfig {
 
 struct AppConfig {
   DatabaseConfig database;
+  // 外部存储服务地址；图片内容与扫描下载都走这里。
+  StorageConfig storage;
   // http 段可以省略，省略时使用上面的默认监听地址。
   HttpConfig http;
   // ai 段可以省略，省略时使用上面的默认参数。
@@ -100,8 +102,9 @@ enum class ConfigError {
 
 [[nodiscard]] std::string_view to_string(ConfigError error) noexcept;
 
-// 加载 JSON 配置文件。文件中至少要有 "database" 对象，
-// 包含 host、port、user、password、image_dbname、entity_dbname 字段。
+// 加载 JSON 配置文件。文件中至少要有 "database" 与 "storage" 对象。
+// database 包含 host、port、user、password、image_dbname 字段；
+// storage 包含 scheme（可选，缺省 http）、host、port 字段。
 [[nodiscard]] Result<AppConfig, ConfigError>
 load_config(const std::filesystem::path &path);
 

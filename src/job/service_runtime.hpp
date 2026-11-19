@@ -4,6 +4,7 @@
 #include <functional>
 #include <memory>
 
+#include "common/storage.hpp"
 #include "job/job.hpp"
 
 namespace tagimg {
@@ -15,7 +16,7 @@ namespace tagimg {
 // on_done 回调交给调用方。任务终态不保存，也不提供任何查询接口。
 class ServiceRuntime {
 public:
-  ServiceRuntime(std::shared_ptr<const EntityRepository> entity_repository,
+  ServiceRuntime(StorageConfig storage,
                  std::shared_ptr<const TagimgRepository> tagimg_repository,
                  std::shared_ptr<WdTagger> tagger,
                  std::shared_ptr<ClipEmbedder> embedder,

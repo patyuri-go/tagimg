@@ -9,7 +9,7 @@
 #include <drogon/HttpResponse.h>
 
 #include "common/config.hpp"
-#include "db/entity_repository.hpp"
+#include "common/storage.hpp"
 #include "db/tagimg_repository.hpp"
 #include "image/image_processor.hpp"
 
@@ -18,12 +18,9 @@ namespace tagimg {
 // GET /api/v1/image/{imageId} 的请求参数。
 struct ImageStreamOptions {
   std::string image_id;
-  // 只从指定存储节点读取；为空表示按实体库返回的顺序依次尝试。
-  std::string storage_id;
   // 客户端传入的尺寸预设；handle() 会结合 download 解析成 preset。
   std::string size = "regular";
   bool download = false;
-  // 由 handle() 解析出的最终预设，download=1 时强制为 original。
   ImageSizePreset preset = ImageSizePreset::Regular;
   std::optional<std::string> request_id;
   // 客户端带来的 If-None-Match，命中时返回 304。
@@ -41,8 +38,8 @@ struct ImageStreamOptions {
 // 只能断开连接（chunked 响应的固有限制）。
 class ImageStreamer {
 public:
-  ImageStreamer(std::shared_ptr<const EntityRepository> entities,
-                std::shared_ptr<const TagimgRepository> images,
+  ImageStreamer(std::shared_ptr<const TagimgRepository> images,
+                StorageConfig storage,
                 ImageStreamMode mode = ImageStreamMode::Proxy,
                 ImageProcessingConfig processing = {},
                 std::filesystem::path work_dir = {});

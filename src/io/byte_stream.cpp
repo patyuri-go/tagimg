@@ -46,71 +46,6 @@ ByteStreamError map_curl_error(CURLcode code) {
   }
 }
 
-// 直链解析最多跟随的重定向次数。
-constexpr long kResolveMaxRedirects = 20;
-constexpr long kResolveConnectTimeoutSeconds = 10;
-constexpr long kResolveTimeoutSeconds = 20;
-
-struct RedirectProbe {
-  CURLcode code = CURLE_FAILED_INIT;
-  long status = 0;
-  std::string final_url;
-};
-
-// GET 探测时只要收到首块数据就返回 0 中止，避免下载完整文件。
-std::size_t discard_body(char * /*data*/, std::size_t /*size*/,
-                         std::size_t /*count*/, void * /*user_data*/) {
-  return 0;
-}
-
-RedirectProbe probe_redirects(const std::string &url) {
-  RedirectProbe result;
-  CURL *handle = curl_easy_init();
-  if (handle == nullptr) {
-    return result;
-  }
-
-  const auto set = [handle](CURLoption option, auto value) {
-    return curl_easy_setopt(handle, option, value) == CURLE_OK;
-  };
-  const bool configured =
-      set(CURLOPT_URL, url.c_str()) && set(CURLOPT_FOLLOWLOCATION, 1L) &&
-      set(CURLOPT_MAXREDIRS, kResolveMaxRedirects) &&
-      set(CURLOPT_CONNECTTIMEOUT, kResolveConnectTimeoutSeconds) &&
-      set(CURLOPT_TIMEOUT, kResolveTimeoutSeconds) &&
-      set(CURLOPT_NOSIGNAL, 1L) && set(CURLOPT_ACCEPT_ENCODING, "") &&
-      set(CURLOPT_USERAGENT, "tagimg/0.1") &&
-      // 只允许 HTTP(S)，避免上游把探测重定向到本地协议。
-      set(CURLOPT_PROTOCOLS_STR, "http,https") &&
-      set(CURLOPT_REDIR_PROTOCOLS_STR, "http,https") &&
-      // Range 只取一个字节；服务器忽略 Range 时由写回调立即中止。
-      set(CURLOPT_RANGE, "0-0") && set(CURLOPT_WRITEFUNCTION, discard_body);
-  if (!configured) {
-    curl_easy_cleanup(handle);
-    return result;
-  }
-
-  result.code = curl_easy_perform(handle);
-  curl_easy_getinfo(handle, CURLINFO_RESPONSE_CODE, &result.status);
-  char *effective = nullptr;
-  if (curl_easy_getinfo(handle, CURLINFO_EFFECTIVE_URL, &effective) ==
-          CURLE_OK &&
-      effective != nullptr) {
-    result.final_url = effective;
-  }
-  curl_easy_cleanup(handle);
-  return result;
-}
-
-bool redirect_probe_ok(const RedirectProbe &probe) {
-  // GET 探测主动中止会得到
-  // CURLE_WRITE_ERROR，只要响应头和直链已经拿到就算成功。
-  const bool transport_ok =
-      probe.code == CURLE_OK || probe.code == CURLE_WRITE_ERROR;
-  return transport_ok && probe.status >= 200 && probe.status < 300 &&
-         is_http_url(probe.final_url);
-}
-
 } // namespace
 
 std::string_view to_string(ByteStreamError error) noexcept {
@@ -133,46 +68,8 @@ std::string_view to_string(ByteStreamError error) noexcept {
   return "Unknown";
 }
 
-std::string_view to_string(RedirectResolveError error) noexcept {
-  switch (error) {
-  case RedirectResolveError::InvalidUrl:
-    return "InvalidUrl";
-  case RedirectResolveError::RequestFailed:
-    return "RequestFailed";
-  case RedirectResolveError::HttpError:
-    return "HttpError";
-  case RedirectResolveError::TooManyRedirects:
-    return "TooManyRedirects";
-  }
-  return "Unknown";
-}
-
-Result<std::string, RedirectResolveError>
-resolve_redirect_url(const std::string &url) {
-  ensure_curl_initialized();
-  if (g_curl_init_result != CURLE_OK) {
-    return RedirectResolveError::RequestFailed;
-  }
-  if (!is_http_url(url)) {
-    return RedirectResolveError::InvalidUrl;
-  }
-
-  const RedirectProbe get = probe_redirects(url);
-  if (redirect_probe_ok(get)) {
-    return get.final_url;
-  }
-
-  if (get.code == CURLE_TOO_MANY_REDIRECTS) {
-    return RedirectResolveError::TooManyRedirects;
-  }
-  if (get.status >= 400) {
-    return RedirectResolveError::HttpError;
-  }
-  return RedirectResolveError::RequestFailed;
-}
-
-Result<std::unique_ptr<WebdavByteStream>, ByteStreamError>
-WebdavByteStream::open(std::string url, ByteStreamOptions options) {
+Result<std::unique_ptr<HttpByteStream>, ByteStreamError>
+HttpByteStream::open(std::string url, ByteStreamOptions options) {
   ensure_curl_initialized();
   if (g_curl_init_result != CURLE_OK) {
     return ByteStreamError::TransferFailed;
@@ -206,31 +103,34 @@ WebdavByteStream::open(std::string url, ByteStreamOptions options) {
   }
 
   try {
-    return std::unique_ptr<WebdavByteStream>(
-        new WebdavByteStream(std::move(url), options, handle));
+    return std::unique_ptr<HttpByteStream>(
+        new HttpByteStream(std::move(url), options, handle));
   } catch (const std::exception &) {
     curl_easy_cleanup(handle);
     return ByteStreamError::TransferFailed;
   }
 }
 
-WebdavByteStream::WebdavByteStream(std::string url, ByteStreamOptions options,
-                                   void *handle)
+HttpByteStream::HttpByteStream(std::string url, ByteStreamOptions options,
+                               void *handle)
     : url_(std::move(url)), options_(options), handle_(handle) {
   auto *curl = static_cast<CURL *>(handle_);
   if (curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION,
-                       &WebdavByteStream::write_callback) != CURLE_OK ||
+                       &HttpByteStream::write_callback) != CURLE_OK ||
       curl_easy_setopt(curl, CURLOPT_WRITEDATA, this) != CURLE_OK ||
+      curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION,
+                       &HttpByteStream::header_callback) != CURLE_OK ||
+      curl_easy_setopt(curl, CURLOPT_HEADERDATA, this) != CURLE_OK ||
       curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L) != CURLE_OK ||
       curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION,
-                       &WebdavByteStream::progress_callback) != CURLE_OK ||
+                       &HttpByteStream::progress_callback) != CURLE_OK ||
       curl_easy_setopt(curl, CURLOPT_XFERINFODATA, this) != CURLE_OK) {
     throw std::runtime_error("failed to configure curl callbacks");
   }
   worker_ = std::thread([this] { run(); });
 }
 
-WebdavByteStream::~WebdavByteStream() {
+HttpByteStream::~HttpByteStream() {
   stop_.store(true);
   {
     std::lock_guard lock(mutex_);
@@ -247,23 +147,116 @@ WebdavByteStream::~WebdavByteStream() {
   }
 }
 
-int WebdavByteStream::progress_callback(void *user_data,
+int HttpByteStream::progress_callback(void *user_data,
                                         std::int64_t /*download_total*/,
                                         std::int64_t /*downloaded*/,
                                         std::int64_t /*upload_total*/,
                                         std::int64_t /*uploaded*/) {
-  const auto *stream = static_cast<const WebdavByteStream *>(user_data);
+  const auto *stream = static_cast<const HttpByteStream *>(user_data);
   return stream->stop_.load() ? 1 : 0;
 }
 
-std::size_t WebdavByteStream::write_callback(char *data, std::size_t size,
+std::size_t HttpByteStream::write_callback(char *data, std::size_t size,
                                              std::size_t count,
                                              void *user_data) {
-  auto *stream = static_cast<WebdavByteStream *>(user_data);
+  auto *stream = static_cast<HttpByteStream *>(user_data);
   return stream->on_data(data, size * count);
 }
 
-std::size_t WebdavByteStream::on_data(const char *data, std::size_t size) {
+std::size_t HttpByteStream::header_callback(char *data, std::size_t size,
+                                            std::size_t count,
+                                            void *user_data) {
+  auto *stream = static_cast<HttpByteStream *>(user_data);
+  return stream->on_header(
+             std::string_view(data, size * count))
+             ? size * count
+             : 0;
+}
+
+bool HttpByteStream::on_header(std::string_view line) {
+  if (line.rfind("HTTP/", 0) == 0) {
+    // 新响应开始（含重定向的中转响应）：清掉上一条响应的元数据。
+    long status = 0;
+    const auto space = line.find(' ');
+    if (space != std::string_view::npos) {
+      for (std::size_t index = space + 1;
+           index < line.size() && line[index] >= '0' && line[index] <= '9';
+           ++index) {
+        status = status * 10 + (line[index] - '0');
+      }
+    }
+    std::lock_guard lock(header_mutex_);
+    http_status_ = status;
+    content_type_.clear();
+    content_length_.reset();
+    return true;
+  }
+
+  const auto colon = line.find(':');
+  if (colon == std::string_view::npos) {
+    return true;
+  }
+  std::string_view name = line.substr(0, colon);
+  std::string_view value = line.substr(colon + 1);
+  while (!name.empty() && (name.back() == ' ' || name.back() == '\t')) {
+    name.remove_suffix(1);
+  }
+  while (!value.empty() && (value.front() == ' ' || value.front() == '\t')) {
+    value.remove_prefix(1);
+  }
+  while (!value.empty() && (value.back() == '\r' || value.back() == '\n' ||
+                            value.back() == ' ' || value.back() == '\t')) {
+    value.remove_suffix(1);
+  }
+
+  std::string lowered(name);
+  for (char &character : lowered) {
+    if (character >= 'A' && character <= 'Z') {
+      character = static_cast<char>(character - 'A' + 'a');
+    }
+  }
+
+  std::lock_guard lock(header_mutex_);
+  if (lowered == "content-type") {
+    content_type_.assign(value);
+  } else if (lowered == "content-length") {
+    std::uint64_t length = 0;
+    bool valid = !value.empty();
+    for (const char character : value) {
+      if (character < '0' || character > '9') {
+        valid = false;
+        break;
+      }
+      const auto digit = static_cast<std::uint64_t>(character - '0');
+      if (length > (UINT64_MAX - digit) / 10) {
+        valid = false;
+        break;
+      }
+      length = length * 10 + digit;
+    }
+    if (valid) {
+      content_length_ = length;
+    }
+  }
+  return true;
+}
+
+std::string HttpByteStream::content_type() const {
+  std::lock_guard lock(header_mutex_);
+  return content_type_;
+}
+
+std::optional<std::uint64_t> HttpByteStream::content_length() const {
+  std::lock_guard lock(header_mutex_);
+  return content_length_;
+}
+
+long HttpByteStream::http_status() const {
+  std::lock_guard lock(header_mutex_);
+  return http_status_;
+}
+
+std::size_t HttpByteStream::on_data(const char *data, std::size_t size) {
   std::unique_lock lock(mutex_);
   if (aborted_) {
     return 0;
@@ -291,7 +284,7 @@ std::size_t WebdavByteStream::on_data(const char *data, std::size_t size) {
 }
 
 Result<std::size_t, ByteStreamError>
-WebdavByteStream::read(std::span<std::byte> buffer) {
+HttpByteStream::read(std::span<std::byte> buffer) {
   if (buffer.empty()) {
     return std::size_t{0};
   }
@@ -325,18 +318,23 @@ WebdavByteStream::read(std::span<std::byte> buffer) {
   return std::size_t{0};
 }
 
-std::uint64_t WebdavByteStream::bytes_received() const noexcept {
+std::uint64_t HttpByteStream::bytes_received() const noexcept {
   std::lock_guard lock(mutex_);
   return received_;
 }
 
-Result<void, ByteStreamError> WebdavByteStream::wait_started() {
+Result<void, ByteStreamError> HttpByteStream::wait_started() {
   std::unique_lock lock(mutex_);
   data_ready_.wait(
       lock, [this] { return !chunks_.empty() || finished_ || aborted_; });
 
   if (error_) {
     return *error_;
+  }
+  // 有些错误响应也带 body，必须先按状态码拒绝。
+  const long status = http_status();
+  if (status != 0 && (status < 200 || status >= 300)) {
+    return ByteStreamError::HttpError;
   }
   if (chunks_.empty()) {
     // 传输已经结束却一个字节都没收到：对图片来说等同节点不可用。
@@ -345,7 +343,7 @@ Result<void, ByteStreamError> WebdavByteStream::wait_started() {
   return Result<void, ByteStreamError>::ok();
 }
 
-void WebdavByteStream::cancel() noexcept {
+void HttpByteStream::cancel() noexcept {
   stop_.store(true);
   {
     std::lock_guard lock(mutex_);
@@ -355,12 +353,18 @@ void WebdavByteStream::cancel() noexcept {
   space_ready_.notify_all();
 }
 
-void WebdavByteStream::run() {
+void HttpByteStream::run() {
   auto *curl = static_cast<CURL *>(handle_);
   const CURLcode code = curl_easy_perform(curl);
 
   long status = 0;
   curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
+  {
+    std::lock_guard header_lock(header_mutex_);
+    if (status != 0) {
+      http_status_ = status;
+    }
+  }
 
   std::lock_guard lock(mutex_);
   if (!error_) {

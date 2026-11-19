@@ -15,7 +15,7 @@
 #include "ai/health.hpp"
 #include "ai/tagger.hpp"
 #include "common/result.hpp"
-#include "db/entity_repository.hpp"
+#include "common/storage.hpp"
 #include "db/tagimg_repository.hpp"
 
 namespace tagimg {
@@ -50,8 +50,6 @@ enum class JobError {
 // 单个实体的扫描结果。
 struct ScanResult {
   std::string entity_id;
-  // 实际下载成功的存储节点名称。
-  std::string storage_name;
   std::uint64_t bytes = 0;
   TaggingResult tags;
   // Chinese-CLIP 图像向量（768 维，已 L2 归一化）。
@@ -140,7 +138,7 @@ struct JobRun {
 //
 // 所有引用对象都必须比 worker 活得久。
 struct JobContext {
-  std::reference_wrapper<const EntityRepository> entity_repository;
+  StorageConfig storage;
   std::reference_wrapper<const TagimgRepository> tagimg_repository;
   std::reference_wrapper<WdTagger> tagger;
   std::reference_wrapper<ClipEmbedder> embedder;
