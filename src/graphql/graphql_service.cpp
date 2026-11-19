@@ -922,7 +922,8 @@ public:
             std::optional<gql::tagimg::SortDirection> direction,
             std::optional<int> limit, std::optional<int> offset,
             std::optional<bool> include_total,
-            std::optional<std::string> sort_text) const {
+            std::optional<std::string> sort_text,
+            std::optional<IdType> reference_image_id) const {
     ImageSearchQuery query;
     if (filter) {
       const auto read_ids = [](const std::optional<std::vector<IdType>> &ids,
@@ -955,36 +956,68 @@ public:
       }
     }
 
+    std::optional<std::string> reference_id;
+    if (reference_image_id) {
+      reference_id = id_text(*reference_image_id);
+      if (!is_uuid(*reference_id)) {
+        fail("INVALID_ARGUMENT", "referenceImageId must be a uuid string");
+      }
+    }
+
     const auto order_field =
         order_by.value_or(gql::tagimg::ImageOrderField::CREATED_AT);
     if (order_field == gql::tagimg::ImageOrderField::SIMILARITY) {
-      if (!sort_text || sort_text->empty()) {
-        fail("INVALID_ARGUMENT", "orderBy SIMILARITY requires sortText");
+      const bool has_text = sort_text && !sort_text->empty();
+      if (has_text == reference_id.has_value()) {
+        fail("INVALID_ARGUMENT",
+             "orderBy SIMILARITY requires exactly one of sortText or "
+             "referenceImageId");
       }
-      if (utf8_length(*sort_text) > 512) {
-        fail("INVALID_ARGUMENT", "sortText must be at most 512 characters");
+      if (reference_id) {
+        const auto embedding =
+            repository_->find_clip_embedding(*reference_id);
+        if (!embedding) {
+          fail_repository(embedding.error());
+        }
+        if (!embedding->has_value()) {
+          fail("INVALID_ARGUMENT",
+               "referenceImageId not found or has no embedding");
+        }
+        query.order_by = ImageSortField::Similarity;
+        query.sort_embedding = std::move(**embedding);
+        query.reference_image_id = *reference_id;
+        query.descending = true;
+      } else {
+        if (utf8_length(*sort_text) > 512) {
+          fail("INVALID_ARGUMENT",
+               "sortText must be at most 512 characters");
+        }
+        const bool blank =
+            std::all_of(sort_text->begin(), sort_text->end(),
+                        [](unsigned char byte) {
+                          return std::isspace(byte) != 0;
+                        });
+        if (blank) {
+          fail("INVALID_ARGUMENT", "sortText must not be blank");
+        }
+        auto embedding = clip_embedder_->embed_text(*sort_text);
+        if (!embedding) {
+          fail("SERVICE_UNAVAILABLE",
+               std::string("failed to embed sortText: ") +
+                   std::string(to_string(embedding.error())));
+        }
+        query.order_by = ImageSortField::Similarity;
+        query.sort_embedding = std::move(embedding->values);
+        query.descending = true;
       }
-      const bool blank =
-          std::all_of(sort_text->begin(), sort_text->end(),
-                      [](unsigned char byte) {
-                        return std::isspace(byte) != 0;
-                      });
-      if (blank) {
-        fail("INVALID_ARGUMENT", "sortText must not be blank");
-      }
-      auto embedding = clip_embedder_->embed_text(*sort_text);
-      if (!embedding) {
-        fail("SERVICE_UNAVAILABLE",
-             std::string("failed to embed sortText: ") +
-                 std::string(to_string(embedding.error())));
-      }
-      query.order_by = ImageSortField::Similarity;
-      query.sort_embedding = std::move(embedding->values);
-      query.descending = true;
     } else {
       if (sort_text) {
         fail("INVALID_ARGUMENT",
              "sortText is only supported with orderBy SIMILARITY");
+      }
+      if (reference_id) {
+        fail("INVALID_ARGUMENT",
+             "referenceImageId is only supported with orderBy SIMILARITY");
       }
       switch (order_field) {
       case gql::tagimg::ImageOrderField::CREATED_AT:

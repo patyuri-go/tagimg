@@ -187,10 +187,11 @@ service::AwaitableResolver Query::resolveImages(service::ResolverParams&& params
 		? std::move(pairIncludeTotal.first)
 		: service::ModifiedArgument<bool>::require<service::TypeModifier::Nullable>("includeTotal", defaultArguments));
 	auto argSortText = service::ModifiedArgument<std::string>::require<service::TypeModifier::Nullable>("sortText", params.arguments);
+	auto argReferenceImageId = service::ModifiedArgument<response::IdType>::require<service::TypeModifier::Nullable>("referenceImageId", params.arguments);
 	std::unique_lock resolverLock(_resolverMutex);
 	service::SelectionSetParams selectionSetParams { static_cast<const service::SelectionSetParams&>(params) };
 	auto directives = std::move(params.fieldDirectives);
-	auto result = _pimpl->getImages(service::FieldParams { std::move(selectionSetParams), std::move(directives) }, std::move(argFilter), std::move(argOrderBy), std::move(argDirection), std::move(argLimit), std::move(argOffset), std::move(argIncludeTotal), std::move(argSortText));
+	auto result = _pimpl->getImages(service::FieldParams { std::move(selectionSetParams), std::move(directives) }, std::move(argFilter), std::move(argOrderBy), std::move(argDirection), std::move(argLimit), std::move(argOffset), std::move(argIncludeTotal), std::move(argSortText), std::move(argReferenceImageId));
 	resolverLock.unlock();
 
 	return service::ModifiedResult<ImageConnection>::convert(std::move(result), std::move(params));
@@ -312,7 +313,10 @@ orderBy 传 SIMILARITY 时必须同时传 sortText，此时按描述文本与作
 		schema::Field::Make(R"gql(images)gql"sv, R"md(分页查询已入库的图片。
 
 与 artworks 基本相同，但没有标题过滤。所有过滤条件之间是 AND 关系；
-同一个数组内部是 OR 关系。图片的标签来自 image_tags。)md"sv, std::nullopt, schema->WrapType(introspection::TypeKind::NON_NULL, schema->LookupType(R"gql(ImageConnection)gql"sv)), {
+同一个数组内部是 OR 关系。图片的标签来自 image_tags。
+
+orderBy 传 SIMILARITY 时必须同时传 sortText 或 referenceImageId 之一；
+传 referenceImageId 时，参考图自身不会出现在结果中，且只返回有向量的图片。)md"sv, std::nullopt, schema->WrapType(introspection::TypeKind::NON_NULL, schema->LookupType(R"gql(ImageConnection)gql"sv)), {
 			schema::InputValue::Make(R"gql(filter)gql"sv, R"md(过滤条件，缺省时返回全部图片。)md"sv, schema->LookupType(R"gql(ImageFilter)gql"sv), R"gql()gql"sv),
 			schema::InputValue::Make(R"gql(orderBy)gql"sv, R"md(排序字段，默认按创建时间。)md"sv, schema->LookupType(R"gql(ImageOrderField)gql"sv), R"gql(CREATED_AT)gql"sv),
 			schema::InputValue::Make(R"gql(direction)gql"sv, R"md(排序方向，默认倒序。)md"sv, schema->LookupType(R"gql(SortDirection)gql"sv), R"gql(DESC)gql"sv),
@@ -320,8 +324,11 @@ orderBy 传 SIMILARITY 时必须同时传 sortText，此时按描述文本与作
 			schema::InputValue::Make(R"gql(offset)gql"sv, R"md(跳过数量，0 到 10000。)md"sv, schema->LookupType(R"gql(Int)gql"sv), R"gql(0)gql"sv),
 			schema::InputValue::Make(R"gql(includeTotal)gql"sv, R"md(是否统计总数；为 true 时 total 才有值。)md"sv, schema->LookupType(R"gql(Boolean)gql"sv), R"gql(false)gql"sv),
 			schema::InputValue::Make(R"gql(sortText)gql"sv, R"md(按语义相似度排序时使用的描述文本，需配合 orderBy: SIMILARITY。
+与 referenceImageId 二选一。
 
-长度不超过 512 个字符。)md"sv, schema->LookupType(R"gql(String)gql"sv), R"gql()gql"sv)
+长度不超过 512 个字符。)md"sv, schema->LookupType(R"gql(String)gql"sv), R"gql()gql"sv),
+			schema::InputValue::Make(R"gql(referenceImageId)gql"sv, R"md(按参考图片相似度排序时使用的图片 ID，需配合 orderBy: SIMILARITY。
+与 sortText 二选一。参考图自身不会出现在结果中，结果只包含有向量的图片。)md"sv, schema->LookupType(R"gql(ID)gql"sv), R"gql()gql"sv)
 		}),
 		schema::Field::Make(R"gql(tags)gql"sv, R"md(按关键词搜索标签库，用于输入联想。
 

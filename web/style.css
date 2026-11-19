@@ -1926,3 +1926,78 @@ body.lightbox-open {
     right: 4px;
   }
 }
+
+/* 参考图查询条：灯箱里点“查找相似图片”后显示在当前筛选上方。 */
+.image-reference {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.image-reference img {
+  flex: none;
+  width: 44px;
+  height: 44px;
+  border-radius: 8px;
+  background: var(--chip-bg);
+  object-fit: cover;
+}
+
+.image-reference-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.image-reference-label {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.image-reference-id {
+  color: var(--muted);
+  font-family:
+    ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.image-reference-clear {
+  flex: none;
+  height: 30px;
+  padding: 0 12px;
+  margin-left: auto;
+}
+
+.lightbox-similar-link {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 18px;
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 14px;
+  text-decoration: none;
+  transition:
+    border-color 0.15s ease,
+    color 0.15s ease;
+}
+
+.lightbox-similar-link:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.lightbox-similar-link:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  outline-offset: 2px;
+}

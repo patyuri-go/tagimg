@@ -74,6 +74,20 @@
 
     <main class="page">
       <div class="toolbar">
+        <div id="image-reference" class="image-reference" hidden>
+          <img id="image-reference-thumb" alt="" decoding="async" />
+          <div class="image-reference-info">
+            <span class="image-reference-label">相似图查询</span>
+            <span id="image-reference-id" class="image-reference-id"></span>
+          </div>
+          <button
+            id="image-reference-clear"
+            class="button ghost image-reference-clear"
+            type="button"
+          >
+            取消
+          </button>
+        </div>
         <div id="tag-staging" class="tag-staging" hidden>
           <div id="include-stage-row" class="tag-stage" hidden>
             <span class="tag-stage-label">包含</span>
@@ -136,6 +150,13 @@
           </button>
         </div>
         <aside id="image-lightbox-side" class="image-lightbox-side">
+          <a
+            id="image-lightbox-similar"
+            class="lightbox-similar-link"
+            href="/images.html"
+          >
+            查找相似图片
+          </a>
           <section class="image-info-section">
             <h3 class="image-info-title">所属作品</h3>
             <div

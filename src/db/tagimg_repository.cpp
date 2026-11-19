@@ -674,7 +674,8 @@ WITH RECURSIVE params AS (
          CAST(:include_count AS bigint) AS include_count,
          CAST(:expand_include AS boolean) AS expand_include,
          CAST(:expand_exclude AS boolean) AS expand_exclude,
-         CAST(:include_all AS boolean) AS include_all
+         CAST(:include_all AS boolean) AS include_all,
+         CAST(:reference_image_id AS uuid) AS reference_image_id
 ),
 include_scope(root_id, tag_id) AS (
   SELECT x.id, x.id
@@ -718,6 +719,11 @@ WHERE (p.entity_ids IS NULL OR i.entity_id = ANY(p.entity_ids))
         FROM image_tags it
         JOIN exclude_scope s ON s.tag_id = it.tag_id
         WHERE it.image_id = i.id))
+  AND (p.reference_image_id IS NULL OR i.id <> p.reference_image_id)
+  AND (p.reference_image_id IS NULL OR EXISTS (
+        SELECT 1
+        FROM chinese_clip_vit_large_patch14 c
+        WHERE c.image_id = i.id))
 )sql";
 
 constexpr const char *kImageColumnsSql = R"sql(
@@ -1507,7 +1513,11 @@ TagimgRepository::search_images(const ImageSearchQuery &query) const {
         return TagimgRepositoryError::InvalidArgument;
       }
     }
-  } else if (!query.sort_embedding.empty()) {
+    if (query.reference_image_id &&
+        !is_uuid(*query.reference_image_id)) {
+      return TagimgRepositoryError::InvalidArgument;
+    }
+  } else if (!query.sort_embedding.empty() || query.reference_image_id) {
     return TagimgRepositoryError::InvalidArgument;
   }
   for (const auto *ids : {&query.entity_ids, &query.artist_ids,
@@ -1550,6 +1560,12 @@ TagimgRepository::search_images(const ImageSearchQuery &query) const {
   if (!exclude_ids.empty()) {
     exclude_value = uuid_array_literal(exclude_ids);
     exclude_indicator = soci::i_ok;
+  }
+  std::string reference_value;
+  soci::indicator reference_indicator = soci::i_null;
+  if (query.reference_image_id) {
+    reference_value = *query.reference_image_id;
+    reference_indicator = soci::i_ok;
   }
 
   const long long include_count = static_cast<long long>(include_ids.size());
@@ -1612,6 +1628,7 @@ TagimgRepository::search_images(const ImageSearchQuery &query) const {
            soci::use(exclude_value, exclude_indicator),
            soci::use(include_count), soci::use(expand_include),
            soci::use(expand_exclude), soci::use(include_all),
+           soci::use(reference_value, reference_indicator),
            soci::use(embedding_value), soci::use(limit_value),
            soci::use(offset_value));
       for (const soci::row &row : rows) {
@@ -1630,6 +1647,7 @@ TagimgRepository::search_images(const ImageSearchQuery &query) const {
            soci::use(exclude_value, exclude_indicator),
            soci::use(include_count), soci::use(expand_include),
            soci::use(expand_exclude), soci::use(include_all),
+           soci::use(reference_value, reference_indicator),
            soci::use(limit_value), soci::use(offset_value));
       for (const soci::row &row : rows) {
         result.items.push_back(parse_image_row(row));
@@ -1648,7 +1666,8 @@ TagimgRepository::search_images(const ImageSearchQuery &query) const {
           soci::use(include_value, include_indicator),
           soci::use(exclude_value, exclude_indicator), soci::use(include_count),
           soci::use(expand_include), soci::use(expand_exclude),
-          soci::use(include_all), soci::into(total);
+          soci::use(include_all),
+          soci::use(reference_value, reference_indicator), soci::into(total);
       result.total = static_cast<std::size_t>(total);
     }
 

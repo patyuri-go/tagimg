@@ -50,15 +50,15 @@ concept getArtworks = requires (TImpl impl, std::unique_ptr<ArtworkFilter> filte
 };
 
 template <class TImpl>
-concept getImagesWithParams = requires (TImpl impl, service::FieldParams params, std::unique_ptr<ImageFilter> filterArg, std::optional<ImageOrderField> orderByArg, std::optional<SortDirection> directionArg, std::optional<int> limitArg, std::optional<int> offsetArg, std::optional<bool> includeTotalArg, std::optional<std::string> sortTextArg)
+concept getImagesWithParams = requires (TImpl impl, service::FieldParams params, std::unique_ptr<ImageFilter> filterArg, std::optional<ImageOrderField> orderByArg, std::optional<SortDirection> directionArg, std::optional<int> limitArg, std::optional<int> offsetArg, std::optional<bool> includeTotalArg, std::optional<std::string> sortTextArg, std::optional<response::IdType> referenceImageIdArg)
 {
-	{ service::AwaitableObject<std::shared_ptr<ImageConnection>> { impl.getImages(std::move(params), std::move(filterArg), std::move(orderByArg), std::move(directionArg), std::move(limitArg), std::move(offsetArg), std::move(includeTotalArg), std::move(sortTextArg)) } };
+	{ service::AwaitableObject<std::shared_ptr<ImageConnection>> { impl.getImages(std::move(params), std::move(filterArg), std::move(orderByArg), std::move(directionArg), std::move(limitArg), std::move(offsetArg), std::move(includeTotalArg), std::move(sortTextArg), std::move(referenceImageIdArg)) } };
 };
 
 template <class TImpl>
-concept getImages = requires (TImpl impl, std::unique_ptr<ImageFilter> filterArg, std::optional<ImageOrderField> orderByArg, std::optional<SortDirection> directionArg, std::optional<int> limitArg, std::optional<int> offsetArg, std::optional<bool> includeTotalArg, std::optional<std::string> sortTextArg)
+concept getImages = requires (TImpl impl, std::unique_ptr<ImageFilter> filterArg, std::optional<ImageOrderField> orderByArg, std::optional<SortDirection> directionArg, std::optional<int> limitArg, std::optional<int> offsetArg, std::optional<bool> includeTotalArg, std::optional<std::string> sortTextArg, std::optional<response::IdType> referenceImageIdArg)
 {
-	{ service::AwaitableObject<std::shared_ptr<ImageConnection>> { impl.getImages(std::move(filterArg), std::move(orderByArg), std::move(directionArg), std::move(limitArg), std::move(offsetArg), std::move(includeTotalArg), std::move(sortTextArg)) } };
+	{ service::AwaitableObject<std::shared_ptr<ImageConnection>> { impl.getImages(std::move(filterArg), std::move(orderByArg), std::move(directionArg), std::move(limitArg), std::move(offsetArg), std::move(includeTotalArg), std::move(sortTextArg), std::move(referenceImageIdArg)) } };
 };
 
 template <class TImpl>
@@ -126,7 +126,7 @@ private:
 		[[nodiscard("unnecessary call")]] virtual service::AwaitableScalar<std::string> getPing(service::FieldParams&& params) const = 0;
 		[[nodiscard("unnecessary call")]] virtual service::AwaitableObject<std::shared_ptr<Artwork>> getArtwork(service::FieldParams&& params, response::IdType&& idArg) const = 0;
 		[[nodiscard("unnecessary call")]] virtual service::AwaitableObject<std::shared_ptr<ArtworkConnection>> getArtworks(service::FieldParams&& params, std::unique_ptr<ArtworkFilter>&& filterArg, std::optional<ArtworkOrderField>&& orderByArg, std::optional<SortDirection>&& directionArg, std::optional<int>&& limitArg, std::optional<int>&& offsetArg, std::optional<bool>&& includeTotalArg, std::optional<std::string>&& sortTextArg) const = 0;
-		[[nodiscard("unnecessary call")]] virtual service::AwaitableObject<std::shared_ptr<ImageConnection>> getImages(service::FieldParams&& params, std::unique_ptr<ImageFilter>&& filterArg, std::optional<ImageOrderField>&& orderByArg, std::optional<SortDirection>&& directionArg, std::optional<int>&& limitArg, std::optional<int>&& offsetArg, std::optional<bool>&& includeTotalArg, std::optional<std::string>&& sortTextArg) const = 0;
+		[[nodiscard("unnecessary call")]] virtual service::AwaitableObject<std::shared_ptr<ImageConnection>> getImages(service::FieldParams&& params, std::unique_ptr<ImageFilter>&& filterArg, std::optional<ImageOrderField>&& orderByArg, std::optional<SortDirection>&& directionArg, std::optional<int>&& limitArg, std::optional<int>&& offsetArg, std::optional<bool>&& includeTotalArg, std::optional<std::string>&& sortTextArg, std::optional<response::IdType>&& referenceImageIdArg) const = 0;
 		[[nodiscard("unnecessary call")]] virtual service::AwaitableObject<std::vector<std::shared_ptr<TagMatch>>> getTags(service::FieldParams&& params, std::string&& queryArg, std::unique_ptr<TagSearchScope>&& scopeArg, std::optional<int>&& limitArg) const = 0;
 		[[nodiscard("unnecessary call")]] virtual service::AwaitableObject<std::shared_ptr<OrphanImageConnection>> getOrphanImages(service::FieldParams&& params, std::optional<int>&& limitArg, std::optional<int>&& offsetArg, std::optional<bool>&& includeTotalArg) const = 0;
 	};
@@ -179,16 +179,16 @@ private:
 			}
 		}
 
-		[[nodiscard("unnecessary call")]] service::AwaitableObject<std::shared_ptr<ImageConnection>> getImages(service::FieldParams&& params, std::unique_ptr<ImageFilter>&& filterArg, std::optional<ImageOrderField>&& orderByArg, std::optional<SortDirection>&& directionArg, std::optional<int>&& limitArg, std::optional<int>&& offsetArg, std::optional<bool>&& includeTotalArg, std::optional<std::string>&& sortTextArg) const override
+		[[nodiscard("unnecessary call")]] service::AwaitableObject<std::shared_ptr<ImageConnection>> getImages(service::FieldParams&& params, std::unique_ptr<ImageFilter>&& filterArg, std::optional<ImageOrderField>&& orderByArg, std::optional<SortDirection>&& directionArg, std::optional<int>&& limitArg, std::optional<int>&& offsetArg, std::optional<bool>&& includeTotalArg, std::optional<std::string>&& sortTextArg, std::optional<response::IdType>&& referenceImageIdArg) const override
 		{
 			if constexpr (methods::QueryHas::getImagesWithParams<T>)
 			{
-				return { _pimpl->getImages(std::move(params), std::move(filterArg), std::move(orderByArg), std::move(directionArg), std::move(limitArg), std::move(offsetArg), std::move(includeTotalArg), std::move(sortTextArg)) };
+				return { _pimpl->getImages(std::move(params), std::move(filterArg), std::move(orderByArg), std::move(directionArg), std::move(limitArg), std::move(offsetArg), std::move(includeTotalArg), std::move(sortTextArg), std::move(referenceImageIdArg)) };
 			}
 			else
 			{
 				static_assert(methods::QueryHas::getImages<T>, R"msg(Query::getImages is not implemented)msg");
-				return { _pimpl->getImages(std::move(filterArg), std::move(orderByArg), std::move(directionArg), std::move(limitArg), std::move(offsetArg), std::move(includeTotalArg), std::move(sortTextArg)) };
+				return { _pimpl->getImages(std::move(filterArg), std::move(orderByArg), std::move(directionArg), std::move(limitArg), std::move(offsetArg), std::move(includeTotalArg), std::move(sortTextArg), std::move(referenceImageIdArg)) };
 			}
 		}
 

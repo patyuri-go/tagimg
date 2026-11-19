@@ -50,6 +50,9 @@ type Query {
 
   与 artworks 基本相同，但没有标题过滤。所有过滤条件之间是 AND 关系；
   同一个数组内部是 OR 关系。图片的标签来自 image_tags。
+
+  orderBy 传 SIMILARITY 时必须同时传 sortText 或 referenceImageId 之一；
+  传 referenceImageId 时，参考图自身不会出现在结果中，且只返回有向量的图片。
   """
   images(
     "过滤条件，缺省时返回全部图片。"
@@ -66,10 +69,16 @@ type Query {
     includeTotal: Boolean = false
     """
     按语义相似度排序时使用的描述文本，需配合 orderBy: SIMILARITY。
+    与 referenceImageId 二选一。
 
     长度不超过 512 个字符。
     """
     sortText: String
+    """
+    按参考图片相似度排序时使用的图片 ID，需配合 orderBy: SIMILARITY。
+    与 sortText 二选一。参考图自身不会出现在结果中，结果只包含有向量的图片。
+    """
+    referenceImageId: ID
   ): ImageConnection!
 
   """
@@ -172,7 +181,7 @@ enum ImageOrderField {
   CREATED_AT
   PUBLISHED_AT
   SCAN_AT
-  "按 sortText 的语义相似度倒序；没有向量的图片排在最后。"
+  "按 sortText 或 referenceImageId 的相似度倒序；参考图模式下只返回有向量的图片。"
   SIMILARITY
 }
 
@@ -321,9 +330,10 @@ type Image {
   artworks: [ImageArtwork!]!
 
   """
-  文本相似度分数，仅在 orderBy: SIMILARITY 且提供 sortText 时有值。
+  文本/参考图相似度分数，仅在 orderBy: SIMILARITY 且提供 sortText 或
+  referenceImageId 时有值。
 
-  图片没有向量时为 null。
+  图片没有向量时为 null；referenceImageId 模式下结果图片都有向量。
   """
   sortScore: Float
 }

@@ -218,9 +218,10 @@ void AddImageDetails(const std::shared_ptr<schema::ObjectType>& typeImage, const
 		schema::Field::Make(R"gql(tags)gql"sv, R"md(标签列表，name 是该标签自身的标准名。)md"sv, std::nullopt, schema->WrapType(introspection::TypeKind::NON_NULL, schema->WrapType(introspection::TypeKind::LIST, schema->WrapType(introspection::TypeKind::NON_NULL, schema->LookupType(R"gql(Tag)gql"sv))))),
 		schema::Field::Make(R"gql(tagPaths)gql"sv, R"md(标签路径列表。)md"sv, std::nullopt, schema->WrapType(introspection::TypeKind::NON_NULL, schema->WrapType(introspection::TypeKind::LIST, schema->WrapType(introspection::TypeKind::NON_NULL, schema->LookupType(R"gql(TagPath)gql"sv))))),
 		schema::Field::Make(R"gql(artworks)gql"sv, R"md(所属作品，按发布时间倒序；没有作品时为空数组。)md"sv, std::nullopt, schema->WrapType(introspection::TypeKind::NON_NULL, schema->WrapType(introspection::TypeKind::LIST, schema->WrapType(introspection::TypeKind::NON_NULL, schema->LookupType(R"gql(ImageArtwork)gql"sv))))),
-		schema::Field::Make(R"gql(sortScore)gql"sv, R"md(文本相似度分数，仅在 orderBy: SIMILARITY 且提供 sortText 时有值。
+		schema::Field::Make(R"gql(sortScore)gql"sv, R"md(文本/参考图相似度分数，仅在 orderBy: SIMILARITY 且提供 sortText 或
+referenceImageId 时有值。
 
-图片没有向量时为 null。)md"sv, std::nullopt, schema->LookupType(R"gql(Float)gql"sv))
+图片没有向量时为 null；referenceImageId 模式下结果图片都有向量。)md"sv, std::nullopt, schema->LookupType(R"gql(Float)gql"sv))
 	});
 }
 

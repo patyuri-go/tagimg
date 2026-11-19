@@ -23,6 +23,7 @@
       $limit: Int!
       $offset: Int!
       $sortText: String
+      $referenceImageId: ID
     ) {
       images(
         filter: $filter
@@ -31,6 +32,7 @@
         offset: $offset
         includeTotal: true
         sortText: $sortText
+        referenceImageId: $referenceImageId
       ) {
         items {
           id
@@ -69,6 +71,10 @@
   const sortSearch = document.getElementById("image-sort-search");
   const sortInput = document.getElementById("image-sort-input");
   const sortClear = document.getElementById("image-sort-clear");
+  const referenceBar = document.getElementById("image-reference");
+  const referenceThumb = document.getElementById("image-reference-thumb");
+  const referenceIdText = document.getElementById("image-reference-id");
+  const referenceClear = document.getElementById("image-reference-clear");
   const tagStaging = document.getElementById("tag-staging");
   const includeStageRow = document.getElementById("include-stage-row");
   const excludeStageRow = document.getElementById("exclude-stage-row");
@@ -90,12 +96,14 @@
   const lightboxArtworks = document.getElementById("image-lightbox-artworks");
   const lightboxTags = document.getElementById("image-lightbox-tags");
   const lightboxMeta = document.getElementById("image-lightbox-meta");
+  const lightboxSimilar = document.getElementById("image-lightbox-similar");
 
   const includeTags = [];
   const excludeTags = [];
 
   let order = "created";
   let sortText = "";
+  let referenceImageId = "";
   let offset = 0;
   let inFlight = null;
   let hasMore = false;
@@ -185,8 +193,39 @@
     return titles;
   }
 
+  function hasReferenceImage() {
+    return referenceImageId.length > 0;
+  }
+
+  function buildSimilarUrl(imageId) {
+    const params = new URLSearchParams(window.location.search);
+    params.delete("order");
+    params.delete("sort");
+    params.set("similar", imageId);
+    return `${window.location.pathname}?${params.toString()}`;
+  }
+
+  function renderReferenceBar() {
+    const active = hasReferenceImage();
+    referenceBar.hidden = !active;
+    if (!active) {
+      referenceThumb.hidden = false;
+      referenceThumb.removeAttribute("src");
+      referenceIdText.textContent = "";
+      return;
+    }
+    referenceThumb.hidden = false;
+    const thumbSrc = imageStreamUrl(referenceImageId, "thumb");
+    if (referenceThumb.getAttribute("src") !== thumbSrc) {
+      referenceThumb.src = thumbSrc;
+    }
+    referenceIdText.textContent = referenceImageId;
+  }
+
   function isSimilarityActive() {
-    return order === "similarity" && sortText.length > 0;
+    return (
+      hasReferenceImage() || (order === "similarity" && sortText.length > 0)
+    );
   }
 
   function effectiveOrderBy() {
@@ -332,6 +371,14 @@
       }
     }
 
+    const rawSimilar = (params.get("similar") || "").trim().toLowerCase();
+    if (UUID_PATTERN.test(rawSimilar)) {
+      referenceImageId = rawSimilar;
+      order = "similarity";
+      sortText = "";
+      return;
+    }
+
     const rawOrder = (params.get("order") || "").trim();
     if (ORDER_VALUES.includes(rawOrder)) {
       order = rawOrder;
@@ -353,11 +400,15 @@
       "excludeName",
       "excludePath",
     );
-    if (order !== "created") {
-      params.set("order", order);
-    }
-    if (sortText) {
-      params.set("sort", sortText);
+    if (hasReferenceImage()) {
+      params.set("similar", referenceImageId);
+    } else {
+      if (order !== "created") {
+        params.set("order", order);
+      }
+      if (sortText) {
+        params.set("sort", sortText);
+      }
     }
     const query = params.toString();
     const url = query
@@ -391,7 +442,9 @@
           orderBy: effectiveOrderBy(),
           limit: PAGE_SIZE,
           offset: fromOffset,
-          sortText: isSimilarityActive() ? sortText : null,
+          sortText:
+            !hasReferenceImage() && isSimilarityActive() ? sortText : null,
+          referenceImageId: hasReferenceImage() ? referenceImageId : null,
         },
       }),
       signal,
@@ -649,7 +702,13 @@
     }
     const controller = new AbortController();
     inFlight = controller;
-    setStatus(reset ? "搜索中…" : "加载中…");
+    setStatus(
+      reset
+        ? hasReferenceImage()
+          ? "相似图查询中…"
+          : "搜索中…"
+        : "加载中…",
+    );
 
     try {
       const data = await requestImages(currentFilter(), offset, controller.signal);
@@ -675,11 +734,23 @@
       hasMore = Boolean(data.hasMore) && data.items.length > 0;
 
       if (offset === 0) {
-        setStatus(currentFilter() ? "没有符合条件的图片" : "还没有图片");
+        if (hasReferenceImage()) {
+          setStatus("没有找到相似图片");
+        } else {
+          setStatus(currentFilter() ? "没有符合条件的图片" : "还没有图片");
+        }
       } else if (reset && typeof data.total === "number") {
-        setStatus(`共 ${data.total} 张图片`);
+        setStatus(
+          hasReferenceImage()
+            ? `相似图：共 ${data.total} 张图片`
+            : `共 ${data.total} 张图片`,
+        );
       } else {
-        setStatus(`已加载 ${offset} 张图片`);
+        setStatus(
+          hasReferenceImage()
+            ? `相似图：已加载 ${offset} 张图片`
+            : `已加载 ${offset} 张图片`,
+        );
       }
       window.setTimeout(maybeLoadMore, 0);
     } catch (error) {
@@ -706,6 +777,7 @@
   }
 
   function renderLightboxSidebar(item) {
+    lightboxSimilar.href = buildSimilarUrl(item.id);
     lightboxArtworks.replaceChildren();
     const artworks = Array.isArray(item.artworks) ? item.artworks : [];
     if (artworks.length === 0) {
@@ -1114,15 +1186,38 @@
   // ---------- 排序控件 ----------
 
   function syncSortUi() {
-    orderSelect.value = order;
-    const show = order === "similarity";
+    const hasReference = hasReferenceImage();
+    const similarityOption = orderSelect.querySelector(
+      'option[value="similarity"]',
+    );
+    if (similarityOption) {
+      similarityOption.disabled = hasReference;
+    }
+    orderSelect.value = hasReference ? "similarity" : order;
+    const show = !hasReference && order === "similarity";
     sortSearch.hidden = !show;
-    sortInput.value = sortText;
-    sortClear.hidden = sortText.length === 0;
-    sortSearch.classList.toggle("is-active", sortText.length > 0);
+    sortInput.value = hasReference ? "" : sortText;
+    sortClear.hidden = sortInput.value.length === 0;
+    sortSearch.classList.toggle("is-active", show && sortText.length > 0);
+    orderSelect.title = hasReference
+      ? "当前按参考图相似度排序；选择其他排序会退出相似图查询"
+      : "";
+  }
+
+  function leaveReferenceMode(nextOrder) {
+    referenceImageId = "";
+    order = ORDER_VALUES.includes(nextOrder) ? nextOrder : "created";
+    sortText = "";
+    renderReferenceBar();
+    syncSortUi();
+    syncStateToUrl();
+    search(true);
   }
 
   function applySortText(value) {
+    if (hasReferenceImage()) {
+      return;
+    }
     const next = String(value || "").trim();
     sortInput.value = next;
     if (next === sortText && order === "similarity") {
@@ -1142,8 +1237,18 @@
   }
 
   orderSelect.addEventListener("change", () => {
-    const next = orderSelect.value;
-    order = ORDER_VALUES.includes(next) ? next : "created";
+    const next = ORDER_VALUES.includes(orderSelect.value)
+      ? orderSelect.value
+      : "created";
+    if (hasReferenceImage()) {
+      if (next === "similarity") {
+        syncSortUi();
+        return;
+      }
+      leaveReferenceMode(next);
+      return;
+    }
+    order = next;
     if (order !== "similarity") {
       sortText = "";
     }
@@ -1153,6 +1258,21 @@
     if (order === "similarity") {
       sortInput.focus();
     }
+  });
+
+  referenceClear.addEventListener("click", () => {
+    if (!hasReferenceImage()) {
+      return;
+    }
+    leaveReferenceMode("created");
+  });
+
+  referenceThumb.addEventListener("load", () => {
+    referenceThumb.hidden = false;
+  });
+
+  referenceThumb.addEventListener("error", () => {
+    referenceThumb.hidden = true;
   });
 
   sortInput.addEventListener("keydown", (event) => {
@@ -1208,6 +1328,8 @@
 
   restoreStateFromUrl();
   renderStaging();
+  renderReferenceBar();
   syncSortUi();
+  syncStateToUrl();
   search(true);
 })();

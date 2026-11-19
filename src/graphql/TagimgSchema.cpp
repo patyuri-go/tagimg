@@ -1009,7 +1009,7 @@ void AddTypesToSchema(const std::shared_ptr<schema::Schema>& schema)
 		{ service::s_namesImageOrderField[static_cast<size_t>(tagimg::ImageOrderField::CREATED_AT)], R"md()md"sv, std::nullopt },
 		{ service::s_namesImageOrderField[static_cast<size_t>(tagimg::ImageOrderField::PUBLISHED_AT)], R"md()md"sv, std::nullopt },
 		{ service::s_namesImageOrderField[static_cast<size_t>(tagimg::ImageOrderField::SCAN_AT)], R"md()md"sv, std::nullopt },
-		{ service::s_namesImageOrderField[static_cast<size_t>(tagimg::ImageOrderField::SIMILARITY)], R"md(按 sortText 的语义相似度倒序；没有向量的图片排在最后。)md"sv, std::nullopt }
+		{ service::s_namesImageOrderField[static_cast<size_t>(tagimg::ImageOrderField::SIMILARITY)], R"md(按 sortText 或 referenceImageId 的相似度倒序；参考图模式下只返回有向量的图片。)md"sv, std::nullopt }
 	});
 
 	typeArtworkFilter->AddInputValues({

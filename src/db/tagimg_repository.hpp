@@ -272,8 +272,11 @@ struct ImageSearchQuery {
   std::size_t offset = 0;
   bool include_total = false;
   // 仅 order_by == Similarity 时使用：768 维文本向量，已 L2 归一化。
-  // 没有向量的图片仍会返回，只是排在最后。
+  // 文字相似度模式下没有向量的图片仍会返回，只是排在最后。
   std::vector<float> sort_embedding;
+  // 仅参考图相似度模式：排除该图片自身，并要求结果图片都有向量。
+  // 设置时 order_by 必须是 Similarity，且 sort_embedding 必须是对应参考图的向量。
+  std::optional<std::string> reference_image_id;
 };
 
 struct ImageSearchResult {
