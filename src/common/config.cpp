@@ -1,5 +1,6 @@
 #include "common/config.hpp"
 
+#include <cmath>
 #include <fstream>
 #include <iterator>
 #include <optional>
@@ -189,7 +190,7 @@ Result<AppConfig, ConfigError> load_config(const std::filesystem::path &path) {
     }
   }
 
-  // ai 段同样是可选项；写了的字段会做类型校验，没写的用默认值。
+  // ai 段是必填项：wd14_threshold 没有可接受的隐式默认值。
   const auto ai = root.find("ai");
   if (ai != root.end()) {
     if (!ai->is_object()) {
@@ -263,6 +264,20 @@ Result<AppConfig, ConfigError> load_config(const std::filesystem::path &path) {
       return std::nullopt;
     };
 
+    const auto threshold = ai->find("wd14_threshold");
+    if (threshold == ai->end()) {
+      return ConfigError::MissingField;
+    }
+    if (!threshold->is_number()) {
+      return ConfigError::InvalidField;
+    }
+    const double threshold_value = threshold->get<double>();
+    if (!std::isfinite(threshold_value) || threshold_value < 0.0 ||
+        threshold_value > 1.0) {
+      return ConfigError::InvalidField;
+    }
+    config.ai.wd14_threshold = static_cast<float>(threshold_value);
+
     if (const auto error = read_boolean("local", config.ai.local)) {
       return *error;
     }
@@ -329,6 +344,8 @@ Result<AppConfig, ConfigError> load_config(const std::filesystem::path &path) {
                                         config.ai.clip_startup_timeout_seconds)) {
       return *error;
     }
+  } else {
+    return ConfigError::MissingField;
   }
 
   return config;

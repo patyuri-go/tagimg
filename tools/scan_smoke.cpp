@@ -151,7 +151,7 @@ int main(int argc, char **argv) {
     return 2;
   }
 
-  tagimg::WdTagger tagger(endpoint);
+  tagimg::WdTagger tagger(endpoint, config->ai.wd14_threshold);
   tagimg::ClipEmbedder embedder(endpoint);
   tagimg::AiHealthClient ai_health(endpoint);
   tagimg::JobContext context{std::cref(**repository),

@@ -38,7 +38,8 @@ int main(int argc, char **argv) {
 
   const char *endpoint = std::getenv("TAGIMG_AI_ENDPOINT");
   tagimg::WdTagger tagger(endpoint != nullptr ? endpoint
-                                              : "http://127.0.0.1:8001");
+                                              : "http://127.0.0.1:8001",
+                          0.85F);
   auto output = nlohmann::json::array();
   bool failed = false;
 

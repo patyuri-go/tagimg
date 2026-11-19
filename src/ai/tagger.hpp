@@ -51,7 +51,7 @@ public:
   static constexpr std::size_t kMaxImageBytes = 50 * 1024 * 1024;
 
   explicit WdTagger(
-      std::string endpoint = "http://127.0.0.1:8001",
+      std::string endpoint, float threshold,
       std::chrono::milliseconds timeout = std::chrono::seconds(30));
 
   WdTagger(const WdTagger &) = delete;
@@ -65,6 +65,8 @@ public:
 
 private:
   std::string endpoint_;
+  // wd14 general / character 共用的置信度阈值，随每次打标请求发送。
+  float threshold_;
   std::chrono::milliseconds timeout_;
   trantor::EventLoopThread loop_thread_;
   drogon::HttpClientPtr client_;

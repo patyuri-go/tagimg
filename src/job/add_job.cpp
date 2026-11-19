@@ -138,8 +138,8 @@ void AddJob::finish(JobContext &context) {
   std::vector<std::vector<ArtworkTag>> scanned_tags;
   scanned_tags.reserve(result.scans.size());
   for (const ScanResult &scan : result.scans) {
-    merge_tags(best_tags, scan.tags.general, "general", kScanTagThreshold);
-    merge_tags(best_tags, scan.tags.character, "character", kScanTagThreshold);
+    merge_tags(best_tags, scan.tags.general, "general");
+    merge_tags(best_tags, scan.tags.character, "character");
     merge_best_rating(best_tags, scan.tags.rating);
     scanned_tags.push_back(build_image_scanned_tags(scan.tags));
   }

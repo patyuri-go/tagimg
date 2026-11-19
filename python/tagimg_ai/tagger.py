@@ -36,18 +36,12 @@ class InvalidImageError(TaggerInputError):
 @dataclass(frozen=True)
 class TaggerConfig:
     model_dir: Path = DEFAULT_MODEL_DIR
-    general_threshold: float = 0.35
-    character_threshold: float = 0.85
     threads: int = 2
 
     @classmethod
     def from_env(cls) -> "TaggerConfig":
         return cls(
             model_dir=Path(os.environ.get("TAGIMG_MODEL_DIR", str(DEFAULT_MODEL_DIR))),
-            general_threshold=float(os.environ.get("TAGIMG_GENERAL_THRESHOLD", "0.35")),
-            character_threshold=float(
-                os.environ.get("TAGIMG_CHARACTER_THRESHOLD", "0.85")
-            ),
             threads=int(os.environ.get("TAGIMG_TAGGER_THREADS", "2")),
         )
 
@@ -266,7 +260,9 @@ class WdTagger:
         tags.sort(key=lambda tag: tag.score, reverse=True)
         return tags
 
-    def tag_bytes(self, data: bytes) -> TaggingResult:
+    def tag_bytes(self, data: bytes, threshold: float) -> TaggingResult:
+        if not 0.0 <= threshold <= 1.0:
+            raise ValueError("threshold must be in [0, 1]")
         started = time.perf_counter()
         image = self._decode_image(data)
         tensor = self._to_tensor(image)
@@ -284,12 +280,8 @@ class WdTagger:
 
         elapsed_ms = (time.perf_counter() - started) * 1000
         return TaggingResult(
-            general=self._select(
-                scores, self._general_indices, self._config.general_threshold
-            ),
-            character=self._select(
-                scores, self._character_indices, self._config.character_threshold
-            ),
+            general=self._select(scores, self._general_indices, threshold),
+            character=self._select(scores, self._character_indices, threshold),
             rating=[
                 TagScore(self._names[index], float(scores[index]))
                 for index in self._rating_indices
@@ -297,7 +289,7 @@ class WdTagger:
             elapsed_ms=elapsed_ms,
         )
 
-    def tag_file(self, path: str | Path) -> TaggingResult:
+    def tag_file(self, path: str | Path, threshold: float) -> TaggingResult:
         file_path = Path(path)
         try:
             size = file_path.stat().st_size
@@ -309,7 +301,7 @@ class WdTagger:
             data = file_path.read_bytes()
         except OSError as exc:
             raise InvalidImageError(f"cannot read image: {file_path}") from exc
-        return self.tag_bytes(data)
+        return self.tag_bytes(data, threshold)
 
     @property
     def model_name(self) -> str:

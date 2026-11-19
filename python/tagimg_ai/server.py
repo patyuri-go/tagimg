@@ -94,6 +94,20 @@ def health(request: Request) -> dict[str, object]:
 
 @app.post("/v1/tag/image")
 async def tag_image(request: Request) -> JSONResponse:
+    raw_threshold = request.query_params.get("threshold")
+    if raw_threshold is None:
+        raise HTTPException(status_code=400, detail="threshold is required")
+    try:
+        threshold = float(raw_threshold)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400, detail="threshold must be a number in [0, 1]"
+        ) from exc
+    if not 0.0 <= threshold <= 1.0:
+        raise HTTPException(
+            status_code=400, detail="threshold must be a number in [0, 1]"
+        )
+
     content_length = request.headers.get("content-length")
     if content_length is not None:
         try:
@@ -113,7 +127,7 @@ async def tag_image(request: Request) -> JSONResponse:
         raise HTTPException(status_code=503, detail="tagger is not ready")
 
     try:
-        result = await run_in_threadpool(tagger.tag_bytes, data)
+        result = await run_in_threadpool(tagger.tag_bytes, data, threshold)
     except ImageTooLargeError as exc:
         raise HTTPException(status_code=413, detail=str(exc)) from exc
     except InvalidImageError as exc:

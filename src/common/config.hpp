@@ -61,6 +61,10 @@ struct AiConfig {
   std::string module = "tagimg_ai.server";
   std::uint32_t threads = 2;
   std::uint32_t startup_timeout_seconds = 90;
+  // wd14 general / character 标签的统一置信度阈值。
+  //
+  // 配置文件必须显式提供；加载器不会使用这里的默认值兜底。
+  float wd14_threshold = 0.85F;
 
   // Chinese-CLIP 图像/文本向量模型（768 维）。
   std::filesystem::path clip_model_dir =

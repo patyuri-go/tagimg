@@ -156,7 +156,8 @@ int main() {
               << tagimg::to_string(health.error()) << std::endl;
   }
 
-  auto tagger = std::make_shared<tagimg::WdTagger>(endpoint);
+  auto tagger = std::make_shared<tagimg::WdTagger>(
+      endpoint, config->ai.wd14_threshold);
   // CLIP 与 tagger 共用同一个 sidecar；CPU 上 ViT-L/14 明显更慢，超时单独配置。
   auto embedder = std::make_shared<tagimg::ClipEmbedder>(
       endpoint, std::chrono::seconds(config->ai.clip_timeout_seconds));

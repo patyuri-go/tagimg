@@ -73,11 +73,15 @@ std::string_view to_string(TaggerError error) noexcept {
   return "Unknown";
 }
 
-WdTagger::WdTagger(std::string endpoint, std::chrono::milliseconds timeout)
-    : endpoint_(normalize_endpoint(std::move(endpoint))), timeout_(timeout),
-      loop_thread_("tagimg-ai-client") {
+WdTagger::WdTagger(std::string endpoint, float threshold,
+                   std::chrono::milliseconds timeout)
+    : endpoint_(normalize_endpoint(std::move(endpoint))), threshold_(threshold),
+      timeout_(timeout), loop_thread_("tagimg-ai-client") {
   if (timeout_.count() <= 0) {
     throw std::invalid_argument("tagger timeout must be positive");
+  }
+  if (!(threshold_ >= 0.0F && threshold_ <= 1.0F)) {
+    throw std::invalid_argument("tagger threshold must be in [0, 1]");
   }
 
   loop_thread_.run();
@@ -129,6 +133,7 @@ TaggerResult WdTagger::tag_bytes(std::span<const std::byte> bytes) const {
   auto request = drogon::HttpRequest::newHttpRequest();
   request->setMethod(drogon::Post);
   request->setPath("/v1/tag/image");
+  request->setQueryParameter("threshold", std::to_string(threshold_));
   request->setContentTypeCode(drogon::CT_APPLICATION_OCTET_STREAM);
   request->setBody(
       std::string(reinterpret_cast<const char *>(bytes.data()), bytes.size()));

@@ -10,19 +10,16 @@
 
 namespace tagimg {
 
-// 扫描结果的置信度阈值：general / character 达到该分数才写入。
-inline constexpr float kScanTagThreshold = 0.85F;
-
+// wd14 标签的置信度过滤已下沉到 Python 侧：C++ 只负责合并与去重，
+// 收到的 general / character 标签都是已经按配置阈值过滤过的。
+//
 // 同一图片里同名标签只保留最高分；跨图片再按 (分类, 名称) 合并。
 using TagKey = std::pair<std::string, std::string>;
 
 inline void merge_tags(std::map<TagKey, float> &best,
                        const std::vector<TagScore> &tags,
-                       const std::string &category, float threshold) {
+                       const std::string &category) {
   for (const TagScore &tag : tags) {
-    if (tag.score < threshold) {
-      continue;
-    }
     const TagKey key{category, tag.name};
     const auto existing = best.find(key);
     if (existing == best.end() || existing->second < tag.score) {
@@ -64,8 +61,8 @@ build_scanned_tags(const std::map<TagKey, float> &best) {
 inline std::vector<ArtworkTag>
 build_image_scanned_tags(const TaggingResult &tags) {
   std::map<TagKey, float> best;
-  merge_tags(best, tags.general, "general", kScanTagThreshold);
-  merge_tags(best, tags.character, "character", kScanTagThreshold);
+  merge_tags(best, tags.general, "general");
+  merge_tags(best, tags.character, "character");
   merge_best_rating(best, tags.rating);
   return build_scanned_tags(best);
 }
