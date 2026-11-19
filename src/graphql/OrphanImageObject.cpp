@@ -21,170 +21,124 @@ namespace graphql::tagimg {
 namespace object {
 
 OrphanImage::OrphanImage(std::unique_ptr<const Concept> pimpl) noexcept
-    : service::Object{getTypeNames(), getResolvers()},
-      _pimpl{std::move(pimpl)} {
+	: service::Object{ getTypeNames(), getResolvers() }
+	, _pimpl { std::move(pimpl) }
+{
 }
 
-service::TypeNames OrphanImage::getTypeNames() const noexcept {
-  return {R"gql(OrphanImage)gql"sv};
+service::TypeNames OrphanImage::getTypeNames() const noexcept
+{
+	return {
+		R"gql(OrphanImage)gql"sv
+	};
 }
 
-service::ResolverMap OrphanImage::getResolvers() const noexcept {
-  return {{R"gql(id)gql"sv,
-           [this](service::ResolverParams &&params) {
-             return resolveId(std::move(params));
-           }},
-          {R"gql(width)gql"sv,
-           [this](service::ResolverParams &&params) {
-             return resolveWidth(std::move(params));
-           }},
-          {R"gql(height)gql"sv,
-           [this](service::ResolverParams &&params) {
-             return resolveHeight(std::move(params));
-           }},
-          {R"gql(scanAt)gql"sv,
-           [this](service::ResolverParams &&params) {
-             return resolveScanAt(std::move(params));
-           }},
-          {R"gql(createdAt)gql"sv,
-           [this](service::ResolverParams &&params) {
-             return resolveCreatedAt(std::move(params));
-           }},
-          {R"gql(__typename)gql"sv,
-           [this](service::ResolverParams &&params) {
-             return resolve_typename(std::move(params));
-           }},
-          {R"gql(frameCount)gql"sv, [this](service::ResolverParams &&params) {
-             return resolveFrameCount(std::move(params));
-           }}};
+service::ResolverMap OrphanImage::getResolvers() const noexcept
+{
+	return {
+		{ R"gql(id)gql"sv, [this](service::ResolverParams&& params) { return resolveId(std::move(params)); } },
+		{ R"gql(width)gql"sv, [this](service::ResolverParams&& params) { return resolveWidth(std::move(params)); } },
+		{ R"gql(height)gql"sv, [this](service::ResolverParams&& params) { return resolveHeight(std::move(params)); } },
+		{ R"gql(scanAt)gql"sv, [this](service::ResolverParams&& params) { return resolveScanAt(std::move(params)); } },
+		{ R"gql(createdAt)gql"sv, [this](service::ResolverParams&& params) { return resolveCreatedAt(std::move(params)); } },
+		{ R"gql(__typename)gql"sv, [this](service::ResolverParams&& params) { return resolve_typename(std::move(params)); } },
+		{ R"gql(frameCount)gql"sv, [this](service::ResolverParams&& params) { return resolveFrameCount(std::move(params)); } }
+	};
 }
 
-void OrphanImage::beginSelectionSet(
-    const service::SelectionSetParams &params) const {
-  _pimpl->beginSelectionSet(params);
+void OrphanImage::beginSelectionSet(const service::SelectionSetParams& params) const
+{
+	_pimpl->beginSelectionSet(params);
 }
 
-void OrphanImage::endSelectionSet(
-    const service::SelectionSetParams &params) const {
-  _pimpl->endSelectionSet(params);
+void OrphanImage::endSelectionSet(const service::SelectionSetParams& params) const
+{
+	_pimpl->endSelectionSet(params);
 }
 
-service::AwaitableResolver
-OrphanImage::resolveId(service::ResolverParams &&params) const {
-  std::unique_lock resolverLock(_resolverMutex);
-  service::SelectionSetParams selectionSetParams{
-      static_cast<const service::SelectionSetParams &>(params)};
-  auto directives = std::move(params.fieldDirectives);
-  auto result = _pimpl->getId(service::FieldParams{
-      std::move(selectionSetParams), std::move(directives)});
-  resolverLock.unlock();
+service::AwaitableResolver OrphanImage::resolveId(service::ResolverParams&& params) const
+{
+	std::unique_lock resolverLock(_resolverMutex);
+	service::SelectionSetParams selectionSetParams { static_cast<const service::SelectionSetParams&>(params) };
+	auto directives = std::move(params.fieldDirectives);
+	auto result = _pimpl->getId(service::FieldParams { std::move(selectionSetParams), std::move(directives) });
+	resolverLock.unlock();
 
-  return service::ModifiedResult<response::IdType>::convert(std::move(result),
-                                                            std::move(params));
+	return service::ModifiedResult<response::IdType>::convert(std::move(result), std::move(params));
 }
 
-service::AwaitableResolver
-OrphanImage::resolveWidth(service::ResolverParams &&params) const {
-  std::unique_lock resolverLock(_resolverMutex);
-  service::SelectionSetParams selectionSetParams{
-      static_cast<const service::SelectionSetParams &>(params)};
-  auto directives = std::move(params.fieldDirectives);
-  auto result = _pimpl->getWidth(service::FieldParams{
-      std::move(selectionSetParams), std::move(directives)});
-  resolverLock.unlock();
+service::AwaitableResolver OrphanImage::resolveWidth(service::ResolverParams&& params) const
+{
+	std::unique_lock resolverLock(_resolverMutex);
+	service::SelectionSetParams selectionSetParams { static_cast<const service::SelectionSetParams&>(params) };
+	auto directives = std::move(params.fieldDirectives);
+	auto result = _pimpl->getWidth(service::FieldParams { std::move(selectionSetParams), std::move(directives) });
+	resolverLock.unlock();
 
-  return service::ModifiedResult<int>::convert<service::TypeModifier::Nullable>(
-      std::move(result), std::move(params));
+	return service::ModifiedResult<int>::convert<service::TypeModifier::Nullable>(std::move(result), std::move(params));
 }
 
-service::AwaitableResolver
-OrphanImage::resolveHeight(service::ResolverParams &&params) const {
-  std::unique_lock resolverLock(_resolverMutex);
-  service::SelectionSetParams selectionSetParams{
-      static_cast<const service::SelectionSetParams &>(params)};
-  auto directives = std::move(params.fieldDirectives);
-  auto result = _pimpl->getHeight(service::FieldParams{
-      std::move(selectionSetParams), std::move(directives)});
-  resolverLock.unlock();
+service::AwaitableResolver OrphanImage::resolveHeight(service::ResolverParams&& params) const
+{
+	std::unique_lock resolverLock(_resolverMutex);
+	service::SelectionSetParams selectionSetParams { static_cast<const service::SelectionSetParams&>(params) };
+	auto directives = std::move(params.fieldDirectives);
+	auto result = _pimpl->getHeight(service::FieldParams { std::move(selectionSetParams), std::move(directives) });
+	resolverLock.unlock();
 
-  return service::ModifiedResult<int>::convert<service::TypeModifier::Nullable>(
-      std::move(result), std::move(params));
+	return service::ModifiedResult<int>::convert<service::TypeModifier::Nullable>(std::move(result), std::move(params));
 }
 
-service::AwaitableResolver
-OrphanImage::resolveFrameCount(service::ResolverParams &&params) const {
-  std::unique_lock resolverLock(_resolverMutex);
-  service::SelectionSetParams selectionSetParams{
-      static_cast<const service::SelectionSetParams &>(params)};
-  auto directives = std::move(params.fieldDirectives);
-  auto result = _pimpl->getFrameCount(service::FieldParams{
-      std::move(selectionSetParams), std::move(directives)});
-  resolverLock.unlock();
+service::AwaitableResolver OrphanImage::resolveFrameCount(service::ResolverParams&& params) const
+{
+	std::unique_lock resolverLock(_resolverMutex);
+	service::SelectionSetParams selectionSetParams { static_cast<const service::SelectionSetParams&>(params) };
+	auto directives = std::move(params.fieldDirectives);
+	auto result = _pimpl->getFrameCount(service::FieldParams { std::move(selectionSetParams), std::move(directives) });
+	resolverLock.unlock();
 
-  return service::ModifiedResult<int>::convert<service::TypeModifier::Nullable>(
-      std::move(result), std::move(params));
+	return service::ModifiedResult<int>::convert<service::TypeModifier::Nullable>(std::move(result), std::move(params));
 }
 
-service::AwaitableResolver
-OrphanImage::resolveCreatedAt(service::ResolverParams &&params) const {
-  std::unique_lock resolverLock(_resolverMutex);
-  service::SelectionSetParams selectionSetParams{
-      static_cast<const service::SelectionSetParams &>(params)};
-  auto directives = std::move(params.fieldDirectives);
-  auto result = _pimpl->getCreatedAt(service::FieldParams{
-      std::move(selectionSetParams), std::move(directives)});
-  resolverLock.unlock();
+service::AwaitableResolver OrphanImage::resolveCreatedAt(service::ResolverParams&& params) const
+{
+	std::unique_lock resolverLock(_resolverMutex);
+	service::SelectionSetParams selectionSetParams { static_cast<const service::SelectionSetParams&>(params) };
+	auto directives = std::move(params.fieldDirectives);
+	auto result = _pimpl->getCreatedAt(service::FieldParams { std::move(selectionSetParams), std::move(directives) });
+	resolverLock.unlock();
 
-  return service::ModifiedResult<std::string>::convert(std::move(result),
-                                                       std::move(params));
+	return service::ModifiedResult<std::string>::convert(std::move(result), std::move(params));
 }
 
-service::AwaitableResolver
-OrphanImage::resolveScanAt(service::ResolverParams &&params) const {
-  std::unique_lock resolverLock(_resolverMutex);
-  service::SelectionSetParams selectionSetParams{
-      static_cast<const service::SelectionSetParams &>(params)};
-  auto directives = std::move(params.fieldDirectives);
-  auto result = _pimpl->getScanAt(service::FieldParams{
-      std::move(selectionSetParams), std::move(directives)});
-  resolverLock.unlock();
+service::AwaitableResolver OrphanImage::resolveScanAt(service::ResolverParams&& params) const
+{
+	std::unique_lock resolverLock(_resolverMutex);
+	service::SelectionSetParams selectionSetParams { static_cast<const service::SelectionSetParams&>(params) };
+	auto directives = std::move(params.fieldDirectives);
+	auto result = _pimpl->getScanAt(service::FieldParams { std::move(selectionSetParams), std::move(directives) });
+	resolverLock.unlock();
 
-  return service::ModifiedResult<std::string>::convert<
-      service::TypeModifier::Nullable>(std::move(result), std::move(params));
+	return service::ModifiedResult<std::string>::convert<service::TypeModifier::Nullable>(std::move(result), std::move(params));
 }
 
-service::AwaitableResolver
-OrphanImage::resolve_typename(service::ResolverParams &&params) const {
-  return service::Result<std::string>::convert(
-      std::string{R"gql(OrphanImage)gql"}, std::move(params));
+service::AwaitableResolver OrphanImage::resolve_typename(service::ResolverParams&& params) const
+{
+	return service::Result<std::string>::convert(std::string{ R"gql(OrphanImage)gql" }, std::move(params));
 }
 
 } // namespace object
 
-void AddOrphanImageDetails(
-    const std::shared_ptr<schema::ObjectType> &typeOrphanImage,
-    const std::shared_ptr<schema::Schema> &schema) {
-  typeOrphanImage->AddFields(
-      {schema::Field::Make(
-           R"gql(id)gql"sv, R"md(图片 ID。)md"sv, std::nullopt,
-           schema->WrapType(introspection::TypeKind::NON_NULL,
-                            schema->LookupType(R"gql(ID)gql"sv))),
-       schema::Field::Make(R"gql(width)gql"sv,
-                           R"md(图片宽度，未知时为 null。)md"sv, std::nullopt,
-                           schema->LookupType(R"gql(Int)gql"sv)),
-       schema::Field::Make(R"gql(height)gql"sv,
-                           R"md(图片高度，未知时为 null。)md"sv, std::nullopt,
-                           schema->LookupType(R"gql(Int)gql"sv)),
-       schema::Field::Make(R"gql(frameCount)gql"sv,
-                           R"md(动画帧数，未知时为 null。)md"sv, std::nullopt,
-                           schema->LookupType(R"gql(Int)gql"sv)),
-       schema::Field::Make(
-           R"gql(createdAt)gql"sv, R"md(入库时间。)md"sv, std::nullopt,
-           schema->WrapType(introspection::TypeKind::NON_NULL,
-                            schema->LookupType(R"gql(String)gql"sv))),
-       schema::Field::Make(
-           R"gql(scanAt)gql"sv, R"md(上次扫描时间，从未扫描时为 null。)md"sv,
-           std::nullopt, schema->LookupType(R"gql(String)gql"sv))});
+void AddOrphanImageDetails(const std::shared_ptr<schema::ObjectType>& typeOrphanImage, const std::shared_ptr<schema::Schema>& schema)
+{
+	typeOrphanImage->AddFields({
+		schema::Field::Make(R"gql(id)gql"sv, R"md(图片 ID。)md"sv, std::nullopt, schema->WrapType(introspection::TypeKind::NON_NULL, schema->LookupType(R"gql(ID)gql"sv))),
+		schema::Field::Make(R"gql(width)gql"sv, R"md(图片宽度，未知时为 null。)md"sv, std::nullopt, schema->LookupType(R"gql(Int)gql"sv)),
+		schema::Field::Make(R"gql(height)gql"sv, R"md(图片高度，未知时为 null。)md"sv, std::nullopt, schema->LookupType(R"gql(Int)gql"sv)),
+		schema::Field::Make(R"gql(frameCount)gql"sv, R"md(动画帧数，未知时为 null。)md"sv, std::nullopt, schema->LookupType(R"gql(Int)gql"sv)),
+		schema::Field::Make(R"gql(createdAt)gql"sv, R"md(入库时间。)md"sv, std::nullopt, schema->WrapType(introspection::TypeKind::NON_NULL, schema->LookupType(R"gql(String)gql"sv))),
+		schema::Field::Make(R"gql(scanAt)gql"sv, R"md(上次扫描时间，从未扫描时为 null。)md"sv, std::nullopt, schema->LookupType(R"gql(String)gql"sv))
+	});
 }
 
 } // namespace graphql::tagimg

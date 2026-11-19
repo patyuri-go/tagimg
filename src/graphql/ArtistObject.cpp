@@ -21,84 +21,72 @@ namespace graphql::tagimg {
 namespace object {
 
 Artist::Artist(std::unique_ptr<const Concept> pimpl) noexcept
-    : service::Object{getTypeNames(), getResolvers()},
-      _pimpl{std::move(pimpl)} {
+	: service::Object{ getTypeNames(), getResolvers() }
+	, _pimpl { std::move(pimpl) }
+{
 }
 
-service::TypeNames Artist::getTypeNames() const noexcept {
-  return {R"gql(Artist)gql"sv};
+service::TypeNames Artist::getTypeNames() const noexcept
+{
+	return {
+		R"gql(Artist)gql"sv
+	};
 }
 
-service::ResolverMap Artist::getResolvers() const noexcept {
-  return {{R"gql(id)gql"sv,
-           [this](service::ResolverParams &&params) {
-             return resolveId(std::move(params));
-           }},
-          {R"gql(name)gql"sv,
-           [this](service::ResolverParams &&params) {
-             return resolveName(std::move(params));
-           }},
-          {R"gql(__typename)gql"sv, [this](service::ResolverParams &&params) {
-             return resolve_typename(std::move(params));
-           }}};
+service::ResolverMap Artist::getResolvers() const noexcept
+{
+	return {
+		{ R"gql(id)gql"sv, [this](service::ResolverParams&& params) { return resolveId(std::move(params)); } },
+		{ R"gql(name)gql"sv, [this](service::ResolverParams&& params) { return resolveName(std::move(params)); } },
+		{ R"gql(__typename)gql"sv, [this](service::ResolverParams&& params) { return resolve_typename(std::move(params)); } }
+	};
 }
 
-void Artist::beginSelectionSet(
-    const service::SelectionSetParams &params) const {
-  _pimpl->beginSelectionSet(params);
+void Artist::beginSelectionSet(const service::SelectionSetParams& params) const
+{
+	_pimpl->beginSelectionSet(params);
 }
 
-void Artist::endSelectionSet(const service::SelectionSetParams &params) const {
-  _pimpl->endSelectionSet(params);
+void Artist::endSelectionSet(const service::SelectionSetParams& params) const
+{
+	_pimpl->endSelectionSet(params);
 }
 
-service::AwaitableResolver
-Artist::resolveId(service::ResolverParams &&params) const {
-  std::unique_lock resolverLock(_resolverMutex);
-  service::SelectionSetParams selectionSetParams{
-      static_cast<const service::SelectionSetParams &>(params)};
-  auto directives = std::move(params.fieldDirectives);
-  auto result = _pimpl->getId(service::FieldParams{
-      std::move(selectionSetParams), std::move(directives)});
-  resolverLock.unlock();
+service::AwaitableResolver Artist::resolveId(service::ResolverParams&& params) const
+{
+	std::unique_lock resolverLock(_resolverMutex);
+	service::SelectionSetParams selectionSetParams { static_cast<const service::SelectionSetParams&>(params) };
+	auto directives = std::move(params.fieldDirectives);
+	auto result = _pimpl->getId(service::FieldParams { std::move(selectionSetParams), std::move(directives) });
+	resolverLock.unlock();
 
-  return service::ModifiedResult<response::IdType>::convert(std::move(result),
-                                                            std::move(params));
+	return service::ModifiedResult<response::IdType>::convert(std::move(result), std::move(params));
 }
 
-service::AwaitableResolver
-Artist::resolveName(service::ResolverParams &&params) const {
-  std::unique_lock resolverLock(_resolverMutex);
-  service::SelectionSetParams selectionSetParams{
-      static_cast<const service::SelectionSetParams &>(params)};
-  auto directives = std::move(params.fieldDirectives);
-  auto result = _pimpl->getName(service::FieldParams{
-      std::move(selectionSetParams), std::move(directives)});
-  resolverLock.unlock();
+service::AwaitableResolver Artist::resolveName(service::ResolverParams&& params) const
+{
+	std::unique_lock resolverLock(_resolverMutex);
+	service::SelectionSetParams selectionSetParams { static_cast<const service::SelectionSetParams&>(params) };
+	auto directives = std::move(params.fieldDirectives);
+	auto result = _pimpl->getName(service::FieldParams { std::move(selectionSetParams), std::move(directives) });
+	resolverLock.unlock();
 
-  return service::ModifiedResult<std::string>::convert(std::move(result),
-                                                       std::move(params));
+	return service::ModifiedResult<std::string>::convert(std::move(result), std::move(params));
 }
 
-service::AwaitableResolver
-Artist::resolve_typename(service::ResolverParams &&params) const {
-  return service::Result<std::string>::convert(std::string{R"gql(Artist)gql"},
-                                               std::move(params));
+service::AwaitableResolver Artist::resolve_typename(service::ResolverParams&& params) const
+{
+	return service::Result<std::string>::convert(std::string{ R"gql(Artist)gql" }, std::move(params));
 }
 
 } // namespace object
 
-void AddArtistDetails(const std::shared_ptr<schema::ObjectType> &typeArtist,
-                      const std::shared_ptr<schema::Schema> &schema) {
-  typeArtist->AddFields(
-      {schema::Field::Make(
-           R"gql(id)gql"sv, R"md(艺术家 ID。)md"sv, std::nullopt,
-           schema->WrapType(introspection::TypeKind::NON_NULL,
-                            schema->LookupType(R"gql(ID)gql"sv))),
-       schema::Field::Make(
-           R"gql(name)gql"sv, R"md(艺术家名称。)md"sv, std::nullopt,
-           schema->WrapType(introspection::TypeKind::NON_NULL,
-                            schema->LookupType(R"gql(String)gql"sv)))});
+void AddArtistDetails(const std::shared_ptr<schema::ObjectType>& typeArtist, const std::shared_ptr<schema::Schema>& schema)
+{
+	typeArtist->AddFields({
+		schema::Field::Make(R"gql(id)gql"sv, R"md(艺术家 ID。)md"sv, std::nullopt, schema->WrapType(introspection::TypeKind::NON_NULL, schema->LookupType(R"gql(ID)gql"sv))),
+		schema::Field::Make(R"gql(name)gql"sv, R"md(艺术家名称。)md"sv, std::nullopt, schema->WrapType(introspection::TypeKind::NON_NULL, schema->LookupType(R"gql(String)gql"sv)))
+	});
 }
 
 } // namespace graphql::tagimg

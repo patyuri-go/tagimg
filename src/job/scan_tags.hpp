@@ -60,4 +60,14 @@ build_scanned_tags(const std::map<TagKey, float> &best) {
   return tags;
 }
 
+// 单张图片的扫描标签：先在本图内合并，再转成仓储层需要的顺序。
+inline std::vector<ArtworkTag>
+build_image_scanned_tags(const TaggingResult &tags) {
+  std::map<TagKey, float> best;
+  merge_tags(best, tags.general, "general", kScanTagThreshold);
+  merge_tags(best, tags.character, "character", kScanTagThreshold);
+  merge_best_rating(best, tags.rating);
+  return build_scanned_tags(best);
+}
+
 } // namespace tagimg

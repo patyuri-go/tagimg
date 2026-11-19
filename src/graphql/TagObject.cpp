@@ -21,134 +21,98 @@ namespace graphql::tagimg {
 namespace object {
 
 Tag::Tag(std::unique_ptr<const Concept> pimpl) noexcept
-    : service::Object{getTypeNames(), getResolvers()},
-      _pimpl{std::move(pimpl)} {
+	: service::Object{ getTypeNames(), getResolvers() }
+	, _pimpl { std::move(pimpl) }
+{
 }
 
-service::TypeNames Tag::getTypeNames() const noexcept {
-  return {R"gql(Tag)gql"sv};
+service::TypeNames Tag::getTypeNames() const noexcept
+{
+	return {
+		R"gql(Tag)gql"sv
+	};
 }
 
-service::ResolverMap Tag::getResolvers() const noexcept {
-  return {{R"gql(id)gql"sv,
-           [this](service::ResolverParams &&params) {
-             return resolveId(std::move(params));
-           }},
-          {R"gql(name)gql"sv,
-           [this](service::ResolverParams &&params) {
-             return resolveName(std::move(params));
-           }},
-          {R"gql(aliases)gql"sv,
-           [this](service::ResolverParams &&params) {
-             return resolveAliases(std::move(params));
-           }},
-          {R"gql(category)gql"sv,
-           [this](service::ResolverParams &&params) {
-             return resolveCategory(std::move(params));
-           }},
-          {R"gql(__typename)gql"sv, [this](service::ResolverParams &&params) {
-             return resolve_typename(std::move(params));
-           }}};
+service::ResolverMap Tag::getResolvers() const noexcept
+{
+	return {
+		{ R"gql(id)gql"sv, [this](service::ResolverParams&& params) { return resolveId(std::move(params)); } },
+		{ R"gql(name)gql"sv, [this](service::ResolverParams&& params) { return resolveName(std::move(params)); } },
+		{ R"gql(aliases)gql"sv, [this](service::ResolverParams&& params) { return resolveAliases(std::move(params)); } },
+		{ R"gql(category)gql"sv, [this](service::ResolverParams&& params) { return resolveCategory(std::move(params)); } },
+		{ R"gql(__typename)gql"sv, [this](service::ResolverParams&& params) { return resolve_typename(std::move(params)); } }
+	};
 }
 
-void Tag::beginSelectionSet(const service::SelectionSetParams &params) const {
-  _pimpl->beginSelectionSet(params);
+void Tag::beginSelectionSet(const service::SelectionSetParams& params) const
+{
+	_pimpl->beginSelectionSet(params);
 }
 
-void Tag::endSelectionSet(const service::SelectionSetParams &params) const {
-  _pimpl->endSelectionSet(params);
+void Tag::endSelectionSet(const service::SelectionSetParams& params) const
+{
+	_pimpl->endSelectionSet(params);
 }
 
-service::AwaitableResolver
-Tag::resolveId(service::ResolverParams &&params) const {
-  std::unique_lock resolverLock(_resolverMutex);
-  service::SelectionSetParams selectionSetParams{
-      static_cast<const service::SelectionSetParams &>(params)};
-  auto directives = std::move(params.fieldDirectives);
-  auto result = _pimpl->getId(service::FieldParams{
-      std::move(selectionSetParams), std::move(directives)});
-  resolverLock.unlock();
+service::AwaitableResolver Tag::resolveId(service::ResolverParams&& params) const
+{
+	std::unique_lock resolverLock(_resolverMutex);
+	service::SelectionSetParams selectionSetParams { static_cast<const service::SelectionSetParams&>(params) };
+	auto directives = std::move(params.fieldDirectives);
+	auto result = _pimpl->getId(service::FieldParams { std::move(selectionSetParams), std::move(directives) });
+	resolverLock.unlock();
 
-  return service::ModifiedResult<response::IdType>::convert(std::move(result),
-                                                            std::move(params));
+	return service::ModifiedResult<response::IdType>::convert(std::move(result), std::move(params));
 }
 
-service::AwaitableResolver
-Tag::resolveName(service::ResolverParams &&params) const {
-  std::unique_lock resolverLock(_resolverMutex);
-  service::SelectionSetParams selectionSetParams{
-      static_cast<const service::SelectionSetParams &>(params)};
-  auto directives = std::move(params.fieldDirectives);
-  auto result = _pimpl->getName(service::FieldParams{
-      std::move(selectionSetParams), std::move(directives)});
-  resolverLock.unlock();
+service::AwaitableResolver Tag::resolveName(service::ResolverParams&& params) const
+{
+	std::unique_lock resolverLock(_resolverMutex);
+	service::SelectionSetParams selectionSetParams { static_cast<const service::SelectionSetParams&>(params) };
+	auto directives = std::move(params.fieldDirectives);
+	auto result = _pimpl->getName(service::FieldParams { std::move(selectionSetParams), std::move(directives) });
+	resolverLock.unlock();
 
-  return service::ModifiedResult<std::string>::convert(std::move(result),
-                                                       std::move(params));
+	return service::ModifiedResult<std::string>::convert(std::move(result), std::move(params));
 }
 
-service::AwaitableResolver
-Tag::resolveCategory(service::ResolverParams &&params) const {
-  std::unique_lock resolverLock(_resolverMutex);
-  service::SelectionSetParams selectionSetParams{
-      static_cast<const service::SelectionSetParams &>(params)};
-  auto directives = std::move(params.fieldDirectives);
-  auto result = _pimpl->getCategory(service::FieldParams{
-      std::move(selectionSetParams), std::move(directives)});
-  resolverLock.unlock();
+service::AwaitableResolver Tag::resolveCategory(service::ResolverParams&& params) const
+{
+	std::unique_lock resolverLock(_resolverMutex);
+	service::SelectionSetParams selectionSetParams { static_cast<const service::SelectionSetParams&>(params) };
+	auto directives = std::move(params.fieldDirectives);
+	auto result = _pimpl->getCategory(service::FieldParams { std::move(selectionSetParams), std::move(directives) });
+	resolverLock.unlock();
 
-  return service::ModifiedResult<std::string>::convert<
-      service::TypeModifier::Nullable>(std::move(result), std::move(params));
+	return service::ModifiedResult<std::string>::convert<service::TypeModifier::Nullable>(std::move(result), std::move(params));
 }
 
-service::AwaitableResolver
-Tag::resolveAliases(service::ResolverParams &&params) const {
-  std::unique_lock resolverLock(_resolverMutex);
-  service::SelectionSetParams selectionSetParams{
-      static_cast<const service::SelectionSetParams &>(params)};
-  auto directives = std::move(params.fieldDirectives);
-  auto result = _pimpl->getAliases(service::FieldParams{
-      std::move(selectionSetParams), std::move(directives)});
-  resolverLock.unlock();
+service::AwaitableResolver Tag::resolveAliases(service::ResolverParams&& params) const
+{
+	std::unique_lock resolverLock(_resolverMutex);
+	service::SelectionSetParams selectionSetParams { static_cast<const service::SelectionSetParams&>(params) };
+	auto directives = std::move(params.fieldDirectives);
+	auto result = _pimpl->getAliases(service::FieldParams { std::move(selectionSetParams), std::move(directives) });
+	resolverLock.unlock();
 
-  return service::ModifiedResult<std::string>::convert<
-      service::TypeModifier::List>(std::move(result), std::move(params));
+	return service::ModifiedResult<std::string>::convert<service::TypeModifier::List>(std::move(result), std::move(params));
 }
 
-service::AwaitableResolver
-Tag::resolve_typename(service::ResolverParams &&params) const {
-  return service::Result<std::string>::convert(std::string{R"gql(Tag)gql"},
-                                               std::move(params));
+service::AwaitableResolver Tag::resolve_typename(service::ResolverParams&& params) const
+{
+	return service::Result<std::string>::convert(std::string{ R"gql(Tag)gql" }, std::move(params));
 }
 
 } // namespace object
 
-void AddTagDetails(const std::shared_ptr<schema::ObjectType> &typeTag,
-                   const std::shared_ptr<schema::Schema> &schema) {
-  typeTag->AddFields(
-      {schema::Field::Make(
-           R"gql(id)gql"sv, R"md(标签 ID。)md"sv, std::nullopt,
-           schema->WrapType(introspection::TypeKind::NON_NULL,
-                            schema->LookupType(R"gql(ID)gql"sv))),
-       schema::Field::Make(
-           R"gql(name)gql"sv, R"md(标签自身的标准名，例如 1girl。)md"sv,
-           std::nullopt,
-           schema->WrapType(introspection::TypeKind::NON_NULL,
-                            schema->LookupType(R"gql(String)gql"sv))),
-       schema::Field::Make(
-           R"gql(category)gql"sv,
-           R"md(直接父标签的标准名，例如 general；没有父标签时为 null。)md"sv,
-           std::nullopt, schema->LookupType(R"gql(String)gql"sv)),
-       schema::Field::Make(
-           R"gql(aliases)gql"sv, R"md(别名列表，按名称升序。)md"sv,
-           std::nullopt,
-           schema->WrapType(
-               introspection::TypeKind::NON_NULL,
-               schema->WrapType(
-                   introspection::TypeKind::LIST,
-                   schema->WrapType(
-                       introspection::TypeKind::NON_NULL,
-                       schema->LookupType(R"gql(String)gql"sv)))))});
+void AddTagDetails(const std::shared_ptr<schema::ObjectType>& typeTag, const std::shared_ptr<schema::Schema>& schema)
+{
+	typeTag->AddFields({
+		schema::Field::Make(R"gql(id)gql"sv, R"md(标签 ID。)md"sv, std::nullopt, schema->WrapType(introspection::TypeKind::NON_NULL, schema->LookupType(R"gql(ID)gql"sv))),
+		schema::Field::Make(R"gql(name)gql"sv, R"md(标签自身的标准名，例如 1girl。)md"sv, std::nullopt, schema->WrapType(introspection::TypeKind::NON_NULL, schema->LookupType(R"gql(String)gql"sv))),
+		schema::Field::Make(R"gql(category)gql"sv, R"md(直接父标签的标准名，例如 general；没有父标签时为 null。)md"sv, std::nullopt, schema->LookupType(R"gql(String)gql"sv)),
+		schema::Field::Make(R"gql(aliases)gql"sv, R"md(别名列表，按名称升序。)md"sv, std::nullopt, schema->WrapType(introspection::TypeKind::NON_NULL, schema->WrapType(introspection::TypeKind::LIST, schema->WrapType(introspection::TypeKind::NON_NULL, schema->LookupType(R"gql(String)gql"sv)))))
+	});
 }
 
 } // namespace graphql::tagimg

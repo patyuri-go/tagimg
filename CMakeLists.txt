@@ -186,6 +186,9 @@ add_library(tagimg_graphql STATIC
     src/graphql/ArtworkConnectionObject.cpp
     src/graphql/ArtworkObject.cpp
     src/graphql/DeleteArtworkResultObject.cpp
+    src/graphql/ImageArtworkObject.cpp
+    src/graphql/ImageConnectionObject.cpp
+    src/graphql/ImageObject.cpp
     src/graphql/MutationObject.cpp
     src/graphql/OrphanImageConnectionObject.cpp
     src/graphql/OrphanImageObject.cpp

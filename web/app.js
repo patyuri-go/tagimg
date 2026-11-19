@@ -1310,6 +1310,7 @@
     hoverState.shown = false;
     hoverState.imageId = "";
     hoverPreview.hidden = true;
+    hoverPreviewImage.removeAttribute("src");
   }
 
   function exitHoverPreview() {
@@ -1354,26 +1355,61 @@
     if (!loader) {
       loader = new Image();
       loader.decoding = "async";
+      loader.fetchPriority = "low";
       loader.src = imageStreamUrl(imageId, "regular");
       hoverRegularImages.set(imageId, loader);
     }
 
     const apply = () => {
-      if (!hoverState.shown || hoverState.imageId !== imageId) {
+      if (
+        !hoverState.shown ||
+        hoverState.imageId !== imageId ||
+        loader.naturalWidth <= 0 ||
+        loader.naturalHeight <= 0
+      ) {
         return;
       }
-      if (loader.naturalWidth > 0 && loader.naturalHeight > 0) {
-        hoverState.naturalWidth = loader.naturalWidth;
-        hoverState.naturalHeight = loader.naturalHeight;
-      }
-      hoverPreviewImage.src = loader.src;
+      hoverState.naturalWidth = loader.naturalWidth;
+      hoverState.naturalHeight = loader.naturalHeight;
       positionHoverPreview(hoverState.pointerX, hoverState.pointerY);
+      // regular 预加载完成后再替换，缩略图在请求期间保持可见。
+      hoverPreviewImage.src = loader.currentSrc || loader.src;
     };
 
     if (loader.complete && loader.naturalWidth > 0) {
       apply();
     } else {
       loader.onload = apply;
+    }
+  }
+
+  function scheduleHoverUpgrade(imageId) {
+    let scheduled = false;
+    const run = () => {
+      if (scheduled) {
+        return;
+      }
+      scheduled = true;
+      if (!hoverState.shown || hoverState.imageId !== imageId) {
+        return;
+      }
+      upgradeHoverPreview(imageId);
+    };
+    const afterPaint = () => {
+      // 先让缩略图完成一次绘制，再在后台请求 regular，避免请求抢占首帧。
+      if (typeof window.requestAnimationFrame === "function") {
+        window.requestAnimationFrame(() => {
+          window.requestAnimationFrame(run);
+        });
+      } else {
+        window.setTimeout(run, 0);
+      }
+    };
+    // decode() 成功表示缩略图已经可以立即绘制；失败时也照常尝试升级。
+    if (typeof hoverPreviewImage.decode === "function") {
+      hoverPreviewImage.decode().then(afterPaint, afterPaint);
+    } else {
+      afterPaint();
     }
   }
 
@@ -1390,7 +1426,7 @@
     hoverPreviewImage.src = image.currentSrc || image.src;
     hoverPreview.hidden = false;
     positionHoverPreview(x, y);
-    upgradeHoverPreview(hoverState.imageId);
+    scheduleHoverUpgrade(hoverState.imageId);
   }
 
   function hoverThumbImageAt(target) {

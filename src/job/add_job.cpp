@@ -135,13 +135,14 @@ void AddJob::finish(JobContext &context) {
   }
 
   std::map<TagKey, float> best_tags;
+  std::vector<std::vector<ArtworkTag>> scanned_tags;
+  scanned_tags.reserve(result.scans.size());
   for (const ScanResult &scan : result.scans) {
     merge_tags(best_tags, scan.tags.general, "general", kScanTagThreshold);
     merge_tags(best_tags, scan.tags.character, "character", kScanTagThreshold);
     merge_best_rating(best_tags, scan.tags.rating);
+    scanned_tags.push_back(build_image_scanned_tags(scan.tags));
   }
-
-  std::vector<ArtworkTag> scanned_tags = build_scanned_tags(best_tags);
 
   // scans 与 entity_ids/image_ids 顺序一致，向量按同一顺序交给仓储层。
   std::vector<std::vector<float>> embeddings;

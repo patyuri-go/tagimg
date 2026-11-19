@@ -240,8 +240,10 @@ int main(int argc, char **argv) {
     checks.check("写入两条向量", embeddings && *embeddings == 2);
     checks.check(
         "挂载两条扫描标签",
-        txn.add_scanned_tags({{kTagAlpha, kCategoryName},
-                              {kTagBeta, kCategoryName}})
+        txn.add_scanned_tags(
+               {{kImageA, {{kTagAlpha, kCategoryName}, {kTagBeta, kCategoryName}}},
+                {kImageB,
+                 {{kTagAlpha, kCategoryName}, {kTagBeta, kCategoryName}}}})
                 .value_or(0) == 2);
     checks.check("更新两张图片的 scan_at",
                  txn.touch_image_scans({kImageA, kImageB}).value_or(0) == 2);
@@ -263,10 +265,11 @@ int main(int argc, char **argv) {
                    "  AND vector_dims(embedding) = 768",
                    images) == 2);
   checks.check(
-      "扫描标签挂到作品上",
+      "扫描标签挂到图片上",
       count_scalar(sql,
-                   "SELECT count(*) FROM artwork_tags "
-                   "WHERE artwork_id = CAST(:id AS uuid)",
+                   "SELECT count(DISTINCT it.tag_id) FROM image_tags it "
+                   "JOIN artwork_images ai ON ai.image_id = it.image_id "
+                   "WHERE ai.artwork_id = CAST(:id AS uuid)",
                    kArtworkId) == 2);
   checks.check(
       "scan_at 已更新",
@@ -291,29 +294,34 @@ int main(int argc, char **argv) {
     sql << "INSERT INTO tag_name (tag_id, type, name) "
            "VALUES (CAST(:id AS uuid), 'standard'::tag_name_type, :name)",
         soci::use(manual_id), soci::use(kTagManual);
-    sql << "INSERT INTO artwork_tags (artwork_id, tag_id) "
-           "VALUES (CAST(:artwork AS uuid), CAST(:tag AS uuid))",
-        soci::use(kArtworkId), soci::use(manual_id);
+    sql << "INSERT INTO image_tags (image_id, tag_id) "
+           "SELECT ai.image_id, CAST(:tag AS uuid) "
+           "FROM artwork_images ai "
+           "WHERE ai.artwork_id = CAST(:artwork AS uuid)",
+        soci::use(manual_id), soci::use(kArtworkId);
 
     auto opened = (*repository)->begin_artwork_update(kArtworkId);
     if (opened && opened->has_value()) {
       tagimg::ArtworkUpdateTransaction &txn = **opened;
       (void)txn.add_scanned_tags(
-          {{kTagAlpha, kCategoryName}, {kTagBeta, kCategoryName}});
+          {{kImageA, {{kTagAlpha, kCategoryName}, {kTagBeta, kCategoryName}}},
+           {kImageB, {{kTagAlpha, kCategoryName}, {kTagBeta, kCategoryName}}}});
       (void)txn.commit();
     }
     checks.check(
         "重复添加不产生重复行",
         count_scalar(sql,
-                     "SELECT count(*) FROM artwork_tags "
-                     "WHERE artwork_id = CAST(:id AS uuid)",
+                     "SELECT count(DISTINCT it.tag_id) FROM image_tags it "
+                     "JOIN artwork_images ai ON ai.image_id = it.image_id "
+                     "WHERE ai.artwork_id = CAST(:id AS uuid)",
                      kArtworkId) == 3);
     checks.check(
         "手动标签仍然存在",
         count_scalar2(sql,
-                      "SELECT count(*) FROM artwork_tags "
-                      "WHERE artwork_id = CAST(:id AS uuid) "
-                      "  AND tag_id = CAST(:tag AS uuid)",
+                      "SELECT count(*) FROM image_tags it "
+                      "JOIN artwork_images ai ON ai.image_id = it.image_id "
+                      "WHERE ai.artwork_id = CAST(:artwork AS uuid) "
+                      "  AND it.tag_id = CAST(:tag AS uuid)",
                       kArtworkId, manual_id) != 0);
   }
 

@@ -21,6 +21,9 @@
 #include "graphql/ArtworkConnectionObject.h"
 #include "graphql/ArtworkObject.h"
 #include "graphql/DeleteArtworkResultObject.h"
+#include "graphql/ImageArtworkObject.h"
+#include "graphql/ImageConnectionObject.h"
+#include "graphql/ImageObject.h"
 #include "graphql/MutationObject.h"
 #include "graphql/OrphanImageConnectionObject.h"
 #include "graphql/OrphanImageObject.h"
@@ -382,6 +385,121 @@ private:
   ArtworkSummary item_;
 };
 
+class ImageArtworkModel {
+public:
+  explicit ImageArtworkModel(ImageArtworkInfo info) : info_(std::move(info)) {
+  }
+
+  gql::service::AwaitableScalar<IdType> getId() const {
+    return id_scalar(info_.id);
+  }
+
+  gql::service::AwaitableScalar<std::string> getTitle() const {
+    return gql::service::AwaitableScalar<std::string>(info_.title);
+  }
+
+  gql::service::AwaitableScalar<std::optional<std::string>>
+  getPublishedAt() const {
+    return gql::service::AwaitableScalar<std::optional<std::string>>(
+        info_.published_at);
+  }
+
+private:
+  ImageArtworkInfo info_;
+};
+
+class ImageModel {
+public:
+  explicit ImageModel(ImageSummary item) : item_(std::move(item)) {
+  }
+
+  gql::service::AwaitableScalar<IdType> getId() const {
+    return id_scalar(item_.id);
+  }
+
+  gql::service::AwaitableScalar<std::optional<int>> getWidth() const {
+    return gql::service::AwaitableScalar<std::optional<int>>(item_.width);
+  }
+
+  gql::service::AwaitableScalar<std::optional<int>> getHeight() const {
+    return gql::service::AwaitableScalar<std::optional<int>>(item_.height);
+  }
+
+  gql::service::AwaitableScalar<std::optional<int>> getFrameCount() const {
+    return gql::service::AwaitableScalar<std::optional<int>>(item_.frame_count);
+  }
+
+  gql::service::AwaitableScalar<std::string> getCreatedAt() const {
+    return gql::service::AwaitableScalar<std::string>(item_.created_at);
+  }
+
+  gql::service::AwaitableScalar<std::optional<std::string>> getScanAt() const {
+    return gql::service::AwaitableScalar<std::optional<std::string>>(
+        item_.scan_at);
+  }
+
+  gql::service::AwaitableScalar<std::optional<std::string>>
+  getPublishedAt() const {
+    return gql::service::AwaitableScalar<std::optional<std::string>>(
+        item_.published_at);
+  }
+
+  gql::service::AwaitableScalar<std::vector<IdType>> getTagIds() const {
+    return gql::service::AwaitableScalar<std::vector<IdType>>(
+        to_id_list(item_.tag_ids));
+  }
+
+  gql::service::AwaitableObject<
+      std::vector<std::shared_ptr<gql::tagimg::object::Tag>>>
+  getTags() const {
+    std::vector<std::shared_ptr<gql::tagimg::object::Tag>> tags;
+    tags.reserve(item_.tags.size());
+    for (const ArtworkTagInfo &tag : item_.tags) {
+      tags.push_back(std::make_shared<gql::tagimg::object::Tag>(
+          std::make_shared<TagModel>(tag)));
+    }
+    return gql::service::AwaitableObject<
+        std::vector<std::shared_ptr<gql::tagimg::object::Tag>>>(
+        std::move(tags));
+  }
+
+  gql::service::AwaitableObject<
+      std::vector<std::shared_ptr<gql::tagimg::object::TagPath>>>
+  getTagPaths() const {
+    std::vector<std::shared_ptr<gql::tagimg::object::TagPath>> paths;
+    paths.reserve(item_.tags.size());
+    for (const ArtworkTagInfo &tag : item_.tags) {
+      paths.push_back(std::make_shared<gql::tagimg::object::TagPath>(
+          std::make_shared<TagPathModel>(tag.id, tag.path)));
+    }
+    return gql::service::AwaitableObject<
+        std::vector<std::shared_ptr<gql::tagimg::object::TagPath>>>(
+        std::move(paths));
+  }
+
+  gql::service::AwaitableObject<
+      std::vector<std::shared_ptr<gql::tagimg::object::ImageArtwork>>>
+  getArtworks() const {
+    std::vector<std::shared_ptr<gql::tagimg::object::ImageArtwork>> artworks;
+    artworks.reserve(item_.artworks.size());
+    for (const ImageArtworkInfo &artwork : item_.artworks) {
+      artworks.push_back(std::make_shared<gql::tagimg::object::ImageArtwork>(
+          std::make_shared<ImageArtworkModel>(artwork)));
+    }
+    return gql::service::AwaitableObject<
+        std::vector<std::shared_ptr<gql::tagimg::object::ImageArtwork>>>(
+        std::move(artworks));
+  }
+
+  gql::service::AwaitableScalar<std::optional<double>> getSortScore() const {
+    return gql::service::AwaitableScalar<std::optional<double>>(
+        item_.sort_score);
+  }
+
+private:
+  ImageSummary item_;
+};
+
 class ArtworkConnectionModel {
 public:
   ArtworkConnectionModel(
@@ -416,6 +534,46 @@ public:
 
 private:
   std::vector<std::shared_ptr<gql::tagimg::object::Artwork>> items_;
+  bool has_more_;
+  std::optional<int> total_;
+  int limit_;
+  int offset_;
+};
+
+class ImageConnectionModel {
+public:
+  ImageConnectionModel(
+      std::vector<std::shared_ptr<gql::tagimg::object::Image>> items,
+      bool has_more, std::optional<int> total, int limit, int offset)
+      : items_(std::move(items)), has_more_(has_more), total_(total),
+        limit_(limit), offset_(offset) {
+  }
+
+  gql::service::AwaitableObject<
+      std::vector<std::shared_ptr<gql::tagimg::object::Image>>>
+  getItems() const {
+    return gql::service::AwaitableObject<
+        std::vector<std::shared_ptr<gql::tagimg::object::Image>>>(items_);
+  }
+
+  gql::service::AwaitableScalar<bool> getHasMore() const {
+    return gql::service::AwaitableScalar<bool>(has_more_);
+  }
+
+  gql::service::AwaitableScalar<std::optional<int>> getTotal() const {
+    return gql::service::AwaitableScalar<std::optional<int>>(total_);
+  }
+
+  gql::service::AwaitableScalar<int> getLimit() const {
+    return gql::service::AwaitableScalar<int>(limit_);
+  }
+
+  gql::service::AwaitableScalar<int> getOffset() const {
+    return gql::service::AwaitableScalar<int>(offset_);
+  }
+
+private:
+  std::vector<std::shared_ptr<gql::tagimg::object::Image>> items_;
   bool has_more_;
   std::optional<int> total_;
   int limit_;
@@ -752,6 +910,134 @@ public:
         std::shared_ptr<gql::tagimg::object::ArtworkConnection>>(
         std::make_shared<gql::tagimg::object::ArtworkConnection>(
             std::make_shared<ArtworkConnectionModel>(
+                std::move(items), result->has_more, total,
+                static_cast<int>(query.limit),
+                static_cast<int>(query.offset))));
+  }
+
+  gql::service::AwaitableObject<
+      std::shared_ptr<gql::tagimg::object::ImageConnection>>
+  getImages(std::unique_ptr<gql::tagimg::ImageFilter> filter,
+            std::optional<gql::tagimg::ImageOrderField> order_by,
+            std::optional<gql::tagimg::SortDirection> direction,
+            std::optional<int> limit, std::optional<int> offset,
+            std::optional<bool> include_total,
+            std::optional<std::string> sort_text) const {
+    ImageSearchQuery query;
+    if (filter) {
+      const auto read_ids = [](const std::optional<std::vector<IdType>> &ids,
+                               const char *field) -> std::vector<std::string> {
+        if (!ids) {
+          return {};
+        }
+        std::vector<std::string> values = id_list(*ids);
+        if (const auto error = validate_uuid_list(values, field)) {
+          fail("INVALID_ARGUMENT", *error);
+        }
+        return values;
+      };
+      query.entity_ids = read_ids(filter->entityIds, "entityIds");
+      query.artist_ids = read_ids(filter->artistIds, "artistIds");
+      query.include_tag_ids = read_ids(filter->includeTagIds, "includeTagIds");
+      query.exclude_tag_ids = read_ids(filter->excludeTagIds, "excludeTagIds");
+
+      if (filter->includeMode) {
+        query.include_all_tags =
+            *filter->includeMode == gql::tagimg::TagMatchMode::ALL;
+      }
+      if (filter->expandIncludeTagDescendants) {
+        query.expand_include_tag_descendants =
+            *filter->expandIncludeTagDescendants;
+      }
+      if (filter->expandExcludeTagDescendants) {
+        query.expand_exclude_tag_descendants =
+            *filter->expandExcludeTagDescendants;
+      }
+    }
+
+    const auto order_field =
+        order_by.value_or(gql::tagimg::ImageOrderField::CREATED_AT);
+    if (order_field == gql::tagimg::ImageOrderField::SIMILARITY) {
+      if (!sort_text || sort_text->empty()) {
+        fail("INVALID_ARGUMENT", "orderBy SIMILARITY requires sortText");
+      }
+      if (utf8_length(*sort_text) > 512) {
+        fail("INVALID_ARGUMENT", "sortText must be at most 512 characters");
+      }
+      const bool blank =
+          std::all_of(sort_text->begin(), sort_text->end(),
+                      [](unsigned char byte) {
+                        return std::isspace(byte) != 0;
+                      });
+      if (blank) {
+        fail("INVALID_ARGUMENT", "sortText must not be blank");
+      }
+      auto embedding = clip_embedder_->embed_text(*sort_text);
+      if (!embedding) {
+        fail("SERVICE_UNAVAILABLE",
+             std::string("failed to embed sortText: ") +
+                 std::string(to_string(embedding.error())));
+      }
+      query.order_by = ImageSortField::Similarity;
+      query.sort_embedding = std::move(embedding->values);
+      query.descending = true;
+    } else {
+      if (sort_text) {
+        fail("INVALID_ARGUMENT",
+             "sortText is only supported with orderBy SIMILARITY");
+      }
+      switch (order_field) {
+      case gql::tagimg::ImageOrderField::CREATED_AT:
+        query.order_by = ImageSortField::CreatedAt;
+        break;
+      case gql::tagimg::ImageOrderField::PUBLISHED_AT:
+        query.order_by = ImageSortField::PublishedAt;
+        break;
+      case gql::tagimg::ImageOrderField::SCAN_AT:
+        query.order_by = ImageSortField::ScanAt;
+        break;
+      default:
+        fail("INVALID_ARGUMENT", "unsupported orderBy");
+      }
+      query.descending =
+          direction.value_or(gql::tagimg::SortDirection::DESC) ==
+          gql::tagimg::SortDirection::DESC;
+    }
+
+    if (limit) {
+      if (*limit < 1 || *limit > 100) {
+        fail("INVALID_ARGUMENT", "limit must be between 1 and 100");
+      }
+      query.limit = static_cast<std::size_t>(*limit);
+    }
+    if (offset) {
+      if (*offset < 0 || *offset > 10000) {
+        fail("INVALID_ARGUMENT", "offset must be between 0 and 10000");
+      }
+      query.offset = static_cast<std::size_t>(*offset);
+    }
+    query.include_total = include_total.value_or(false);
+
+    const auto result = repository_->search_images(query);
+    if (!result) {
+      fail_repository(result.error());
+    }
+
+    std::vector<std::shared_ptr<gql::tagimg::object::Image>> items;
+    items.reserve(result->items.size());
+    for (const ImageSummary &item : result->items) {
+      items.push_back(std::make_shared<gql::tagimg::object::Image>(
+          std::make_shared<ImageModel>(item)));
+    }
+    std::optional<int> total;
+    if (result->total) {
+      total = static_cast<int>(*result->total);
+    }
+
+    return gql::service::AwaitableObject<
+        std::shared_ptr<gql::tagimg::object::ImageConnection>>(
+        std::make_shared<gql::tagimg::object::ImageConnection>(
+            std::make_shared<ImageConnectionModel>(
                 std::move(items), result->has_more, total,
                 static_cast<int>(query.limit),
                 static_cast<int>(query.offset))));

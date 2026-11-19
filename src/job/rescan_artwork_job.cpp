@@ -117,13 +117,13 @@ StepResult RescanArtworkJob::step(JobContext &context, const JobRun &run) {
         ImageEmbeddingInput{image_ids[index], scans[index].embedding});
   }
 
-  std::map<TagKey, float> best_tags;
-  for (const ScanResult &scan : scans) {
-    merge_tags(best_tags, scan.tags.general, "general", kScanTagThreshold);
-    merge_tags(best_tags, scan.tags.character, "character", kScanTagThreshold);
-    merge_best_rating(best_tags, scan.tags.rating);
+  std::vector<ImageScannedTags> scanned_tags;
+  scanned_tags.reserve(scans.size());
+  for (std::size_t index = 0; index < scans.size(); ++index) {
+    scanned_tags.push_back(
+        ImageScannedTags{image_ids[index],
+                         build_image_scanned_tags(scans[index].tags)});
   }
-  const std::vector<ArtworkTag> scanned_tags = build_scanned_tags(best_tags);
 
   std::size_t added_tag_count = 0;
   {

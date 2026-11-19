@@ -22,233 +22,146 @@ namespace graphql::tagimg {
 namespace object {
 
 Mutation::Mutation(std::unique_ptr<const Concept> pimpl) noexcept
-    : service::Object{getTypeNames(), getResolvers()},
-      _pimpl{std::move(pimpl)} {
+	: service::Object{ getTypeNames(), getResolvers() }
+	, _pimpl { std::move(pimpl) }
+{
 }
 
-service::TypeNames Mutation::getTypeNames() const noexcept {
-  return {R"gql(Mutation)gql"sv};
+service::TypeNames Mutation::getTypeNames() const noexcept
+{
+	return {
+		R"gql(Mutation)gql"sv
+	};
 }
 
-service::ResolverMap Mutation::getResolvers() const noexcept {
-  return {{R"gql(__typename)gql"sv,
-           [this](service::ResolverParams &&params) {
-             return resolve_typename(std::move(params));
-           }},
-          {R"gql(addArtwork)gql"sv,
-           [this](service::ResolverParams &&params) {
-             return resolveAddArtwork(std::move(params));
-           }},
-          {R"gql(deleteArtwork)gql"sv,
-           [this](service::ResolverParams &&params) {
-             return resolveDeleteArtwork(std::move(params));
-           }},
-          {R"gql(updateArtwork)gql"sv,
-           [this](service::ResolverParams &&params) {
-             return resolveUpdateArtwork(std::move(params));
-           }},
-          {R"gql(addArtworkFromImages)gql"sv,
-           [this](service::ResolverParams &&params) {
-             return resolveAddArtworkFromImages(std::move(params));
-           }},
-          {R"gql(rescanArtwork)gql"sv,
-           [this](service::ResolverParams &&params) {
-             return resolveRescanArtwork(std::move(params));
-           }}};
+service::ResolverMap Mutation::getResolvers() const noexcept
+{
+	return {
+		{ R"gql(__typename)gql"sv, [this](service::ResolverParams&& params) { return resolve_typename(std::move(params)); } },
+		{ R"gql(addArtwork)gql"sv, [this](service::ResolverParams&& params) { return resolveAddArtwork(std::move(params)); } },
+		{ R"gql(deleteArtwork)gql"sv, [this](service::ResolverParams&& params) { return resolveDeleteArtwork(std::move(params)); } },
+		{ R"gql(rescanArtwork)gql"sv, [this](service::ResolverParams&& params) { return resolveRescanArtwork(std::move(params)); } },
+		{ R"gql(updateArtwork)gql"sv, [this](service::ResolverParams&& params) { return resolveUpdateArtwork(std::move(params)); } },
+		{ R"gql(addArtworkFromImages)gql"sv, [this](service::ResolverParams&& params) { return resolveAddArtworkFromImages(std::move(params)); } }
+	};
 }
 
-void Mutation::beginSelectionSet(
-    const service::SelectionSetParams &params) const {
-  _pimpl->beginSelectionSet(params);
+void Mutation::beginSelectionSet(const service::SelectionSetParams& params) const
+{
+	_pimpl->beginSelectionSet(params);
 }
 
-void Mutation::endSelectionSet(
-    const service::SelectionSetParams &params) const {
-  _pimpl->endSelectionSet(params);
+void Mutation::endSelectionSet(const service::SelectionSetParams& params) const
+{
+	_pimpl->endSelectionSet(params);
 }
 
-service::AwaitableResolver
-Mutation::resolveAddArtwork(service::ResolverParams &&params) const {
-  auto argInput = service::ModifiedArgument<AddArtworkInput>::require(
-      "input", params.arguments);
-  std::unique_lock resolverLock(_resolverMutex);
-  service::SelectionSetParams selectionSetParams{
-      static_cast<const service::SelectionSetParams &>(params)};
-  auto directives = std::move(params.fieldDirectives);
-  auto result = _pimpl->applyAddArtwork(
-      service::FieldParams{std::move(selectionSetParams),
-                           std::move(directives)},
-      std::move(argInput));
-  resolverLock.unlock();
+service::AwaitableResolver Mutation::resolveAddArtwork(service::ResolverParams&& params) const
+{
+	auto argInput = service::ModifiedArgument<AddArtworkInput>::require("input", params.arguments);
+	std::unique_lock resolverLock(_resolverMutex);
+	service::SelectionSetParams selectionSetParams { static_cast<const service::SelectionSetParams&>(params) };
+	auto directives = std::move(params.fieldDirectives);
+	auto result = _pimpl->applyAddArtwork(service::FieldParams { std::move(selectionSetParams), std::move(directives) }, std::move(argInput));
+	resolverLock.unlock();
 
-  return service::ModifiedResult<response::IdType>::convert(std::move(result),
-                                                            std::move(params));
+	return service::ModifiedResult<response::IdType>::convert(std::move(result), std::move(params));
 }
 
-service::AwaitableResolver
-Mutation::resolveAddArtworkFromImages(service::ResolverParams &&params) const {
-  auto argInput = service::ModifiedArgument<AddArtworkFromImagesInput>::require(
-      "input", params.arguments);
-  std::unique_lock resolverLock(_resolverMutex);
-  service::SelectionSetParams selectionSetParams{
-      static_cast<const service::SelectionSetParams &>(params)};
-  auto directives = std::move(params.fieldDirectives);
-  auto result = _pimpl->applyAddArtworkFromImages(
-      service::FieldParams{std::move(selectionSetParams),
-                           std::move(directives)},
-      std::move(argInput));
-  resolverLock.unlock();
+service::AwaitableResolver Mutation::resolveAddArtworkFromImages(service::ResolverParams&& params) const
+{
+	auto argInput = service::ModifiedArgument<AddArtworkFromImagesInput>::require("input", params.arguments);
+	std::unique_lock resolverLock(_resolverMutex);
+	service::SelectionSetParams selectionSetParams { static_cast<const service::SelectionSetParams&>(params) };
+	auto directives = std::move(params.fieldDirectives);
+	auto result = _pimpl->applyAddArtworkFromImages(service::FieldParams { std::move(selectionSetParams), std::move(directives) }, std::move(argInput));
+	resolverLock.unlock();
 
-  return service::ModifiedResult<response::IdType>::convert(std::move(result),
-                                                            std::move(params));
+	return service::ModifiedResult<response::IdType>::convert(std::move(result), std::move(params));
 }
 
-service::AwaitableResolver
-Mutation::resolveRescanArtwork(service::ResolverParams &&params) const {
-  auto argArtworkId = service::ModifiedArgument<response::IdType>::require(
-      "artworkId", params.arguments);
-  std::unique_lock resolverLock(_resolverMutex);
-  service::SelectionSetParams selectionSetParams{
-      static_cast<const service::SelectionSetParams &>(params)};
-  auto directives = std::move(params.fieldDirectives);
-  auto result = _pimpl->applyRescanArtwork(
-      service::FieldParams{std::move(selectionSetParams),
-                           std::move(directives)},
-      std::move(argArtworkId));
-  resolverLock.unlock();
+service::AwaitableResolver Mutation::resolveRescanArtwork(service::ResolverParams&& params) const
+{
+	auto argArtworkId = service::ModifiedArgument<response::IdType>::require("artworkId", params.arguments);
+	std::unique_lock resolverLock(_resolverMutex);
+	service::SelectionSetParams selectionSetParams { static_cast<const service::SelectionSetParams&>(params) };
+	auto directives = std::move(params.fieldDirectives);
+	auto result = _pimpl->applyRescanArtwork(service::FieldParams { std::move(selectionSetParams), std::move(directives) }, std::move(argArtworkId));
+	resolverLock.unlock();
 
-  return service::ModifiedResult<response::IdType>::convert(std::move(result),
-                                                            std::move(params));
+	return service::ModifiedResult<response::IdType>::convert(std::move(result), std::move(params));
 }
 
-service::AwaitableResolver
-Mutation::resolveDeleteArtwork(service::ResolverParams &&params) const {
-  auto argId = service::ModifiedArgument<response::IdType>::require(
-      "id", params.arguments);
-  std::unique_lock resolverLock(_resolverMutex);
-  service::SelectionSetParams selectionSetParams{
-      static_cast<const service::SelectionSetParams &>(params)};
-  auto directives = std::move(params.fieldDirectives);
-  auto result = _pimpl->applyDeleteArtwork(
-      service::FieldParams{std::move(selectionSetParams),
-                           std::move(directives)},
-      std::move(argId));
-  resolverLock.unlock();
+service::AwaitableResolver Mutation::resolveDeleteArtwork(service::ResolverParams&& params) const
+{
+	auto argId = service::ModifiedArgument<response::IdType>::require("id", params.arguments);
+	std::unique_lock resolverLock(_resolverMutex);
+	service::SelectionSetParams selectionSetParams { static_cast<const service::SelectionSetParams&>(params) };
+	auto directives = std::move(params.fieldDirectives);
+	auto result = _pimpl->applyDeleteArtwork(service::FieldParams { std::move(selectionSetParams), std::move(directives) }, std::move(argId));
+	resolverLock.unlock();
 
-  return service::ModifiedResult<DeleteArtworkResult>::convert(
-      std::move(result), std::move(params));
+	return service::ModifiedResult<DeleteArtworkResult>::convert(std::move(result), std::move(params));
 }
 
-service::AwaitableResolver
-Mutation::resolveUpdateArtwork(service::ResolverParams &&params) const {
-  auto argId = service::ModifiedArgument<response::IdType>::require(
-      "id", params.arguments);
-  auto argInput = service::ModifiedArgument<UpdateArtworkInput>::require(
-      "input", params.arguments);
-  std::unique_lock resolverLock(_resolverMutex);
-  service::SelectionSetParams selectionSetParams{
-      static_cast<const service::SelectionSetParams &>(params)};
-  auto directives = std::move(params.fieldDirectives);
-  auto result = _pimpl->applyUpdateArtwork(
-      service::FieldParams{std::move(selectionSetParams),
-                           std::move(directives)},
-      std::move(argId), std::move(argInput));
-  resolverLock.unlock();
+service::AwaitableResolver Mutation::resolveUpdateArtwork(service::ResolverParams&& params) const
+{
+	auto argId = service::ModifiedArgument<response::IdType>::require("id", params.arguments);
+	auto argInput = service::ModifiedArgument<UpdateArtworkInput>::require("input", params.arguments);
+	std::unique_lock resolverLock(_resolverMutex);
+	service::SelectionSetParams selectionSetParams { static_cast<const service::SelectionSetParams&>(params) };
+	auto directives = std::move(params.fieldDirectives);
+	auto result = _pimpl->applyUpdateArtwork(service::FieldParams { std::move(selectionSetParams), std::move(directives) }, std::move(argId), std::move(argInput));
+	resolverLock.unlock();
 
-  return service::ModifiedResult<response::IdType>::convert(std::move(result),
-                                                            std::move(params));
+	return service::ModifiedResult<response::IdType>::convert(std::move(result), std::move(params));
 }
 
-service::AwaitableResolver
-Mutation::resolve_typename(service::ResolverParams &&params) const {
-  return service::Result<std::string>::convert(std::string{R"gql(Mutation)gql"},
-                                               std::move(params));
+service::AwaitableResolver Mutation::resolve_typename(service::ResolverParams&& params) const
+{
+	return service::Result<std::string>::convert(std::string{ R"gql(Mutation)gql" }, std::move(params));
 }
 
 } // namespace object
 
-void AddMutationDetails(const std::shared_ptr<schema::ObjectType> &typeMutation,
-                        const std::shared_ptr<schema::Schema> &schema) {
-  typeMutation->AddFields(
-      {schema::Field::Make(
-           R"gql(addArtwork)gql"sv, R"md(提交一个图片扫描任务，立即返回任务 ID。
+void AddMutationDetails(const std::shared_ptr<schema::ObjectType>& typeMutation, const std::shared_ptr<schema::Schema>& schema)
+{
+	typeMutation->AddFields({
+		schema::Field::Make(R"gql(addArtwork)gql"sv, R"md(提交一个图片扫描任务，立即返回任务 ID。
 
 任务完成瞬间即被丢弃，服务端不保存终态，也没有任务查询接口。
-扫描结果只体现在后续的作品列表/搜索中，失败原因只写入服务端日志。)md"sv,
-           std::nullopt,
-           schema->WrapType(introspection::TypeKind::NON_NULL,
-                            schema->LookupType(R"gql(ID)gql"sv)),
-           {schema::InputValue::Make(
-               R"gql(input)gql"sv, R"md()md"sv,
-               schema->WrapType(
-                   introspection::TypeKind::NON_NULL,
-                   schema->LookupType(R"gql(AddArtworkInput)gql"sv)),
-               R"gql()gql"sv)}),
-       schema::Field::Make(
-           R"gql(addArtworkFromImages)gql"sv,
-           R"md(用已有图片 ID 新建作品，立即返回任务 ID。
+扫描结果只体现在后续的作品列表/搜索中，失败原因只写入服务端日志。)md"sv, std::nullopt, schema->WrapType(introspection::TypeKind::NON_NULL, schema->LookupType(R"gql(ID)gql"sv)), {
+			schema::InputValue::Make(R"gql(input)gql"sv, R"md()md"sv, schema->WrapType(introspection::TypeKind::NON_NULL, schema->LookupType(R"gql(AddArtworkInput)gql"sv)), R"gql()gql"sv)
+		}),
+		schema::Field::Make(R"gql(addArtworkFromImages)gql"sv, R"md(用已有图片 ID 新建作品，立即返回任务 ID。
 
 rescan 为 false 时只建立图片关联，作品标签只来自 tagIds。
 rescan 为 true 时逐张重新扫描并合并扫描标签；任一图片失败则整单不写库。
-图片可以已经属于其他作品。)md"sv,
-           std::nullopt,
-           schema->WrapType(introspection::TypeKind::NON_NULL,
-                            schema->LookupType(R"gql(ID)gql"sv)),
-           {schema::InputValue::Make(
-               R"gql(input)gql"sv, R"md()md"sv,
-               schema->WrapType(
-                   introspection::TypeKind::NON_NULL,
-                   schema->LookupType(R"gql(AddArtworkFromImagesInput)gql"sv)),
-               R"gql()gql"sv)}),
-       schema::Field::Make(
-           R"gql(deleteArtwork)gql"sv, R"md(删除一个作品及其标签、画师关联。
+图片可以已经属于其他作品。)md"sv, std::nullopt, schema->WrapType(introspection::TypeKind::NON_NULL, schema->LookupType(R"gql(ID)gql"sv)), {
+			schema::InputValue::Make(R"gql(input)gql"sv, R"md()md"sv, schema->WrapType(introspection::TypeKind::NON_NULL, schema->LookupType(R"gql(AddArtworkFromImagesInput)gql"sv)), R"gql()gql"sv)
+		}),
+		schema::Field::Make(R"gql(rescanArtwork)gql"sv, R"md(重新扫描一个作品内的全部图片，立即返回任务 ID。
+
+先逐张重新下载、打标并生成向量；只有全部图片都成功才会写库，否则整单
+不写，作品的旧向量与旧标签保持原样。成功时按图片替换 Chinese-CLIP
+向量，并把本次扫描出的标签增量加入作品（只增不删）。
+与 addArtwork 一样不保存终态，结果只体现在后续查询里。)md"sv, std::nullopt, schema->WrapType(introspection::TypeKind::NON_NULL, schema->LookupType(R"gql(ID)gql"sv)), {
+			schema::InputValue::Make(R"gql(artworkId)gql"sv, R"md()md"sv, schema->WrapType(introspection::TypeKind::NON_NULL, schema->LookupType(R"gql(ID)gql"sv)), R"gql()gql"sv)
+		}),
+		schema::Field::Make(R"gql(deleteArtwork)gql"sv, R"md(删除一个作品及其标签、画师关联。
 
 图片行本身保留；只属于这个作品的图片会变成游离图片。
-作品不存在时返回 deleted: false，不报错。)md"sv,
-           std::nullopt,
-           schema->WrapType(
-               introspection::TypeKind::NON_NULL,
-               schema->LookupType(R"gql(DeleteArtworkResult)gql"sv)),
-           {schema::InputValue::Make(
-               R"gql(id)gql"sv, R"md()md"sv,
-               schema->WrapType(introspection::TypeKind::NON_NULL,
-                                schema->LookupType(R"gql(ID)gql"sv)),
-               R"gql()gql"sv)}),
-       schema::Field::Make(
-           R"gql(updateArtwork)gql"sv,
-           R"md(更新作品的标题、发布时间和标签，返回作品 ID。
+作品不存在时返回 deleted: false，不报错。)md"sv, std::nullopt, schema->WrapType(introspection::TypeKind::NON_NULL, schema->LookupType(R"gql(DeleteArtworkResult)gql"sv)), {
+			schema::InputValue::Make(R"gql(id)gql"sv, R"md()md"sv, schema->WrapType(introspection::TypeKind::NON_NULL, schema->LookupType(R"gql(ID)gql"sv)), R"gql()gql"sv)
+		}),
+		schema::Field::Make(R"gql(updateArtwork)gql"sv, R"md(更新作品的标题、发布时间和标签，返回作品 ID。
 
 标签按增量处理：addTagIds 添加、removeTagIds 移除，已经存在或未挂载的
-标签会被忽略。删除发布时间时传 clearPublishedAt: true。)md"sv,
-           std::nullopt,
-           schema->WrapType(introspection::TypeKind::NON_NULL,
-                            schema->LookupType(R"gql(ID)gql"sv)),
-           {schema::InputValue::Make(
-                R"gql(id)gql"sv, R"md()md"sv,
-                schema->WrapType(introspection::TypeKind::NON_NULL,
-                                 schema->LookupType(R"gql(ID)gql"sv)),
-                R"gql()gql"sv),
-            schema::InputValue::Make(
-                R"gql(input)gql"sv, R"md()md"sv,
-                schema->WrapType(
-                    introspection::TypeKind::NON_NULL,
-                    schema->LookupType(R"gql(UpdateArtworkInput)gql"sv)),
-                R"gql()gql"sv)}),
-       schema::Field::Make(
-           R"gql(rescanArtwork)gql"sv,
-           R"md(重新扫描一个作品内的全部图片，立即返回任务 ID。
-
-先逐张重新下载、打标并生成向量；全部成功才写库，否则整单不写，作品的
-旧向量与旧标签保持原样。成功时按图片替换向量，并把本次扫描出的标签
-增量加入作品（只增不删）。与 addArtwork 一样不保存终态。)md"sv,
-           std::nullopt,
-           schema->WrapType(introspection::TypeKind::NON_NULL,
-                            schema->LookupType(R"gql(ID)gql"sv)),
-           {schema::InputValue::Make(
-               R"gql(artworkId)gql"sv, R"md()md"sv,
-               schema->WrapType(introspection::TypeKind::NON_NULL,
-                                schema->LookupType(R"gql(ID)gql"sv)),
-               R"gql()gql"sv)})});
+标签会被忽略。删除发布时间时传 clearPublishedAt: true。)md"sv, std::nullopt, schema->WrapType(introspection::TypeKind::NON_NULL, schema->LookupType(R"gql(ID)gql"sv)), {
+			schema::InputValue::Make(R"gql(id)gql"sv, R"md()md"sv, schema->WrapType(introspection::TypeKind::NON_NULL, schema->LookupType(R"gql(ID)gql"sv)), R"gql()gql"sv),
+			schema::InputValue::Make(R"gql(input)gql"sv, R"md()md"sv, schema->WrapType(introspection::TypeKind::NON_NULL, schema->LookupType(R"gql(UpdateArtworkInput)gql"sv)), R"gql()gql"sv)
+		})
+	});
 }
 
 } // namespace graphql::tagimg

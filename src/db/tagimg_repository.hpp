@@ -40,6 +40,12 @@ struct ArtworkTag {
   std::string category;
 };
 
+// 一张图片扫描出的标签，用于按图片写入 image_tags。
+struct ImageScannedTags {
+  std::string image_id;
+  std::vector<ArtworkTag> tags;
+};
+
 // 一次作品入库的完整输入。
 struct ArtworkInput {
   // 必填。
@@ -54,8 +60,9 @@ struct ArtworkInput {
   std::vector<std::string> tag_ids;
   std::vector<std::string> artist_ids;
 
-  // 模型扫描得到、已按置信度过滤并去重的标签。
-  std::vector<ArtworkTag> scanned_tags;
+  // 模型扫描得到的逐图标签，与 entity_ids / image_ids 顺序一致。
+  // 每项已经按置信度过滤并去重；没有扫描时为空数组。
+  std::vector<std::vector<ArtworkTag>> scanned_tags;
 
   // Chinese-CLIP 图像向量，与 entity_ids 顺序一致。
   // 每项必须是 768 维、已 L2 归一化；空数组表示该图片不写向量。
@@ -78,8 +85,9 @@ struct ImageArtworkInput {
   std::vector<std::string> tag_ids;
   std::vector<std::string> artist_ids;
 
-  // 模型扫描得到、已按置信度过滤并去重的标签。
-  std::vector<ArtworkTag> scanned_tags;
+  // 模型扫描得到的逐图标签，与 entity_ids / image_ids 顺序一致。
+  // 每项已经按置信度过滤并去重；没有扫描时为空数组。
+  std::vector<std::vector<ArtworkTag>> scanned_tags;
 
   // Chinese-CLIP 图像向量，与 image_ids 顺序一致。
   // rescan 时是本次重扫结果；否则保持空数组，不覆盖已有向量。
@@ -213,6 +221,68 @@ struct ArtworkSearchResult {
   std::optional<std::size_t> total;
 };
 
+// 图片结果里附带的所属作品摘要。
+struct ImageArtworkInfo {
+  std::string id;
+  std::string title;
+  std::optional<std::string> published_at;
+};
+
+// 一次图片查询返回的单张图片。
+struct ImageSummary {
+  std::string id;
+  std::optional<int> width;
+  std::optional<int> height;
+  std::optional<int> frame_count;
+  // RFC3339（UTC，精确到秒）。
+  std::string created_at;
+  std::optional<std::string> scan_at;
+  // 所属作品发布时间中的最大值；没有作品或都没填时为空。
+  std::optional<std::string> published_at;
+  // 与 tags 的顺序一致，按名称排序。
+  std::vector<std::string> tag_ids;
+  std::vector<ArtworkTagInfo> tags;
+  // 所属作品，按 publishedAt DESC NULLS LAST, createdAt DESC, id 排序。
+  std::vector<ImageArtworkInfo> artworks;
+  // 仅在按相似度排序时有值：该图片与文本向量的余弦相似度。
+  std::optional<double> sort_score;
+};
+
+enum class ImageSortField {
+  CreatedAt,
+  PublishedAt,
+  ScanAt,
+  // 按 Chinese-CLIP 文本向量与图片向量的余弦相似度倒序。
+  Similarity,
+};
+
+// 一次图片查询的条件。与作品查询基本相同，但没有标题。
+struct ImageSearchQuery {
+  // 空数组表示不过滤。
+  std::vector<std::string> entity_ids;
+  std::vector<std::string> artist_ids;
+  std::vector<std::string> include_tag_ids;
+  bool include_all_tags = true;
+  bool expand_include_tag_descendants = false;
+  std::vector<std::string> exclude_tag_ids;
+  bool expand_exclude_tag_descendants = false;
+  ImageSortField order_by = ImageSortField::CreatedAt;
+  bool descending = true;
+  std::size_t limit = 20;
+  std::size_t offset = 0;
+  bool include_total = false;
+  // 仅 order_by == Similarity 时使用：768 维文本向量，已 L2 归一化。
+  // 没有向量的图片仍会返回，只是排在最后。
+  std::vector<float> sort_embedding;
+};
+
+struct ImageSearchResult {
+  std::vector<ImageSummary> items;
+  bool has_more = false;
+  // 仅 include_total 为 true 时有值。
+  std::optional<std::size_t> total;
+};
+
 // 一张不属于任何作品的图片。
 struct OrphanImage {
   std::string id;
@@ -280,11 +350,12 @@ public:
   [[nodiscard]] Result<void, TagimgRepositoryError>
   reorder_images(const std::vector<std::string> &image_ids);
 
-  // 把扫描标签按 (category, name) 解析成标签并挂到作品上，只增不删。
+  // 把逐图扫描标签按 (category, name) 解析成标签并写入 image_tags，
+  // 只增不删。每个条目的 image_id 必须属于当前作品。
   // 缺失的标签会新建；分类标签必须已存在，否则返回 TagHierarchyMissing。
   // 返回这次涉及的标签数量（已按 tag_id 去重）。
   [[nodiscard]] Result<std::size_t, TagimgRepositoryError>
-  add_scanned_tags(const std::vector<ArtworkTag> &tags);
+  add_scanned_tags(const std::vector<ImageScannedTags> &tags);
 
   // 按 image_id 替换向量；维度不是 768 时返回 InvalidArgument。
   [[nodiscard]] Result<std::size_t, TagimgRepositoryError>
@@ -352,6 +423,10 @@ public:
   // 分页查询作品。条件之间是 AND，同一数组内部是 OR。
   [[nodiscard]] Result<ArtworkSearchResult, TagimgRepositoryError>
   search_artworks(const ArtworkSearchQuery &query) const;
+
+  // 分页查询图片。条件之间是 AND，同一数组内部是 OR。
+  [[nodiscard]] Result<ImageSearchResult, TagimgRepositoryError>
+  search_images(const ImageSearchQuery &query) const;
 
   // 按标准名搜索标签，用于输入联想。
   [[nodiscard]] Result<std::vector<TagMatch>, TagimgRepositoryError>

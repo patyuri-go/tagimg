@@ -172,18 +172,21 @@ FROM tags
 WHERE id = ANY(CAST(:tag_ids AS uuid[]))
 )sql";
 
-constexpr const char *kInsertArtworkTagsSql = R"sql(
-INSERT INTO artwork_tags (artwork_id, tag_id)
-SELECT :artwork_id, t.id
-FROM tags t
-WHERE t.id = ANY(CAST(:tag_ids AS uuid[]))
+constexpr const char *kInsertImageTagsForArtworkSql = R"sql(
+INSERT INTO image_tags (image_id, tag_id)
+SELECT ai.image_id, t.id
+FROM artwork_images ai
+CROSS JOIN unnest(CAST(:tag_ids AS uuid[])) AS t(id)
+WHERE ai.artwork_id = :artwork_id
 ON CONFLICT DO NOTHING
 )sql";
 
-constexpr const char *kDeleteArtworkTagsSql = R"sql(
-DELETE FROM artwork_tags
-WHERE artwork_id = :artwork_id
-  AND tag_id = ANY(CAST(:tag_ids AS uuid[]))
+constexpr const char *kDeleteImageTagsSql = R"sql(
+DELETE FROM image_tags it
+USING artwork_images ai
+WHERE it.image_id = ai.image_id
+  AND ai.artwork_id = :artwork_id
+  AND it.tag_id = ANY(CAST(:tag_ids AS uuid[]))
 )sql";
 
 constexpr const char *kOrphanImagesSql = R"sql(
@@ -258,9 +261,9 @@ INSERT INTO artwork_images (artwork_id, image_id, position)
 VALUES (:artwork_id, :image_id, :position)
 )sql";
 
-constexpr const char *kInsertArtworkTagSql = R"sql(
-INSERT INTO artwork_tags (artwork_id, tag_id)
-VALUES (:artwork_id, :tag_id)
+constexpr const char *kInsertImageTagSql = R"sql(
+INSERT INTO image_tags (image_id, tag_id)
+VALUES (:image_id, :tag_id)
 ON CONFLICT DO NOTHING
 )sql";
 
@@ -392,7 +395,8 @@ struct ArtworkWriteInput {
   std::optional<std::string> published_at;
   std::vector<std::string> tag_ids;
   std::vector<std::string> artist_ids;
-  std::vector<ArtworkTag> scanned_tags;
+  // 与 entity_ids（或 image_ids）顺序一致；每项是该图的扫描标签。
+  std::vector<std::vector<ArtworkTag>> scanned_tags;
   // 与 entity_ids（或 image_ids）顺序一致；空向量表示该图不写向量。
   std::vector<std::vector<float>> embeddings;
 };
@@ -410,6 +414,12 @@ write_artwork(soci::session &sql, const ArtworkWriteInput &input,
     return TagimgRepositoryError::InvalidArgument;
   }
 
+  const std::size_t image_count =
+      new_entity_ids.empty() ? existing_image_ids.size() : new_entity_ids.size();
+  if (!input.scanned_tags.empty() && input.scanned_tags.size() != image_count) {
+    return TagimgRepositoryError::InvalidArgument;
+  }
+
   try {
     soci::transaction transaction(sql);
 
@@ -420,15 +430,17 @@ write_artwork(soci::session &sql, const ArtworkWriteInput &input,
 
     // 先把用到的分类标签全部解析出来；缺任何一个都不写库。
     std::map<std::string, std::string> categories;
-    for (const ArtworkTag &tag : input.scanned_tags) {
-      if (categories.find(tag.category) != categories.end()) {
-        continue;
+    for (const auto &image_tags : input.scanned_tags) {
+      for (const ArtworkTag &tag : image_tags) {
+        if (categories.find(tag.category) != categories.end()) {
+          continue;
+        }
+        const auto category_id = find_child_tag(sql, *root_id, tag.category);
+        if (!category_id) {
+          return TagimgRepositoryError::TagHierarchyMissing;
+        }
+        categories.emplace(tag.category, *category_id);
       }
-      const auto category_id = find_child_tag(sql, *root_id, tag.category);
-      if (!category_id) {
-        return TagimgRepositoryError::TagHierarchyMissing;
-      }
-      categories.emplace(tag.category, *category_id);
     }
 
     std::string title = input.title;
@@ -501,14 +513,18 @@ write_artwork(soci::session &sql, const ArtworkWriteInput &input,
       }
     }
 
-    // 调用方直接指定的标签：必须已经存在。
-    for (const std::string &id : input.tag_ids) {
-      std::string tag_id = id;
-      if (count_rows(sql, kCountTagSql, tag_id) == 0) {
-        return TagimgRepositoryError::UnknownTag;
+    // 调用方直接指定的标签：必须已经存在，并一次挂到作品的所有图片上。
+    if (!input.tag_ids.empty()) {
+      std::vector<std::string> tag_ids;
+      tag_ids.reserve(input.tag_ids.size());
+      for (const std::string &id : input.tag_ids) {
+        if (count_rows(sql, kCountTagSql, id) == 0) {
+          return TagimgRepositoryError::UnknownTag;
+        }
+        tag_ids.push_back(id);
       }
-      sql << kInsertArtworkTagSql, soci::use(saved.artwork_id),
-          soci::use(tag_id);
+      sql << kInsertImageTagsForArtworkSql, soci::use(tag_ids),
+          soci::use(saved.artwork_id);
     }
 
     // 调用方直接指定的艺术家：必须已经存在。
@@ -522,23 +538,29 @@ write_artwork(soci::session &sql, const ArtworkWriteInput &input,
     }
 
     // 扫描标签：按「父标签 + 标准名称」查找，找不到才在分类下新建。
-    for (const ArtworkTag &tag : input.scanned_tags) {
-      const std::string &category_id = categories.at(tag.category);
-      std::string name = tag.name;
+    // 每张图的标签只写到该图的 image_tags，不再合并到作品级。
+    if (!input.scanned_tags.empty()) {
+      for (std::size_t index = 0; index < saved.image_ids.size(); ++index) {
+        const std::string &image_id = saved.image_ids[index];
+        for (const ArtworkTag &tag : input.scanned_tags[index]) {
+          const std::string &category_id = categories.at(tag.category);
+          std::string name = tag.name;
 
-      auto tag_id = find_child_tag(sql, category_id, name);
-      if (!tag_id) {
-        std::string created =
-            insert_returning_id(sql, kInsertTagSql, category_id);
-        if (created.empty()) {
-          return TagimgRepositoryError::QueryFailed;
+          auto tag_id = find_child_tag(sql, category_id, name);
+          if (!tag_id) {
+            std::string created =
+                insert_returning_id(sql, kInsertTagSql, category_id);
+            if (created.empty()) {
+              return TagimgRepositoryError::QueryFailed;
+            }
+            sql << kInsertTagNameSql, soci::use(created), soci::use(name);
+            tag_id = std::move(created);
+          }
+
+          sql << kInsertImageTagSql, soci::use(image_id),
+              soci::use(*tag_id);
         }
-        sql << kInsertTagNameSql, soci::use(created), soci::use(name);
-        tag_id = std::move(created);
       }
-
-      sql << kInsertArtworkTagSql, soci::use(saved.artwork_id),
-          soci::use(*tag_id);
     }
 
     transaction.commit();
@@ -630,15 +652,95 @@ WHERE (p.title IS NULL OR a.title ILIKE p.title ESCAPE '\')
         WHERE aa.artwork_id = a.id AND aa.artist_id = ANY(p.artist_ids)))
   AND (p.include_tags IS NULL OR
        (SELECT count(DISTINCT s.root_id)
-        FROM artwork_tags at
-        JOIN include_scope s ON s.tag_id = at.tag_id
-        WHERE at.artwork_id = a.id)
+        FROM artwork_images ai
+        JOIN image_tags it ON it.image_id = ai.image_id
+        JOIN include_scope s ON s.tag_id = it.tag_id
+        WHERE ai.artwork_id = a.id)
        >= CASE WHEN p.include_all THEN p.include_count ELSE 1 END)
   AND (p.exclude_tags IS NULL OR NOT EXISTS (
         SELECT 1
-        FROM artwork_tags at
-        JOIN exclude_scope s ON s.tag_id = at.tag_id
-        WHERE at.artwork_id = a.id))
+        FROM artwork_images ai
+        JOIN image_tags it ON it.image_id = ai.image_id
+        JOIN exclude_scope s ON s.tag_id = it.tag_id
+        WHERE ai.artwork_id = a.id))
+)sql";
+
+constexpr const char *kImageSearchWithSql = R"sql(
+WITH RECURSIVE params AS (
+  SELECT CAST(:entity_ids AS uuid[]) AS entity_ids,
+         CAST(:artist_ids AS uuid[]) AS artist_ids,
+         CAST(:include_tags AS uuid[]) AS include_tags,
+         CAST(:exclude_tags AS uuid[]) AS exclude_tags,
+         CAST(:include_count AS bigint) AS include_count,
+         CAST(:expand_include AS boolean) AS expand_include,
+         CAST(:expand_exclude AS boolean) AS expand_exclude,
+         CAST(:include_all AS boolean) AS include_all
+),
+include_scope(root_id, tag_id) AS (
+  SELECT x.id, x.id
+  FROM params p, unnest(p.include_tags) AS x(id)
+  UNION ALL
+  SELECT s.root_id, t.id
+  FROM include_scope s
+  JOIN tags t ON t.parent_id = s.tag_id
+  CROSS JOIN params p
+  WHERE p.expand_include
+),
+exclude_scope(root_id, tag_id) AS (
+  SELECT x.id, x.id
+  FROM params p, unnest(p.exclude_tags) AS x(id)
+  UNION ALL
+  SELECT s.root_id, t.id
+  FROM exclude_scope s
+  JOIN tags t ON t.parent_id = s.tag_id
+  CROSS JOIN params p
+  WHERE p.expand_exclude
+)
+)sql";
+
+constexpr const char *kImageSearchFromSql = R"sql(
+FROM images i
+CROSS JOIN params p
+WHERE (p.entity_ids IS NULL OR i.entity_id = ANY(p.entity_ids))
+  AND (p.artist_ids IS NULL OR EXISTS (
+        SELECT 1
+        FROM artwork_images ai
+        JOIN artwork_artists aa ON aa.artwork_id = ai.artwork_id
+        WHERE ai.image_id = i.id AND aa.artist_id = ANY(p.artist_ids)))
+  AND (p.include_tags IS NULL OR
+       (SELECT count(DISTINCT s.root_id)
+        FROM image_tags it
+        JOIN include_scope s ON s.tag_id = it.tag_id
+        WHERE it.image_id = i.id)
+       >= CASE WHEN p.include_all THEN p.include_count ELSE 1 END)
+  AND (p.exclude_tags IS NULL OR NOT EXISTS (
+        SELECT 1
+        FROM image_tags it
+        JOIN exclude_scope s ON s.tag_id = it.tag_id
+        WHERE it.image_id = i.id))
+)sql";
+
+constexpr const char *kImageColumnsSql = R"sql(
+       i.id::text,
+       i.width,
+       i.height,
+       i.frame_count,
+       to_char(i.created_at AT TIME ZONE 'UTC',
+               'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS created_at,
+       CASE WHEN i.scan_at IS NULL THEN NULL
+            ELSE to_char(i.scan_at AT TIME ZONE 'UTC',
+                         'YYYY-MM-DD"T"HH24:MI:SS"Z"') END AS scan_at,
+       to_char((SELECT max(a.published_at)
+                FROM artwork_images ai
+                JOIN artworks a ON a.id = ai.artwork_id
+                WHERE ai.image_id = i.id) AT TIME ZONE 'UTC',
+               'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS published_at
+)sql";
+
+constexpr const char *kImageSimilarityScoreSql = R"sql(
+       (SELECT 1 - (c.embedding <=> CAST(:sort_embedding AS vector))
+        FROM chinese_clip_vit_large_patch14 c
+        WHERE c.image_id = i.id) AS sort_score
 )sql";
 
 constexpr const char *kArtworkImagesSql = R"sql(
@@ -649,10 +751,32 @@ ORDER BY ai.artwork_id, ai.position
 )sql";
 
 constexpr const char *kArtworkTagsSql = R"sql(
-SELECT at.artwork_id::text, at.tag_id::text
-FROM artwork_tags at
-WHERE at.artwork_id = ANY(CAST(:ids AS uuid[]))
-ORDER BY at.artwork_id, at.tag_id
+SELECT DISTINCT ai.artwork_id::text, it.tag_id::text
+FROM artwork_images ai
+JOIN image_tags it ON it.image_id = ai.image_id
+WHERE ai.artwork_id = ANY(CAST(:ids AS uuid[]))
+ORDER BY ai.artwork_id, it.tag_id
+)sql";
+
+constexpr const char *kImageTagsSql = R"sql(
+SELECT it.image_id::text, it.tag_id::text
+FROM image_tags it
+WHERE it.image_id = ANY(CAST(:ids AS uuid[]))
+ORDER BY it.image_id, it.tag_id
+)sql";
+
+constexpr const char *kImageArtworksSql = R"sql(
+SELECT ai.image_id::text,
+       a.id::text,
+       COALESCE(a.title, '') AS title,
+       to_char(a.published_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+FROM artwork_images ai
+JOIN artworks a ON a.id = ai.artwork_id
+WHERE ai.image_id = ANY(CAST(:ids AS uuid[]))
+ORDER BY ai.image_id,
+         a.published_at DESC NULLS LAST,
+         a.created_at DESC,
+         a.id
 )sql";
 
 // 从标签向上回溯，得到「根::...::自身」的路径。
@@ -724,6 +848,28 @@ ArtworkSummary parse_artwork_row(const soci::row &row) {
   }
   item.created_at = row.get<std::string>(4);
   item.updated_at = row.get<std::string>(5);
+  return item;
+}
+
+ImageSummary parse_image_row(const soci::row &row) {
+  ImageSummary item;
+  item.id = row.get<std::string>(0);
+  if (row.get_indicator(1) != soci::i_null) {
+    item.width = row.get<int>(1);
+  }
+  if (row.get_indicator(2) != soci::i_null) {
+    item.height = row.get<int>(2);
+  }
+  if (row.get_indicator(3) != soci::i_null) {
+    item.frame_count = row.get<int>(3);
+  }
+  item.created_at = row.get<std::string>(4);
+  if (row.get_indicator(5) != soci::i_null) {
+    item.scan_at = row.get<std::string>(5);
+  }
+  if (row.get_indicator(6) != soci::i_null) {
+    item.published_at = row.get<std::string>(6);
+  }
   return item;
 }
 
@@ -828,6 +974,99 @@ void attach_relations(soci::session &sql, std::vector<ArtworkSummary> &items) {
   }
 }
 
+// 一次性补齐一批图片的标签与所属作品。
+void attach_image_relations(soci::session &sql,
+                            std::vector<ImageSummary> &items) {
+  if (items.empty()) {
+    return;
+  }
+
+  std::vector<std::string> image_ids;
+  image_ids.reserve(items.size());
+  std::map<std::string, std::size_t> index;
+  for (std::size_t i = 0; i < items.size(); ++i) {
+    image_ids.push_back(items[i].id);
+    index.emplace(items[i].id, i);
+  }
+  const std::string image_array = uuid_array_literal(image_ids);
+
+  std::vector<std::pair<std::size_t, std::string>> tag_links;
+  std::set<std::string> tag_ids;
+  soci::rowset<soci::row> tags =
+      (sql.prepare << kImageTagsSql, soci::use(image_array));
+  for (const soci::row &row : tags) {
+    const auto found = index.find(row.get<std::string>(0));
+    if (found == index.end()) {
+      continue;
+    }
+    std::string tag_id = row.get<std::string>(1);
+    tag_ids.insert(tag_id);
+    tag_links.emplace_back(found->second, std::move(tag_id));
+  }
+
+  std::map<std::string, ArtworkTagInfo> tag_infos;
+  if (!tag_ids.empty()) {
+    const std::vector<std::string> ids(tag_ids.begin(), tag_ids.end());
+    const std::string tag_array = uuid_array_literal(ids);
+    soci::rowset<soci::row> rows =
+        (sql.prepare << kTagInfoSql, soci::use(tag_array));
+    for (const soci::row &row : rows) {
+      ArtworkTagInfo info;
+      info.id = row.get<std::string>(0);
+      info.name = row.get<std::string>(1);
+      if (row.get_indicator(2) != soci::i_null) {
+        info.category = row.get<std::string>(2);
+      }
+      info.path = row.get<std::string>(3);
+      tag_infos.emplace(info.id, std::move(info));
+    }
+
+    soci::rowset<soci::row> aliases =
+        (sql.prepare << kArtworkAliasesSql, soci::use(tag_array));
+    for (const soci::row &row : aliases) {
+      const auto found = tag_infos.find(row.get<std::string>(0));
+      if (found != tag_infos.end()) {
+        found->second.aliases.push_back(row.get<std::string>(1));
+      }
+    }
+  }
+  for (const auto &[position, tag_id] : tag_links) {
+    const auto found = tag_infos.find(tag_id);
+    if (found != tag_infos.end()) {
+      items[position].tags.push_back(found->second);
+    }
+  }
+
+  soci::rowset<soci::row> artworks =
+      (sql.prepare << kImageArtworksSql, soci::use(image_array));
+  for (const soci::row &row : artworks) {
+    const auto found = index.find(row.get<std::string>(0));
+    if (found == index.end()) {
+      continue;
+    }
+    ImageArtworkInfo info;
+    info.id = row.get<std::string>(1);
+    info.title = row.get<std::string>(2);
+    if (row.get_indicator(3) != soci::i_null) {
+      info.published_at = row.get<std::string>(3);
+    }
+    items[found->second].artworks.push_back(std::move(info));
+  }
+
+  for (ImageSummary &item : items) {
+    std::sort(item.tags.begin(), item.tags.end(),
+              [](const ArtworkTagInfo &left, const ArtworkTagInfo &right) {
+                return left.name < right.name ||
+                       (left.name == right.name && left.id < right.id);
+              });
+    item.tag_ids.clear();
+    item.tag_ids.reserve(item.tags.size());
+    for (const ArtworkTagInfo &tag : item.tags) {
+      item.tag_ids.push_back(tag.id);
+    }
+  }
+}
+
 } // namespace
 
 std::string_view to_string(TagimgRepositoryError error) noexcept {
@@ -910,9 +1149,11 @@ TagimgRepository::save_artwork(const ArtworkInput &input) const {
       return TagimgRepositoryError::InvalidArgument;
     }
   }
-  for (const ArtworkTag &tag : input.scanned_tags) {
-    if (tag.name.empty() || tag.category.empty()) {
-      return TagimgRepositoryError::InvalidArgument;
+  for (const auto &image_tags : input.scanned_tags) {
+    for (const ArtworkTag &tag : image_tags) {
+      if (tag.name.empty() || tag.category.empty()) {
+        return TagimgRepositoryError::InvalidArgument;
+      }
     }
   }
 
@@ -965,9 +1206,11 @@ TagimgRepository::save_artwork_from_images(
       return TagimgRepositoryError::InvalidArgument;
     }
   }
-  for (const ArtworkTag &tag : input.scanned_tags) {
-    if (tag.name.empty() || tag.category.empty()) {
-      return TagimgRepositoryError::InvalidArgument;
+  for (const auto &image_tags : input.scanned_tags) {
+    for (const ArtworkTag &tag : image_tags) {
+      if (tag.name.empty() || tag.category.empty()) {
+        return TagimgRepositoryError::InvalidArgument;
+      }
     }
   }
 
@@ -1236,6 +1479,171 @@ TagimgRepository::search_artworks(const ArtworkSearchQuery &query) const {
       long long total = 0;
       sql << count_sql, soci::use(title_value, title_indicator),
           soci::use(entity_value, entity_indicator),
+          soci::use(artist_value, artist_indicator),
+          soci::use(include_value, include_indicator),
+          soci::use(exclude_value, exclude_indicator), soci::use(include_count),
+          soci::use(expand_include), soci::use(expand_exclude),
+          soci::use(include_all), soci::into(total);
+      result.total = static_cast<std::size_t>(total);
+    }
+
+    return result;
+  } catch (const std::exception &) {
+    return TagimgRepositoryError::QueryFailed;
+  }
+}
+
+Result<ImageSearchResult, TagimgRepositoryError>
+TagimgRepository::search_images(const ImageSearchQuery &query) const {
+  if (query.limit == 0 || query.limit > 100 || query.offset > 10000) {
+    return TagimgRepositoryError::InvalidArgument;
+  }
+  if (query.order_by == ImageSortField::Similarity) {
+    if (query.sort_embedding.size() != kClipEmbeddingDim) {
+      return TagimgRepositoryError::InvalidArgument;
+    }
+    for (float value : query.sort_embedding) {
+      if (!std::isfinite(value)) {
+        return TagimgRepositoryError::InvalidArgument;
+      }
+    }
+  } else if (!query.sort_embedding.empty()) {
+    return TagimgRepositoryError::InvalidArgument;
+  }
+  for (const auto *ids : {&query.entity_ids, &query.artist_ids,
+                          &query.include_tag_ids, &query.exclude_tag_ids}) {
+    for (const std::string &id : *ids) {
+      if (!is_uuid(id)) {
+        return TagimgRepositoryError::InvalidArgument;
+      }
+    }
+  }
+  if (!impl_ || !impl_->pool) {
+    return TagimgRepositoryError::ConnectionFailed;
+  }
+
+  const std::vector<std::string> include_ids =
+      unique_ids(query.include_tag_ids);
+  const std::vector<std::string> exclude_ids =
+      unique_ids(query.exclude_tag_ids);
+
+  std::string entity_value;
+  soci::indicator entity_indicator = soci::i_null;
+  if (!query.entity_ids.empty()) {
+    entity_value = uuid_array_literal(query.entity_ids);
+    entity_indicator = soci::i_ok;
+  }
+  std::string artist_value;
+  soci::indicator artist_indicator = soci::i_null;
+  if (!query.artist_ids.empty()) {
+    artist_value = uuid_array_literal(query.artist_ids);
+    artist_indicator = soci::i_ok;
+  }
+  std::string include_value;
+  soci::indicator include_indicator = soci::i_null;
+  if (!include_ids.empty()) {
+    include_value = uuid_array_literal(include_ids);
+    include_indicator = soci::i_ok;
+  }
+  std::string exclude_value;
+  soci::indicator exclude_indicator = soci::i_null;
+  if (!exclude_ids.empty()) {
+    exclude_value = uuid_array_literal(exclude_ids);
+    exclude_indicator = soci::i_ok;
+  }
+
+  const long long include_count = static_cast<long long>(include_ids.size());
+  const int expand_include = query.expand_include_tag_descendants ? 1 : 0;
+  const int expand_exclude = query.expand_exclude_tag_descendants ? 1 : 0;
+  const int include_all = query.include_all_tags ? 1 : 0;
+  const int limit_value = static_cast<int>(query.limit) + 1;
+  const int offset_value = static_cast<int>(query.offset);
+
+  const std::string direction = query.descending ? "DESC" : "ASC";
+  std::string order_sql = "\nORDER BY ";
+  switch (query.order_by) {
+  case ImageSortField::CreatedAt:
+    order_sql += "i.created_at " + direction + ", i.id " + direction;
+    break;
+  case ImageSortField::PublishedAt:
+    order_sql += "published_at " + direction + " NULLS LAST, i.id " + direction;
+    break;
+  case ImageSortField::ScanAt:
+    order_sql += "scan_at " + direction + " NULLS LAST, i.id " + direction;
+    break;
+  case ImageSortField::Similarity:
+    order_sql += "sort_score DESC NULLS LAST, i.id DESC";
+    break;
+  }
+
+  const bool with_score = query.order_by == ImageSortField::Similarity;
+  const std::string page_sql =
+      std::string(kImageSearchWithSql) + "\nSELECT " + kImageColumnsSql +
+      (with_score ? std::string(", ") + kImageSimilarityScoreSql
+                  : std::string()) +
+      kImageSearchFromSql + order_sql + "\nLIMIT :limit OFFSET :offset";
+  const std::string count_sql = std::string(kImageSearchWithSql) +
+                                "\nSELECT count(*)" + kImageSearchFromSql;
+
+  try {
+    db_detail::PoolLease lease(*impl_->pool);
+    soci::session &sql = impl_->pool->at(lease.position());
+
+    std::vector<std::string> checked_ids = include_ids;
+    checked_ids.insert(checked_ids.end(), exclude_ids.begin(),
+                       exclude_ids.end());
+    checked_ids = unique_ids(checked_ids);
+    if (!checked_ids.empty()) {
+      long long found = 0;
+      const std::string checked_array = uuid_array_literal(checked_ids);
+      sql << kCountTagsSql, soci::use(checked_array), soci::into(found);
+      if (found != static_cast<long long>(checked_ids.size())) {
+        return TagimgRepositoryError::UnknownTag;
+      }
+    }
+
+    ImageSearchResult result;
+    if (query.order_by == ImageSortField::Similarity) {
+      const std::string embedding_value = pgvector_literal(query.sort_embedding);
+      soci::rowset<soci::row> rows =
+          (sql.prepare << page_sql, soci::use(entity_value, entity_indicator),
+           soci::use(artist_value, artist_indicator),
+           soci::use(include_value, include_indicator),
+           soci::use(exclude_value, exclude_indicator),
+           soci::use(include_count), soci::use(expand_include),
+           soci::use(expand_exclude), soci::use(include_all),
+           soci::use(embedding_value), soci::use(limit_value),
+           soci::use(offset_value));
+      for (const soci::row &row : rows) {
+        ImageSummary item = parse_image_row(row);
+        // 第 8 列是相似度分数；图片没有向量时是 NULL。
+        if (row.get_indicator(7) != soci::i_null) {
+          item.sort_score = row.get<double>(7);
+        }
+        result.items.push_back(std::move(item));
+      }
+    } else {
+      soci::rowset<soci::row> rows =
+          (sql.prepare << page_sql, soci::use(entity_value, entity_indicator),
+           soci::use(artist_value, artist_indicator),
+           soci::use(include_value, include_indicator),
+           soci::use(exclude_value, exclude_indicator),
+           soci::use(include_count), soci::use(expand_include),
+           soci::use(expand_exclude), soci::use(include_all),
+           soci::use(limit_value), soci::use(offset_value));
+      for (const soci::row &row : rows) {
+        result.items.push_back(parse_image_row(row));
+      }
+    }
+    if (result.items.size() > query.limit) {
+      result.items.pop_back();
+      result.has_more = true;
+    }
+    attach_image_relations(sql, result.items);
+
+    if (query.include_total) {
+      long long total = 0;
+      sql << count_sql, soci::use(entity_value, entity_indicator),
           soci::use(artist_value, artist_indicator),
           soci::use(include_value, include_indicator),
           soci::use(exclude_value, exclude_indicator), soci::use(include_count),
@@ -1523,8 +1931,8 @@ ArtworkUpdateTransaction::add_tag_ids(
     return TagimgRepositoryError::UnknownTag;
   }
 
-  impl_->sql << kInsertArtworkTagsSql, soci::use(impl_->artwork_id),
-      soci::use(tag_array);
+  impl_->sql << kInsertImageTagsForArtworkSql, soci::use(tag_array),
+      soci::use(impl_->artwork_id);
   impl_->added_tag_ids.insert(incoming.begin(), incoming.end());
   impl_->dirty = true;
   return {};
@@ -1559,7 +1967,7 @@ ArtworkUpdateTransaction::remove_tag_ids(
     return TagimgRepositoryError::UnknownTag;
   }
 
-  impl_->sql << kDeleteArtworkTagsSql, soci::use(impl_->artwork_id),
+  impl_->sql << kDeleteImageTagsSql, soci::use(impl_->artwork_id),
       soci::use(tag_array);
   impl_->removed_tag_ids.insert(incoming.begin(), incoming.end());
   impl_->dirty = true;
@@ -1606,14 +2014,32 @@ ArtworkUpdateTransaction::reorder_images(
 
 Result<std::size_t, TagimgRepositoryError>
 ArtworkUpdateTransaction::add_scanned_tags(
-    const std::vector<ArtworkTag> &tags) {
-  for (const ArtworkTag &tag : tags) {
-    if (tag.name.empty() || tag.category.empty()) {
-      return TagimgRepositoryError::InvalidArgument;
-    }
-  }
+    const std::vector<ImageScannedTags> &tags) {
   if (tags.empty()) {
     return std::size_t{0};
+  }
+
+  // 只允许写当前作品的图片，避免拿错 image_id 串到别的作品。
+  std::set<std::string> current_images;
+  {
+    soci::rowset<soci::row> rows =
+        (impl_->sql.prepare << kLockArtworkImagesSql,
+         soci::use(impl_->artwork_id));
+    for (const soci::row &row : rows) {
+      current_images.insert(row.get<std::string>(0));
+    }
+  }
+
+  for (const ImageScannedTags &item : tags) {
+    if (!is_uuid(item.image_id) ||
+        current_images.count(item.image_id) == 0) {
+      return TagimgRepositoryError::InvalidArgument;
+    }
+    for (const ArtworkTag &tag : item.tags) {
+      if (tag.name.empty() || tag.category.empty()) {
+        return TagimgRepositoryError::InvalidArgument;
+      }
+    }
   }
 
   const auto root_id = find_root_tag(impl_->sql);
@@ -1623,39 +2049,41 @@ ArtworkUpdateTransaction::add_scanned_tags(
 
   // 分类标签必须已经存在，与 write_artwork 的规则保持一致。
   std::map<std::string, std::string> categories;
-  for (const ArtworkTag &tag : tags) {
-    if (categories.count(tag.category) > 0) {
-      continue;
+  for (const ImageScannedTags &item : tags) {
+    for (const ArtworkTag &tag : item.tags) {
+      if (categories.count(tag.category) > 0) {
+        continue;
+      }
+      const auto category_id =
+          find_child_tag(impl_->sql, *root_id, tag.category);
+      if (!category_id) {
+        return TagimgRepositoryError::TagHierarchyMissing;
+      }
+      categories.emplace(tag.category, *category_id);
     }
-    const auto category_id =
-        find_child_tag(impl_->sql, *root_id, tag.category);
-    if (!category_id) {
-      return TagimgRepositoryError::TagHierarchyMissing;
-    }
-    categories.emplace(tag.category, *category_id);
   }
 
   std::set<std::string> seen;
-  for (const ArtworkTag &tag : tags) {
-    const std::string &category_id = categories.at(tag.category);
-    std::string name = tag.name;
+  for (const ImageScannedTags &item : tags) {
+    for (const ArtworkTag &tag : item.tags) {
+      const std::string &category_id = categories.at(tag.category);
+      std::string name = tag.name;
 
-    auto tag_id = find_child_tag(impl_->sql, category_id, name);
-    if (!tag_id) {
-      std::string created =
-          insert_returning_id(impl_->sql, kInsertTagSql, category_id);
-      if (created.empty()) {
-        return TagimgRepositoryError::QueryFailed;
+      auto tag_id = find_child_tag(impl_->sql, category_id, name);
+      if (!tag_id) {
+        std::string created =
+            insert_returning_id(impl_->sql, kInsertTagSql, category_id);
+        if (created.empty()) {
+          return TagimgRepositoryError::QueryFailed;
+        }
+        impl_->sql << kInsertTagNameSql, soci::use(created), soci::use(name);
+        tag_id = std::move(created);
       }
-      impl_->sql << kInsertTagNameSql, soci::use(created), soci::use(name);
-      tag_id = std::move(created);
-    }
 
-    if (!seen.insert(*tag_id).second) {
-      continue;
+      seen.insert(*tag_id);
+      impl_->sql << kInsertImageTagSql, soci::use(item.image_id),
+          soci::use(*tag_id);
     }
-    impl_->sql << kInsertArtworkTagSql, soci::use(impl_->artwork_id),
-        soci::use(*tag_id);
   }
 
   impl_->dirty = true;

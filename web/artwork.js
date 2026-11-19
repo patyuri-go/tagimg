@@ -102,6 +102,10 @@
   // 放大浏览弹窗中的图片顺序和当前下标。
   let lightboxEntries = [];
   let lightboxIndex = 0;
+  // 灯箱先用画廊里已加载的 small 图占位，再换成 regular 大图。
+  const lightboxRegularImages = new Map();
+  let lightboxToken = 0;
+  let lightboxPlaceholderSrc = "";
 
   const tagSuggestWidget = TagSearch.create({
     input: editTagInput,
@@ -165,6 +169,18 @@
   function imageStreamUrl(imageId, size) {
     const url = `/api/v1/image/${encodeURIComponent(imageId)}`;
     return size ? `${url}?size=${encodeURIComponent(size)}` : url;
+  }
+
+  function cachedRegularImage(imageId) {
+    let image = lightboxRegularImages.get(imageId);
+    if (!image) {
+      image = new Image();
+      image.decoding = "async";
+      image.fetchPriority = "low";
+      image.src = imageStreamUrl(imageId, "regular");
+      lightboxRegularImages.set(imageId, image);
+    }
+    return image;
   }
 
   function createMissingGalleryItem(imageId) {
@@ -254,13 +270,35 @@
       closeLightbox();
       return;
     }
+    const token = (lightboxToken += 1);
 
     const title = currentArtwork ? currentArtwork.title : "";
     lightboxError.hidden = true;
     lightboxImage.hidden = false;
-    lightboxImage.src = imageStreamUrl(imageId, "regular");
+    lightboxImage.dataset.imageId = imageId;
+    // 先用画廊里已经加载过的缩略图顶上，regular 到达后再替换。
+    const placeholderSrc = imageStreamUrl(imageId, "small");
+    lightboxPlaceholderSrc = placeholderSrc;
+    lightboxImage.src = placeholderSrc;
     lightboxImage.alt = `${title || "作品图片"} 第 ${lightboxIndex + 1} 张`;
     lightboxCaption.textContent = `第 ${lightboxIndex + 1} / ${lightboxEntries.length} 张`;
+
+    const loader = cachedRegularImage(imageId);
+    const applyRegular = () => {
+      if (
+        token !== lightboxToken ||
+        lightboxImage.dataset.imageId !== imageId ||
+        loader.naturalWidth <= 0
+      ) {
+        return;
+      }
+      lightboxImage.src = loader.currentSrc || loader.src;
+    };
+    if (loader.complete) {
+      applyRegular();
+    } else {
+      loader.addEventListener("load", applyRegular, { once: true });
+    }
 
     // 只有一张图片时不需要左右切换按钮。
     const multiple = lightboxEntries.length > 1;
@@ -1111,9 +1149,12 @@
   });
   lightboxEl.addEventListener("close", () => {
     document.body.classList.remove("lightbox-open");
+    lightboxToken += 1;
+    lightboxPlaceholderSrc = "";
     lightboxEntries = [];
     lightboxIndex = 0;
     lightboxImage.removeAttribute("src");
+    lightboxImage.removeAttribute("data-image-id");
     lightboxImage.alt = "";
     lightboxImage.hidden = false;
     lightboxError.hidden = true;
@@ -1123,6 +1164,15 @@
     lightboxError.hidden = true;
   });
   lightboxImage.addEventListener("error", () => {
+    const src = lightboxImage.getAttribute("src");
+    if (!src) {
+      return;
+    }
+    // regular 失败时退回已经缓存的缩略图，只有缩略图也失败才报错。
+    if (lightboxPlaceholderSrc && src !== lightboxPlaceholderSrc) {
+      lightboxImage.src = lightboxPlaceholderSrc;
+      return;
+    }
     const imageId = lightboxImageId();
     if (imageId) {
       markImageMissing(imageId);

@@ -21,160 +21,112 @@ using namespace std::literals;
 namespace graphql::tagimg {
 namespace object {
 
-ArtworkConnection::ArtworkConnection(
-    std::unique_ptr<const Concept> pimpl) noexcept
-    : service::Object{getTypeNames(), getResolvers()},
-      _pimpl{std::move(pimpl)} {
+ArtworkConnection::ArtworkConnection(std::unique_ptr<const Concept> pimpl) noexcept
+	: service::Object{ getTypeNames(), getResolvers() }
+	, _pimpl { std::move(pimpl) }
+{
 }
 
-service::TypeNames ArtworkConnection::getTypeNames() const noexcept {
-  return {R"gql(ArtworkConnection)gql"sv};
+service::TypeNames ArtworkConnection::getTypeNames() const noexcept
+{
+	return {
+		R"gql(ArtworkConnection)gql"sv
+	};
 }
 
-service::ResolverMap ArtworkConnection::getResolvers() const noexcept {
-  return {{R"gql(items)gql"sv,
-           [this](service::ResolverParams &&params) {
-             return resolveItems(std::move(params));
-           }},
-          {R"gql(limit)gql"sv,
-           [this](service::ResolverParams &&params) {
-             return resolveLimit(std::move(params));
-           }},
-          {R"gql(total)gql"sv,
-           [this](service::ResolverParams &&params) {
-             return resolveTotal(std::move(params));
-           }},
-          {R"gql(offset)gql"sv,
-           [this](service::ResolverParams &&params) {
-             return resolveOffset(std::move(params));
-           }},
-          {R"gql(hasMore)gql"sv,
-           [this](service::ResolverParams &&params) {
-             return resolveHasMore(std::move(params));
-           }},
-          {R"gql(__typename)gql"sv, [this](service::ResolverParams &&params) {
-             return resolve_typename(std::move(params));
-           }}};
+service::ResolverMap ArtworkConnection::getResolvers() const noexcept
+{
+	return {
+		{ R"gql(items)gql"sv, [this](service::ResolverParams&& params) { return resolveItems(std::move(params)); } },
+		{ R"gql(limit)gql"sv, [this](service::ResolverParams&& params) { return resolveLimit(std::move(params)); } },
+		{ R"gql(total)gql"sv, [this](service::ResolverParams&& params) { return resolveTotal(std::move(params)); } },
+		{ R"gql(offset)gql"sv, [this](service::ResolverParams&& params) { return resolveOffset(std::move(params)); } },
+		{ R"gql(hasMore)gql"sv, [this](service::ResolverParams&& params) { return resolveHasMore(std::move(params)); } },
+		{ R"gql(__typename)gql"sv, [this](service::ResolverParams&& params) { return resolve_typename(std::move(params)); } }
+	};
 }
 
-void ArtworkConnection::beginSelectionSet(
-    const service::SelectionSetParams &params) const {
-  _pimpl->beginSelectionSet(params);
+void ArtworkConnection::beginSelectionSet(const service::SelectionSetParams& params) const
+{
+	_pimpl->beginSelectionSet(params);
 }
 
-void ArtworkConnection::endSelectionSet(
-    const service::SelectionSetParams &params) const {
-  _pimpl->endSelectionSet(params);
+void ArtworkConnection::endSelectionSet(const service::SelectionSetParams& params) const
+{
+	_pimpl->endSelectionSet(params);
 }
 
-service::AwaitableResolver
-ArtworkConnection::resolveItems(service::ResolverParams &&params) const {
-  std::unique_lock resolverLock(_resolverMutex);
-  service::SelectionSetParams selectionSetParams{
-      static_cast<const service::SelectionSetParams &>(params)};
-  auto directives = std::move(params.fieldDirectives);
-  auto result = _pimpl->getItems(service::FieldParams{
-      std::move(selectionSetParams), std::move(directives)});
-  resolverLock.unlock();
+service::AwaitableResolver ArtworkConnection::resolveItems(service::ResolverParams&& params) const
+{
+	std::unique_lock resolverLock(_resolverMutex);
+	service::SelectionSetParams selectionSetParams { static_cast<const service::SelectionSetParams&>(params) };
+	auto directives = std::move(params.fieldDirectives);
+	auto result = _pimpl->getItems(service::FieldParams { std::move(selectionSetParams), std::move(directives) });
+	resolverLock.unlock();
 
-  return service::ModifiedResult<Artwork>::convert<service::TypeModifier::List>(
-      std::move(result), std::move(params));
+	return service::ModifiedResult<Artwork>::convert<service::TypeModifier::List>(std::move(result), std::move(params));
 }
 
-service::AwaitableResolver
-ArtworkConnection::resolveHasMore(service::ResolverParams &&params) const {
-  std::unique_lock resolverLock(_resolverMutex);
-  service::SelectionSetParams selectionSetParams{
-      static_cast<const service::SelectionSetParams &>(params)};
-  auto directives = std::move(params.fieldDirectives);
-  auto result = _pimpl->getHasMore(service::FieldParams{
-      std::move(selectionSetParams), std::move(directives)});
-  resolverLock.unlock();
+service::AwaitableResolver ArtworkConnection::resolveHasMore(service::ResolverParams&& params) const
+{
+	std::unique_lock resolverLock(_resolverMutex);
+	service::SelectionSetParams selectionSetParams { static_cast<const service::SelectionSetParams&>(params) };
+	auto directives = std::move(params.fieldDirectives);
+	auto result = _pimpl->getHasMore(service::FieldParams { std::move(selectionSetParams), std::move(directives) });
+	resolverLock.unlock();
 
-  return service::ModifiedResult<bool>::convert(std::move(result),
-                                                std::move(params));
+	return service::ModifiedResult<bool>::convert(std::move(result), std::move(params));
 }
 
-service::AwaitableResolver
-ArtworkConnection::resolveTotal(service::ResolverParams &&params) const {
-  std::unique_lock resolverLock(_resolverMutex);
-  service::SelectionSetParams selectionSetParams{
-      static_cast<const service::SelectionSetParams &>(params)};
-  auto directives = std::move(params.fieldDirectives);
-  auto result = _pimpl->getTotal(service::FieldParams{
-      std::move(selectionSetParams), std::move(directives)});
-  resolverLock.unlock();
+service::AwaitableResolver ArtworkConnection::resolveTotal(service::ResolverParams&& params) const
+{
+	std::unique_lock resolverLock(_resolverMutex);
+	service::SelectionSetParams selectionSetParams { static_cast<const service::SelectionSetParams&>(params) };
+	auto directives = std::move(params.fieldDirectives);
+	auto result = _pimpl->getTotal(service::FieldParams { std::move(selectionSetParams), std::move(directives) });
+	resolverLock.unlock();
 
-  return service::ModifiedResult<int>::convert<service::TypeModifier::Nullable>(
-      std::move(result), std::move(params));
+	return service::ModifiedResult<int>::convert<service::TypeModifier::Nullable>(std::move(result), std::move(params));
 }
 
-service::AwaitableResolver
-ArtworkConnection::resolveLimit(service::ResolverParams &&params) const {
-  std::unique_lock resolverLock(_resolverMutex);
-  service::SelectionSetParams selectionSetParams{
-      static_cast<const service::SelectionSetParams &>(params)};
-  auto directives = std::move(params.fieldDirectives);
-  auto result = _pimpl->getLimit(service::FieldParams{
-      std::move(selectionSetParams), std::move(directives)});
-  resolverLock.unlock();
+service::AwaitableResolver ArtworkConnection::resolveLimit(service::ResolverParams&& params) const
+{
+	std::unique_lock resolverLock(_resolverMutex);
+	service::SelectionSetParams selectionSetParams { static_cast<const service::SelectionSetParams&>(params) };
+	auto directives = std::move(params.fieldDirectives);
+	auto result = _pimpl->getLimit(service::FieldParams { std::move(selectionSetParams), std::move(directives) });
+	resolverLock.unlock();
 
-  return service::ModifiedResult<int>::convert(std::move(result),
-                                               std::move(params));
+	return service::ModifiedResult<int>::convert(std::move(result), std::move(params));
 }
 
-service::AwaitableResolver
-ArtworkConnection::resolveOffset(service::ResolverParams &&params) const {
-  std::unique_lock resolverLock(_resolverMutex);
-  service::SelectionSetParams selectionSetParams{
-      static_cast<const service::SelectionSetParams &>(params)};
-  auto directives = std::move(params.fieldDirectives);
-  auto result = _pimpl->getOffset(service::FieldParams{
-      std::move(selectionSetParams), std::move(directives)});
-  resolverLock.unlock();
+service::AwaitableResolver ArtworkConnection::resolveOffset(service::ResolverParams&& params) const
+{
+	std::unique_lock resolverLock(_resolverMutex);
+	service::SelectionSetParams selectionSetParams { static_cast<const service::SelectionSetParams&>(params) };
+	auto directives = std::move(params.fieldDirectives);
+	auto result = _pimpl->getOffset(service::FieldParams { std::move(selectionSetParams), std::move(directives) });
+	resolverLock.unlock();
 
-  return service::ModifiedResult<int>::convert(std::move(result),
-                                               std::move(params));
+	return service::ModifiedResult<int>::convert(std::move(result), std::move(params));
 }
 
-service::AwaitableResolver
-ArtworkConnection::resolve_typename(service::ResolverParams &&params) const {
-  return service::Result<std::string>::convert(
-      std::string{R"gql(ArtworkConnection)gql"}, std::move(params));
+service::AwaitableResolver ArtworkConnection::resolve_typename(service::ResolverParams&& params) const
+{
+	return service::Result<std::string>::convert(std::string{ R"gql(ArtworkConnection)gql" }, std::move(params));
 }
 
 } // namespace object
 
-void AddArtworkConnectionDetails(
-    const std::shared_ptr<schema::ObjectType> &typeArtworkConnection,
-    const std::shared_ptr<schema::Schema> &schema) {
-  typeArtworkConnection->AddFields(
-      {schema::Field::Make(
-           R"gql(items)gql"sv,
-           R"md(当前页的作品列表，没有结果时为空数组。)md"sv, std::nullopt,
-           schema->WrapType(
-               introspection::TypeKind::NON_NULL,
-               schema->WrapType(
-                   introspection::TypeKind::LIST,
-                   schema->WrapType(
-                       introspection::TypeKind::NON_NULL,
-                       schema->LookupType(R"gql(Artwork)gql"sv))))),
-       schema::Field::Make(
-           R"gql(hasMore)gql"sv, R"md(是否还有下一页。)md"sv, std::nullopt,
-           schema->WrapType(introspection::TypeKind::NON_NULL,
-                            schema->LookupType(R"gql(Boolean)gql"sv))),
-       schema::Field::Make(
-           R"gql(total)gql"sv,
-           R"md(总数量；includeTotal 为 false 时为 null，表示未统计。)md"sv,
-           std::nullopt, schema->LookupType(R"gql(Int)gql"sv)),
-       schema::Field::Make(
-           R"gql(limit)gql"sv, R"md(请求的每页数量。)md"sv, std::nullopt,
-           schema->WrapType(introspection::TypeKind::NON_NULL,
-                            schema->LookupType(R"gql(Int)gql"sv))),
-       schema::Field::Make(
-           R"gql(offset)gql"sv, R"md(请求的跳过数量。)md"sv, std::nullopt,
-           schema->WrapType(introspection::TypeKind::NON_NULL,
-                            schema->LookupType(R"gql(Int)gql"sv)))});
+void AddArtworkConnectionDetails(const std::shared_ptr<schema::ObjectType>& typeArtworkConnection, const std::shared_ptr<schema::Schema>& schema)
+{
+	typeArtworkConnection->AddFields({
+		schema::Field::Make(R"gql(items)gql"sv, R"md(当前页的作品列表，没有结果时为空数组。)md"sv, std::nullopt, schema->WrapType(introspection::TypeKind::NON_NULL, schema->WrapType(introspection::TypeKind::LIST, schema->WrapType(introspection::TypeKind::NON_NULL, schema->LookupType(R"gql(Artwork)gql"sv))))),
+		schema::Field::Make(R"gql(hasMore)gql"sv, R"md(是否还有下一页。)md"sv, std::nullopt, schema->WrapType(introspection::TypeKind::NON_NULL, schema->LookupType(R"gql(Boolean)gql"sv))),
+		schema::Field::Make(R"gql(total)gql"sv, R"md(总数量；includeTotal 为 false 时为 null，表示未统计。)md"sv, std::nullopt, schema->LookupType(R"gql(Int)gql"sv)),
+		schema::Field::Make(R"gql(limit)gql"sv, R"md(请求的每页数量。)md"sv, std::nullopt, schema->WrapType(introspection::TypeKind::NON_NULL, schema->LookupType(R"gql(Int)gql"sv))),
+		schema::Field::Make(R"gql(offset)gql"sv, R"md(请求的跳过数量。)md"sv, std::nullopt, schema->WrapType(introspection::TypeKind::NON_NULL, schema->LookupType(R"gql(Int)gql"sv)))
+	});
 }
 
 } // namespace graphql::tagimg

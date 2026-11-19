@@ -46,6 +46,33 @@ type Query {
   ): ArtworkConnection!
 
   """
+  分页查询已入库的图片。
+
+  与 artworks 基本相同，但没有标题过滤。所有过滤条件之间是 AND 关系；
+  同一个数组内部是 OR 关系。图片的标签来自 image_tags。
+  """
+  images(
+    "过滤条件，缺省时返回全部图片。"
+    filter: ImageFilter
+    "排序字段，默认按创建时间。"
+    orderBy: ImageOrderField = CREATED_AT
+    "排序方向，默认倒序。"
+    direction: SortDirection = DESC
+    "每页数量，1 到 100。"
+    limit: Int = 20
+    "跳过数量，0 到 10000。"
+    offset: Int = 0
+    "是否统计总数；为 true 时 total 才有值。"
+    includeTotal: Boolean = false
+    """
+    按语义相似度排序时使用的描述文本，需配合 orderBy: SIMILARITY。
+
+    长度不超过 512 个字符。
+    """
+    sortText: String
+  ): ImageConnection!
+
+  """
   按关键词搜索标签库，用于输入联想。
 
   scope 不传时在全部标签中搜索；scope.parentId 为 null 时只搜索全局根
@@ -97,6 +124,26 @@ input ArtworkFilter {
   expandExcludeTagDescendants: Boolean = false
 }
 
+"图片过滤条件。与作品过滤条件基本相同，但没有标题。"
+input ImageFilter {
+  "图片包含其中任一实体即命中。"
+  entityIds: [ID!]
+  "图片所属作品包含其中任一艺术家即命中。"
+  artistIds: [ID!]
+
+  "要求命中的标签 ID 集合。"
+  includeTagIds: [ID!]
+  "includeTagIds 的匹配方式，默认全部命中。"
+  includeMode: TagMatchMode = ALL
+  "includeTagIds 是否递归包含后代标签。"
+  expandIncludeTagDescendants: Boolean = false
+
+  "要求排除的标签 ID 集合，图片不能命中其中任何一个。"
+  excludeTagIds: [ID!]
+  "excludeTagIds 是否递归包含后代标签。"
+  expandExcludeTagDescendants: Boolean = false
+}
+
 "标签匹配方式。"
 enum TagMatchMode {
   "每个请求的标签都至少命中一个。"
@@ -120,10 +167,33 @@ enum SortDirection {
   DESC
 }
 
+"图片排序字段。"
+enum ImageOrderField {
+  CREATED_AT
+  PUBLISHED_AT
+  SCAN_AT
+  "按 sortText 的语义相似度倒序；没有向量的图片排在最后。"
+  SIMILARITY
+}
+
 "分页结果。"
 type ArtworkConnection {
   "当前页的作品列表，没有结果时为空数组。"
   items: [Artwork!]!
+  "是否还有下一页。"
+  hasMore: Boolean!
+  "总数量；includeTotal 为 false 时为 null，表示未统计。"
+  total: Int
+  "请求的每页数量。"
+  limit: Int!
+  "请求的跳过数量。"
+  offset: Int!
+}
+
+"图片分页结果。"
+type ImageConnection {
+  "当前页的图片列表，没有结果时为空数组。"
+  items: [Image!]!
   "是否还有下一页。"
   hasMore: Boolean!
   "总数量；includeTotal 为 false 时为 null，表示未统计。"
@@ -209,6 +279,51 @@ type Artwork {
 
   取作品内所有已向量化图片与该文本描述的最高余弦相似度，也就是排序依据；
   作品还没有任何图片向量时为 null。
+  """
+  sortScore: Float
+}
+
+"图片所属的作品摘要。"
+type ImageArtwork {
+  "作品 ID。"
+  id: ID!
+  "作品标题。"
+  title: String!
+  "作品原始发布时间，未知时为 null。"
+  publishedAt: String
+}
+
+"一张已入库的图片。"
+type Image {
+  "图片 ID。"
+  id: ID!
+  "图片宽度，未知时为 null。"
+  width: Int
+  "图片高度，未知时为 null。"
+  height: Int
+  "动画帧数，未知时为 null。"
+  frameCount: Int
+  "入库时间。"
+  createdAt: String!
+  "上次扫描时间，从未扫描时为 null。"
+  scanAt: String
+  "所属作品发布时间中的最大值；没有作品或都没填时为 null。"
+  publishedAt: String
+
+  "标签 ID 列表。"
+  tagIds: [ID!]!
+  "标签列表，name 是该标签自身的标准名。"
+  tags: [Tag!]!
+  "标签路径列表。"
+  tagPaths: [TagPath!]!
+
+  "所属作品，按发布时间倒序；没有作品时为空数组。"
+  artworks: [ImageArtwork!]!
+
+  """
+  文本相似度分数，仅在 orderBy: SIMILARITY 且提供 sortText 时有值。
+
+  图片没有向量时为 null。
   """
   sortScore: Float
 }
