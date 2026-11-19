@@ -755,7 +755,7 @@ SELECT DISTINCT ai.artwork_id::text, it.tag_id::text
 FROM artwork_images ai
 JOIN image_tags it ON it.image_id = ai.image_id
 WHERE ai.artwork_id = ANY(CAST(:ids AS uuid[]))
-ORDER BY ai.artwork_id, it.tag_id
+ORDER BY ai.artwork_id::text, it.tag_id::text
 )sql";
 
 constexpr const char *kImageTagsSql = R"sql(
