@@ -33,6 +33,9 @@ inline std::string make_conninfo(std::string_view host, std::uint16_t port,
   conninfo += " dbname=" + escape_conninfo_value(dbname);
   conninfo += " user=" + escape_conninfo_value(user);
   conninfo += " password=" + escape_conninfo_value(password);
+  // 这里的查询都是 OLTP 小查询。PostgreSQL 的 JIT 编译在代价估算偏高时
+  // 会额外花掉几百毫秒，远大于查询本身的执行时间，连接级关闭。
+  conninfo += " options='-c jit=off'";
   conninfo += " connect_timeout=10";
   return conninfo;
 }
