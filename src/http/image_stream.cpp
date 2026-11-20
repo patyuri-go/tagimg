@@ -8,10 +8,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
-#include <deque>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <list>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -29,6 +29,7 @@
 
 #include "common/uuid.hpp"
 #include "http/json_helpers.hpp"
+#include "http/request_context.hpp"
 #include "io/byte_stream.hpp"
 #include "io/temp_file.hpp"
 
@@ -200,7 +201,7 @@ bool image_is_animated(VipsImage *image, std::string_view mime_type) {
 
 struct SourceContext {
   std::shared_ptr<HttpByteStream> stream;
-  std::atomic<bool> *stop = nullptr;
+  std::shared_ptr<RequestContext> request;
   bool failed = false;
 };
 
@@ -214,8 +215,7 @@ gint64 source_read(VipsSourceCustom *, void *buffer, gint64 length,
   if (length <= 0) {
     return 0;
   }
-  if (context->stop != nullptr &&
-      context->stop->load(std::memory_order_relaxed)) {
+  if (context->request != nullptr && context->request->cancelled()) {
     context->failed = true;
     return -1;
   }
@@ -232,6 +232,7 @@ gint64 source_read(VipsSourceCustom *, void *buffer, gint64 length,
 struct TargetContext {
   // 不拥有流；ResponseStream 由 pump_avif 的栈上 unique_ptr 管理。
   drogon::ResponseStream *stream = nullptr;
+  RequestContext *request = nullptr;
   bool failed = false;
 };
 
@@ -246,6 +247,10 @@ gint64 target_write(VipsTargetCustom *, const void *data, gint64 length,
     return 0;
   }
   if (context->failed || !context->stream) {
+    return -1;
+  }
+  if (context->request != nullptr && context->request->cancelled()) {
+    context->failed = true;
     return -1;
   }
   const auto size = static_cast<std::size_t>(length);
@@ -311,19 +316,27 @@ private:
 
 } // namespace
 
+// 图片流队列上限；超过后直接返回 503，避免慢客户端堆积任务。
+constexpr std::size_t kQueueLimit = 128;
+
 // 一条进行中的下载。stream/image/source 只在 Impl::mutex 保护下读写。
 struct ImageStreamer::Impl : std::enable_shared_from_this<ImageStreamer::Impl> {
   struct StreamSession {
     std::string image_id;
+    std::shared_ptr<RequestContext> context;
     std::shared_ptr<HttpByteStream> stream;
     VipsImagePtr image;
     VipsSourcePtr source;
-    std::atomic<bool> stop{false};
-    std::atomic<bool> timed_out{false};
     // pump 是否已经开始；用于回收「客户端在响应前断开」的会话。
     std::atomic<bool> started{false};
     // 是否占用了转码并发槽位；在 Impl::mutex 保护下读写，由 finish() 释放。
     bool encode_slot = false;
+  };
+
+  // 队列任务保留 session，取消时可以按 session 精确定位并移除。
+  struct QueuedTask {
+    std::shared_ptr<StreamSession> session;
+    std::function<void()> run;
   };
 
   enum class ProcessResult {
@@ -336,10 +349,12 @@ struct ImageStreamer::Impl : std::enable_shared_from_this<ImageStreamer::Impl> {
   Impl(std::shared_ptr<const TagimgRepository> image_repository,
        StorageConfig storage_config, ImageStreamMode stream_mode,
        ImageProcessingConfig processing_config,
-       std::filesystem::path work_dir_value)
+       std::filesystem::path work_dir_value,
+       std::shared_ptr<ConnectionRegistry> registry_value)
       : images(std::move(image_repository)), storage(std::move(storage_config)),
         mode(stream_mode), processing(processing_config),
-        work_dir(std::move(work_dir_value)) {
+        work_dir(std::move(work_dir_value)),
+        registry(std::move(registry_value)) {
     const std::uint32_t count =
         processing.max_concurrency == 0 ? 1 : processing.max_concurrency;
     encode_limit = count;
@@ -358,11 +373,12 @@ struct ImageStreamer::Impl : std::enable_shared_from_this<ImageStreamer::Impl> {
   ImageStreamMode mode = ImageStreamMode::Proxy;
   ImageProcessingConfig processing;
   std::filesystem::path work_dir;
+  std::shared_ptr<ConnectionRegistry> registry;
 
   mutable std::mutex mutex;
   std::condition_variable queue_cv;
   std::condition_variable idle;
-  std::deque<std::function<void()>> tasks;
+  std::list<QueuedTask> tasks;
   std::vector<std::thread> workers;
   std::unordered_set<std::shared_ptr<StreamSession>> active;
   bool stopping = false;
@@ -375,7 +391,7 @@ struct ImageStreamer::Impl : std::enable_shared_from_this<ImageStreamer::Impl> {
 
   void worker_loop() {
     for (;;) {
-      std::function<void()> task;
+      QueuedTask task;
       {
         std::unique_lock lock(mutex);
         queue_cv.wait(lock, [this] { return stopping || !tasks.empty(); });
@@ -385,8 +401,18 @@ struct ImageStreamer::Impl : std::enable_shared_from_this<ImageStreamer::Impl> {
         task = std::move(tasks.front());
         tasks.pop_front();
       }
-      task();
+      task.run();
     }
+  }
+
+  // 从队列里移除指定会话；返回是否确实移除。调用方必须已释放 Impl::mutex。
+  bool remove_queued(const std::shared_ptr<StreamSession> &session) {
+    std::lock_guard lock(mutex);
+    const auto before = tasks.size();
+    tasks.remove_if([&session](const QueuedTask &task) {
+      return task.session == session;
+    });
+    return tasks.size() != before;
   }
 
   void handle(ImageStreamOptions options,
@@ -439,6 +465,12 @@ struct ImageStreamer::Impl : std::enable_shared_from_this<ImageStreamer::Impl> {
        std::string code, std::string message, bool retryable,
        const std::function<void(const drogon::HttpResponsePtr &)> &callback);
 
+  // 请求已取消或超时：Timeout 返回 504，其余原因直接回收、不发送响应。
+  void stop_session(
+      const std::shared_ptr<StreamSession> &session,
+      const ImageStreamOptions &options,
+      const std::function<void(const drogon::HttpResponsePtr &)> &callback);
+
   void pump(const std::shared_ptr<StreamSession> &session,
             drogon::ResponseStreamPtr stream);
 
@@ -479,22 +511,32 @@ struct ImageStreamer::Impl : std::enable_shared_from_this<ImageStreamer::Impl> {
   // 排队等待时间也计入本次任务超时；槽位由 finish() 统一释放。
   bool acquire_encode_slot(const std::shared_ptr<StreamSession> &session,
                            Clock::time_point deadline) {
-    std::unique_lock lock(mutex);
-    for (;;) {
-      if (stopping || session->stop.load(std::memory_order_relaxed)) {
-        return false;
+    bool timed_out = false;
+    {
+      std::unique_lock lock(mutex);
+      for (;;) {
+        // 持锁期间只能查询已置位的状态：cancelled() 会触发取消回调，而
+        // 回调需要拿这把锁。
+        if (stopping || session->context->stop_requested()) {
+          return false;
+        }
+        if (encode_active < encode_limit) {
+          ++encode_active;
+          session->encode_slot = true;
+          return true;
+        }
+        if (Clock::now() >= deadline) {
+          timed_out = true;
+          break;
+        }
+        encode_cv.wait_until(lock, deadline);
       }
-      if (encode_active < encode_limit) {
-        ++encode_active;
-        session->encode_slot = true;
-        return true;
-      }
-      if (Clock::now() >= deadline) {
-        session->timed_out.store(true, std::memory_order_relaxed);
-        return false;
-      }
-      encode_cv.wait_until(lock, deadline);
     }
+    // 不能在持有 mutex 时 cancel()：取消回调会回来拿队列锁。
+    if (timed_out) {
+      session->context->cancel(CancelReason::Timeout);
+    }
+    return false;
   }
 };
 
@@ -534,24 +576,85 @@ void ImageStreamer::Impl::handle(
   auto self = shared_from_this();
   auto session = std::make_shared<StreamSession>();
   session->image_id = options.image_id;
+  session->context = std::move(options.context);
+  if (!session->context) {
+    session->context = std::make_shared<RequestContext>();
+  }
+
+  // 先登记再入队：worker 可能在 register 之前就完成请求，后登记会残留。
+  if (registry) {
+    registry->register_context(session->context);
+  }
+
+  bool stopped = false;
+  bool queue_full = false;
   {
     std::lock_guard lock(mutex);
     if (stopping) {
-      auto body = envelope(options.request_id, nullptr,
-                           single_error(error_object(
-                               "SERVICE_UNAVAILABLE", "server is shutting down",
-                               Json(), {{"retryable", true}})));
-      callback(json_response(std::move(body), drogon::k503ServiceUnavailable));
+      stopped = true;
+    } else if (tasks.size() >= kQueueLimit) {
+      queue_full = true;
+    } else {
+      active.insert(session);
+      tasks.push_back(QueuedTask{
+          session,
+          [self, session, options = std::move(options),
+           callback = std::move(callback)]() mutable {
+            self->resolve(session, std::move(options), std::move(callback));
+          }});
+    }
+  }
+
+  if (stopped) {
+    if (registry) {
+      registry->unregister_context(session->context);
+    }
+    auto body = envelope(
+        options.request_id, nullptr,
+        single_error(error_object("SERVICE_UNAVAILABLE",
+                                  "server is shutting down", Json(),
+                                  {{"retryable", true}})));
+    callback(json_response(std::move(body), drogon::k503ServiceUnavailable));
+    return;
+  }
+  if (queue_full) {
+    if (registry) {
+      registry->unregister_context(session->context);
+    }
+    auto body = envelope(
+        options.request_id, nullptr,
+        single_error(error_object("QUEUE_FULL", "image stream queue is full",
+                                  Json(), {{"retryable", true}})));
+    callback(json_response(std::move(body), drogon::k503ServiceUnavailable));
+    return;
+  }
+
+  queue_cv.notify_one();
+
+  // 入队后注册取消回调：取消发生在注册前时，stop_callback 会同步触发，
+  // 直接把刚入队的任务移除。
+  std::weak_ptr<Impl> weak_self = weak_from_this();
+  std::weak_ptr<StreamSession> weak_session = session;
+  session->context->add_cancel_handler([weak_self, weak_session](CancelReason) {
+    auto impl = weak_self.lock();
+    auto session = weak_session.lock();
+    if (!impl || !session) {
       return;
     }
-    active.insert(session);
-    tasks.push_back(
-        [self, session, options = std::move(options),
-         callback = std::move(callback)]() mutable {
-          self->resolve(session, std::move(options), std::move(callback));
-        });
-  }
-  queue_cv.notify_one();
+    // 唤醒阻塞在 read()/wait_started() 的线程，并打断 vips 编码。
+    if (auto source = impl->session_stream(session)) {
+      source->cancel();
+    }
+    if (auto image = impl->session_image(session)) {
+      vips_image_set_kill(image.get(), TRUE);
+    }
+    // 可能有任务正在等转码槽位。
+    impl->encode_cv.notify_all();
+    // 还在排队就直接移除并回收；运行中的任务由 worker 的检查点退出。
+    if (impl->remove_queued(session)) {
+      impl->finish(session);
+    }
+  });
 }
 
 void ImageStreamer::Impl::resolve(
@@ -562,9 +665,23 @@ void ImageStreamer::Impl::resolve(
       std::chrono::seconds(processing.timeout_seconds == 0
                                ? 1
                                : processing.timeout_seconds);
+  const auto stop_if_cancelled = [&]() {
+    if (!session->context->cancelled()) {
+      return false;
+    }
+    stop_session(session, options, callback);
+    return true;
+  };
+
+  if (stop_if_cancelled()) {
+    return;
+  }
 
   // 前端只拿得到图片 ID，这里先换成实体 ID 再走实体库的存储定位。
   const auto entity_id = images->find_image_entity_id(session->image_id);
+  if (stop_if_cancelled()) {
+    return;
+  }
   if (!entity_id) {
     if (entity_id.error() == TagimgRepositoryError::InvalidArgument) {
       fail(session, options, drogon::k400BadRequest, "INVALID_ARGUMENT",
@@ -587,6 +704,9 @@ void ImageStreamer::Impl::resolve(
   const bool original = options.preset == ImageSizePreset::Original;
   // 只有内联原图走 302；download 和需要转码的预设都由服务端代理。
   if (mode == ImageStreamMode::Redirect && original && !options.download) {
+    if (stop_if_cancelled()) {
+      return;
+    }
     auto self = shared_from_this();
     post([self, session, url, callback = std::move(callback)]() mutable {
       self->respond_redirect(session, url, callback);
@@ -601,6 +721,9 @@ void ImageStreamer::Impl::resolve(
       make_etag(session->image_id, options.preset, processing);
   if (proxied && options.if_none_match &&
       etag_matches(*options.if_none_match, etag)) {
+    if (stop_if_cancelled()) {
+      return;
+    }
     post([callback, etag]() mutable {
       auto response = drogon::HttpResponse::newHttpResponse();
       response->setStatusCode(drogon::k304NotModified);
@@ -612,12 +735,14 @@ void ImageStreamer::Impl::resolve(
     return;
   }
 
-  if (session->stop.load(std::memory_order_relaxed)) {
-    finish(session);
+  if (stop_if_cancelled()) {
     return;
   }
 
   auto opened = HttpByteStream::open(url);
+  if (stop_if_cancelled()) {
+    return;
+  }
   if (!opened) {
     const bool too_large = opened.error() == ByteStreamError::TooLarge;
     fail(session, options,
@@ -630,15 +755,25 @@ void ImageStreamer::Impl::resolve(
     return;
   }
 
+  // 先登记到 session，取消回调才能中断 open()/wait_started() 期间的阻塞。
+  auto source = std::shared_ptr<HttpByteStream>(std::move(*opened));
+  {
+    std::lock_guard lock(mutex);
+    session->stream = source;
+  }
+
   // 确认上游真的开始返回数据；HTTP 状态码与响应头到这里才可知。
-  const auto started = (*opened)->wait_started();
+  const auto started = source->wait_started();
+  if (stop_if_cancelled()) {
+    return;
+  }
   if (!started) {
     if (started.error() == ByteStreamError::TooLarge) {
       fail(session, options, drogon::k413RequestEntityTooLarge,
            "IMAGE_TOO_LARGE", "image exceeds the size limit", false, callback);
       return;
     }
-    if ((*opened)->http_status() == 404) {
+    if (source->http_status() == 404) {
       fail(session, options, drogon::k404NotFound, "STORAGE_NOT_FOUND",
            "entity content not found", false, callback);
       return;
@@ -649,7 +784,6 @@ void ImageStreamer::Impl::resolve(
     return;
   }
 
-  auto source = std::shared_ptr<HttpByteStream>(std::move(*opened));
   const std::string mime_type = media_type(source->content_type());
   if (!mime_type.empty() && !is_image_mime(mime_type)) {
     fail(session, options, drogon::k502BadGateway, "STORAGE_INVALID_RESPONSE",
@@ -667,8 +801,7 @@ void ImageStreamer::Impl::resolve(
     std::lock_guard lock(mutex);
     session->stream = source;
   }
-  if (session->stop.load(std::memory_order_relaxed)) {
-    finish(session);
+  if (stop_if_cancelled()) {
     return;
   }
 
@@ -688,19 +821,16 @@ void ImageStreamer::Impl::resolve(
                           callback);
   }
   if (result == ProcessResult::Retry) {
+    if (stop_if_cancelled()) {
+      return;
+    }
     fail(session, options, drogon::k503ServiceUnavailable,
          "STORAGE_UNAVAILABLE", "storage service is unavailable", true,
          callback);
     return;
   }
   if (result == ProcessResult::TimedOut) {
-    if (session->timed_out.load(std::memory_order_relaxed)) {
-      fail(session, options, drogon::k504GatewayTimeout,
-           "IMAGE_PROCESSING_TIMEOUT", "image processing timed out", false,
-           callback);
-    } else {
-      finish(session);
-    }
+    stop_session(session, options, callback);
   }
 }
 
@@ -709,10 +839,11 @@ ImageStreamer::Impl::ProcessResult ImageStreamer::Impl::process_streaming(
     const std::string &mime_type, const ImageStreamOptions &options,
     const std::string &etag, Clock::time_point deadline,
     std::function<void(const drogon::HttpResponsePtr &)> callback) {
-  if (session->stop.load(std::memory_order_relaxed) ||
-      Clock::now() >= deadline) {
-    session->timed_out.store(Clock::now() >= deadline,
-                             std::memory_order_relaxed);
+  if (session->context->cancelled()) {
+    return ProcessResult::TimedOut;
+  }
+  if (Clock::now() >= deadline) {
+    session->context->cancel(CancelReason::Timeout);
     return ProcessResult::TimedOut;
   }
 
@@ -722,7 +853,7 @@ ImageStreamer::Impl::ProcessResult ImageStreamer::Impl::process_streaming(
   }
   auto *context = new SourceContext();
   context->stream = session_stream(session);
-  context->stop = &session->stop;
+  context->request = session->context;
   if (context->stream == nullptr) {
     delete context;
     g_object_unref(raw_source);
@@ -737,9 +868,11 @@ ImageStreamer::Impl::ProcessResult ImageStreamer::Impl::process_streaming(
                                  "access", VIPS_ACCESS_SEQUENTIAL, nullptr);
   if (raw_image == nullptr) {
     log_vips_error("sequential source probe failed");
-    if (session->stop.load(std::memory_order_relaxed) ||
-        Clock::now() >= deadline) {
-      session->timed_out.store(true, std::memory_order_relaxed);
+    if (session->context->cancelled()) {
+      return ProcessResult::TimedOut;
+    }
+    if (Clock::now() >= deadline) {
+      session->context->cancel(CancelReason::Timeout);
       return ProcessResult::TimedOut;
     }
     return ProcessResult::Fallback;
@@ -775,13 +908,16 @@ ImageStreamer::Impl::ProcessResult ImageStreamer::Impl::process_streaming(
     if (!opened) {
       return ProcessResult::Retry;
     }
-    if (!(*opened)->wait_started()) {
-      return ProcessResult::Retry;
-    }
     auto stream = std::shared_ptr<HttpByteStream>(std::move(*opened));
     {
       std::lock_guard lock(mutex);
       session->stream = stream;
+    }
+    if (!stream->wait_started()) {
+      return ProcessResult::Retry;
+    }
+    if (session->context->cancelled()) {
+      return ProcessResult::TimedOut;
     }
     auto self = shared_from_this();
     post([self, session, mime_type, options, etag,
@@ -806,13 +942,12 @@ ImageStreamer::Impl::ProcessResult ImageStreamer::Impl::process_streaming(
   }
 
   if (!acquire_encode_slot(session, deadline)) {
-    if (session->timed_out.load(std::memory_order_relaxed)) {
-      fail(session, options, drogon::k504GatewayTimeout,
-           "IMAGE_PROCESSING_TIMEOUT", "image processing timed out", false,
-           callback);
-    } else {
-      finish(session);
-    }
+    stop_session(session, options, callback);
+    return ProcessResult::Done;
+  }
+
+  if (session->context->cancelled()) {
+    stop_session(session, options, callback);
     return ProcessResult::Done;
   }
 
@@ -831,10 +966,11 @@ ImageStreamer::Impl::ProcessResult ImageStreamer::Impl::process_temp(
     const std::string &mime_type, const ImageStreamOptions &options,
     const std::string &etag, Clock::time_point deadline,
     std::function<void(const drogon::HttpResponsePtr &)> callback) {
-  if (session->stop.load(std::memory_order_relaxed) ||
-      Clock::now() >= deadline) {
-    session->timed_out.store(Clock::now() >= deadline,
-                             std::memory_order_relaxed);
+  if (session->context->cancelled()) {
+    return ProcessResult::TimedOut;
+  }
+  if (Clock::now() >= deadline) {
+    session->context->cancel(CancelReason::Timeout);
     return ProcessResult::TimedOut;
   }
 
@@ -852,13 +988,17 @@ ImageStreamer::Impl::ProcessResult ImageStreamer::Impl::process_temp(
   if (!opened) {
     return ProcessResult::Retry;
   }
-  if (!(*opened)->wait_started()) {
-    return ProcessResult::Retry;
-  }
+  // 提前登记，取消回调可以中断 wait_started() 的阻塞。
   auto source = std::shared_ptr<HttpByteStream>(std::move(*opened));
   {
     std::lock_guard lock(mutex);
     session->stream = source;
+  }
+  if (!source->wait_started()) {
+    return ProcessResult::Retry;
+  }
+  if (session->context->cancelled()) {
+    return ProcessResult::TimedOut;
   }
 
   auto file_result = TempFile::create(work_dir, ".img");
@@ -877,10 +1017,17 @@ ImageStreamer::Impl::ProcessResult ImageStreamer::Impl::process_temp(
 
   std::vector<std::byte> buffer(kChunkBytes);
   for (;;) {
-    if (session->stop.load(std::memory_order_relaxed) ||
-        Clock::now() >= deadline) {
-      session->timed_out.store(Clock::now() >= deadline,
-                               std::memory_order_relaxed);
+    if (session->context->cancelled()) {
+      {
+        std::lock_guard lock(mutex);
+        session->stream.reset();
+      }
+      source->cancel();
+      return ProcessResult::TimedOut;
+    }
+    if (Clock::now() >= deadline) {
+      // 先取消再清理：取消回调会拿队列锁，不能持锁调用。
+      session->context->cancel(CancelReason::Timeout);
       {
         std::lock_guard lock(mutex);
         session->stream.reset();
@@ -959,6 +1106,11 @@ ImageStreamer::Impl::ProcessResult ImageStreamer::Impl::process_temp(
     return ProcessResult::Done;
   }
 
+  if (session->context->cancelled()) {
+    stop_session(session, options, callback);
+    return ProcessResult::Done;
+  }
+
   if (image_is_animated(image.get(), mime_type)) {
     if (mode == ImageStreamMode::Redirect) {
       auto self = shared_from_this();
@@ -990,13 +1142,12 @@ ImageStreamer::Impl::ProcessResult ImageStreamer::Impl::process_temp(
   }
 
   if (!acquire_encode_slot(session, deadline)) {
-    if (session->timed_out.load(std::memory_order_relaxed)) {
-      fail(session, options, drogon::k504GatewayTimeout,
-           "IMAGE_PROCESSING_TIMEOUT", "image processing timed out", false,
-           callback);
-    } else {
-      finish(session);
-    }
+    stop_session(session, options, callback);
+    return ProcessResult::Done;
+  }
+
+  if (session->context->cancelled()) {
+    stop_session(session, options, callback);
     return ProcessResult::Done;
   }
 
@@ -1014,6 +1165,10 @@ void ImageStreamer::Impl::respond_ok(
     const std::string &mime_type, const ImageStreamOptions &options,
     std::string etag,
     const std::function<void(const drogon::HttpResponsePtr &)> &callback) {
+  if (session->context->cancelled()) {
+    stop_session(session, options, callback);
+    return;
+  }
   const std::string content_type =
       mime_type.empty() ? "application/octet-stream" : mime_type;
 
@@ -1037,11 +1192,7 @@ void ImageStreamer::Impl::respond_ok(
     if (!session->started.compare_exchange_strong(expected, true)) {
       return;
     }
-    session->stop.store(true, std::memory_order_relaxed);
-    auto source = self->session_stream(session);
-    if (source) {
-      source->cancel();
-    }
+    session->context->cancel(CancelReason::ClientClosed);
     self->finish(session);
   });
 
@@ -1053,6 +1204,10 @@ void ImageStreamer::Impl::respond_temp_ok(
     const std::string &mime_type, const ImageStreamOptions &options,
     std::string etag,
     const std::function<void(const drogon::HttpResponsePtr &)> &callback) {
+  if (session->context->cancelled()) {
+    stop_session(session, options, callback);
+    return;
+  }
   const std::string content_type =
       mime_type.empty() ? "application/octet-stream" : mime_type;
 
@@ -1075,7 +1230,7 @@ void ImageStreamer::Impl::respond_temp_ok(
     if (!session->started.compare_exchange_strong(expected, true)) {
       return;
     }
-    session->stop.store(true, std::memory_order_relaxed);
+    session->context->cancel(CancelReason::ClientClosed);
     self->finish(session);
   });
 
@@ -1087,6 +1242,10 @@ void ImageStreamer::Impl::respond_avif_stream(
     VipsSourcePtr source, TempFilePtr temp, ImageStreamOptions options,
     std::string etag, Clock::time_point deadline,
     const std::function<void(const drogon::HttpResponsePtr &)> &callback) {
+  if (session->context->cancelled()) {
+    stop_session(session, options, callback);
+    return;
+  }
   auto self = shared_from_this();
   auto response = drogon::HttpResponse::newAsyncStreamResponse(
       [self, session, image, source, temp, options, deadline](
@@ -1108,14 +1267,7 @@ void ImageStreamer::Impl::respond_avif_stream(
     if (!session->started.compare_exchange_strong(expected, true)) {
       return;
     }
-    session->stop.store(true, std::memory_order_relaxed);
-    auto source = self->session_stream(session);
-    if (source) {
-      source->cancel();
-    }
-    if (auto image = self->session_image(session)) {
-      vips_image_set_kill(image.get(), TRUE);
-    }
+    session->context->cancel(CancelReason::ClientClosed);
     self->finish(session);
   });
 
@@ -1125,6 +1277,10 @@ void ImageStreamer::Impl::respond_avif_stream(
 void ImageStreamer::Impl::respond_redirect(
     const std::shared_ptr<StreamSession> &session, std::string url,
     const std::function<void(const drogon::HttpResponsePtr &)> &callback) {
+  if (session->context->cancelled()) {
+    finish(session);
+    return;
+  }
   post([url = std::move(url), callback]() mutable {
     auto response = drogon::HttpResponse::newHttpResponse();
     response->setStatusCode(drogon::k302Found);
@@ -1133,6 +1289,19 @@ void ImageStreamer::Impl::respond_redirect(
     response->addHeader("Cache-Control", "no-store");
     callback(response);
   });
+  finish(session);
+}
+
+void ImageStreamer::Impl::stop_session(
+    const std::shared_ptr<StreamSession> &session,
+    const ImageStreamOptions &options,
+    const std::function<void(const drogon::HttpResponsePtr &)> &callback) {
+  if (session->context->reason() == CancelReason::Timeout) {
+    fail(session, options, drogon::k504GatewayTimeout,
+         "IMAGE_PROCESSING_TIMEOUT", "image processing timed out", false,
+         callback);
+    return;
+  }
   finish(session);
 }
 
@@ -1166,7 +1335,7 @@ void ImageStreamer::Impl::pump(const std::shared_ptr<StreamSession> &session,
                stream = std::move(stream)]() mutable {
     std::vector<std::byte> buffer(kChunkBytes);
     while (source != nullptr &&
-           !session->stop.load(std::memory_order_relaxed)) {
+           !session->context->cancelled()) {
       const auto read = source->read(buffer);
       if (!read || *read == 0) {
         break;
@@ -1175,6 +1344,7 @@ void ImageStreamer::Impl::pump(const std::shared_ptr<StreamSession> &session,
                               *read);
       if (!stream->send(chunk)) {
         // 客户端已断开。
+        session->context->cancel(CancelReason::ClientClosed);
         break;
       }
     }
@@ -1201,7 +1371,7 @@ void ImageStreamer::Impl::pump_temp(
       return;
     }
     std::array<char, kChunkBytes> buffer{};
-    while (file && !session->stop.load(std::memory_order_relaxed)) {
+    while (file && !session->context->cancelled()) {
       file.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
       const auto count = file.gcount();
       if (count <= 0) {
@@ -1209,6 +1379,7 @@ void ImageStreamer::Impl::pump_temp(
       }
       if (!stream->send(std::string(buffer.data(),
                                     static_cast<std::size_t>(count)))) {
+        session->context->cancel(CancelReason::ClientClosed);
         break;
       }
     }
@@ -1226,7 +1397,7 @@ void ImageStreamer::Impl::pump_avif(
 
   const std::string suffix = avif_save_options(processing);
   auto self = shared_from_this();
-  if (session->stop.load(std::memory_order_relaxed)) {
+  if (session->context->cancelled()) {
     stream->close();
     self->finish(session);
     return;
@@ -1237,22 +1408,14 @@ void ImageStreamer::Impl::pump_avif(
                stream = std::move(stream)]() mutable {
     const auto now = Clock::now();
     if (now >= deadline) {
-      session->timed_out.store(true, std::memory_order_relaxed);
+      session->context->cancel(CancelReason::Timeout);
       stream->close();
       self->finish(session);
       return;
     }
 
-    TimeoutGuard guard(deadline - now, [self, session, image] {
-      session->stop.store(true, std::memory_order_relaxed);
-      session->timed_out.store(true, std::memory_order_relaxed);
-      auto stream = self->session_stream(session);
-      if (stream) {
-        stream->cancel();
-      }
-      if (image) {
-        vips_image_set_kill(image.get(), TRUE);
-      }
+    TimeoutGuard guard(deadline - now, [session] {
+      session->context->cancel(CancelReason::Timeout);
     });
 
     const int dimension = preset_dimension(options.preset);
@@ -1277,15 +1440,20 @@ void ImageStreamer::Impl::pump_avif(
     }
     auto *context = new TargetContext();
     context->stream = stream.get();
+    context->request = session->context.get();
     g_signal_connect_data(target, "write", G_CALLBACK(target_write), context,
                           destroy_target_context, G_CONNECT_DEFAULT);
 
     const int result = vips_image_write_to_target(
         thumbnail.get(), suffix.c_str(), target, nullptr);
+    const bool send_failed = context->failed;
     if (result != 0) {
       log_vips_error("avif encoding failed");
     }
     g_object_unref(target);
+    if (send_failed) {
+      session->context->cancel(CancelReason::ClientClosed);
+    }
     stream->close();
     stream.reset();
     self->finish(session);
@@ -1306,6 +1474,9 @@ void ImageStreamer::Impl::finish(
       slot_released = true;
     }
     removed = active.erase(session) > 0;
+  }
+  if (registry && session->context) {
+    registry->unregister_context(session->context);
   }
   if (removed) {
     idle.notify_all();
@@ -1330,15 +1501,8 @@ void ImageStreamer::Impl::shutdown() {
   encode_cv.notify_all();
 
   for (const auto &session : sessions) {
-    session->stop.store(true, std::memory_order_relaxed);
-    auto source = session_stream(session);
-    if (source) {
-      // 唤醒阻塞在 read()/wait_started() 的工作线程。
-      source->cancel();
-    }
-    if (auto image = session_image(session)) {
-      vips_image_set_kill(image.get(), TRUE);
-    }
+    // 取消回调负责中断阻塞中的 read()/wait_started() 并打断 vips 编码。
+    session->context->cancel(CancelReason::Shutdown);
     // 响应还没开始发送的会话不会再有 pump 线程来收尾（典型情况是客户端在
     // 收到响应头之前就断开），这里直接回收，避免关停时白等到超时。
     if (!session->started.load(std::memory_order_relaxed)) {
@@ -1363,9 +1527,11 @@ void ImageStreamer::Impl::shutdown() {
 ImageStreamer::ImageStreamer(std::shared_ptr<const TagimgRepository> images,
                              StorageConfig storage, ImageStreamMode mode,
                              ImageProcessingConfig processing,
-                             std::filesystem::path work_dir)
+                             std::filesystem::path work_dir,
+                             std::shared_ptr<ConnectionRegistry> registry)
     : impl_(std::make_shared<Impl>(std::move(images), std::move(storage), mode,
-                                   processing, std::move(work_dir))) {
+                                   processing, std::move(work_dir),
+                                   std::move(registry))) {
 }
 
 ImageStreamer::~ImageStreamer() {

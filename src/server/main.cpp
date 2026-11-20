@@ -16,6 +16,7 @@
 #include "graphql/graphql_service.hpp"
 #include "http/api_service.hpp"
 #include "http/image_stream.hpp"
+#include "http/request_context.hpp"
 #include "image/image_processor.hpp"
 #include "job/service_runtime.hpp"
 
@@ -89,7 +90,7 @@ int main() {
   tagimg_db.password = config->database.password;
   tagimg_db.dbname = config->database.image_dbname;
 
-  auto tagimg_repository = tagimg::TagimgRepository::connect(tagimg_db);
+  auto tagimg_repository = tagimg::TagimgRepository::connect(tagimg_db, 8);
   if (!tagimg_repository) {
     std::cerr << "tagimg database error: "
               << tagimg::to_string(tagimg_repository.error()) << '\n';
@@ -169,9 +170,10 @@ int main() {
   image_processing.timeout_seconds = config->http.image_timeout_seconds;
 
   // 图片流管理器要活到 Drogon 停止之后，因此声明在 service 之前。
+  auto connection_registry = std::make_shared<tagimg::ConnectionRegistry>();
   auto image_streamer = std::make_shared<tagimg::ImageStreamer>(
       tagimg_repository_shared, config->storage, config->http.image_mode,
-      image_processing, work_dir);
+      image_processing, work_dir, connection_registry);
 
   // 扫描任务由 REST 与 GraphQL 共用同一个服务实例。
   auto runtime = std::make_shared<tagimg::ServiceRuntime>(
@@ -180,7 +182,7 @@ int main() {
 
   auto service = std::make_shared<tagimg::ApiService>(runtime);
   auto graphql_service = std::make_shared<tagimg::GraphQLService>(
-      runtime, tagimg_repository_shared, embedder);
+      runtime, tagimg_repository_shared, embedder, connection_registry);
 
   drogon::app().registerHandler(
       "/api/v1",
@@ -218,6 +220,8 @@ int main() {
         tagimg::ImageStreamOptions options;
         options.image_id = std::move(image_id);
         options.size = request->getParameter("size");
+        options.context =
+            std::make_shared<tagimg::RequestContext>(request->getConnectionPtr());
 
         const std::string &download = request->getParameter("download");
         options.download = download == "1" || download == "true";
@@ -251,6 +255,13 @@ int main() {
   }
 
   drogon::app().setClientMaxBodySize(1024 * 1024);
+  // 连接断开时取消该连接上仍在排队/执行中的请求。
+  drogon::app().setConnectionCallback(
+      [connection_registry](const trantor::TcpConnectionPtr &connection) {
+        if (!connection->connected()) {
+          connection_registry->cancel_connection(connection);
+        }
+      });
   drogon::app().addListener(config->http.host, config->http.port);
 
   std::cout << "tagimg listening on http://" << config->http.host << ':'
@@ -260,11 +271,15 @@ int main() {
     drogon::app().run();
   } catch (const std::exception &exception) {
     std::cerr << "server error: " << exception.what() << '\n';
+    connection_registry->cancel_all(tagimg::CancelReason::Shutdown);
+    graphql_service->shutdown();
     service->shutdown();
     image_streamer->shutdown();
     return 1;
   }
 
+  connection_registry->cancel_all(tagimg::CancelReason::Shutdown);
+  graphql_service->shutdown();
   service->shutdown();
   image_streamer->shutdown();
   return 0;

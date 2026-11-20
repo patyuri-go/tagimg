@@ -2,13 +2,18 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
+#include <condition_variable>
+#include <cstdint>
 #include <iostream>
+#include <list>
 #include <mutex>
 #include <optional>
 #include <set>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -17,6 +22,7 @@
 
 #include "common/uuid.hpp"
 #include "common/validation.hpp"
+#include "http/request_context.hpp"
 #include "graphql/ArtistObject.h"
 #include "graphql/ArtworkConnectionObject.h"
 #include "graphql/ArtworkObject.h"
@@ -49,6 +55,92 @@ using gql::response::Value;
 [[noreturn]] void fail(const std::string &code, const std::string &message) {
   throw std::runtime_error(code + ": " + message);
 }
+
+// 每个 GraphQL 请求在 worker 内共享的取消状态。
+class GraphQLRequestState final : public gql::service::RequestState {
+public:
+  explicit GraphQLRequestState(std::shared_ptr<RequestContext> context)
+      : context(std::move(context)) {
+  }
+
+  std::shared_ptr<RequestContext> context;
+};
+
+// 从 resolver 参数里取回请求上下文；resolver 入口与阻塞调用前后用它检查
+// 取消状态。取消时抛异常，由 cppgraphqlgen 转成 errors。
+class RequestScope {
+public:
+  explicit RequestScope(gql::service::FieldParams &&params) {
+    if (params.state) {
+      if (auto state =
+              std::dynamic_pointer_cast<GraphQLRequestState>(params.state)) {
+        context_ = std::move(state->context);
+      }
+    }
+    check();
+  }
+
+  void check() const {
+    if (!context_) {
+      return;
+    }
+    if (!context_->cancelled()) {
+      return;
+    }
+    switch (context_->reason()) {
+    case CancelReason::None:
+      return;
+    case CancelReason::Timeout:
+      fail("TIMEOUT", "request timed out");
+    case CancelReason::ClientClosed:
+    case CancelReason::Shutdown:
+    case CancelReason::Explicit:
+      fail("CANCELLED", "request cancelled");
+    }
+  }
+
+private:
+  std::shared_ptr<RequestContext> context_;
+};
+
+// 单个查询的 90 秒看门狗：到期取消上下文，resolver 在下一个检查点退出。
+class DeadlineGuard {
+public:
+  DeadlineGuard(std::chrono::steady_clock::duration timeout,
+                std::function<void()> on_deadline)
+      : on_deadline_(std::move(on_deadline)) {
+    thread_ = std::thread([this, timeout] {
+      std::unique_lock lock(mutex_);
+      if (!cv_.wait_for(lock, timeout, [this] { return done_; })) {
+        lock.unlock();
+        if (on_deadline_) {
+          on_deadline_();
+        }
+      }
+    });
+  }
+
+  ~DeadlineGuard() {
+    {
+      std::lock_guard lock(mutex_);
+      done_ = true;
+    }
+    cv_.notify_all();
+    if (thread_.joinable()) {
+      thread_.join();
+    }
+  }
+
+  DeadlineGuard(const DeadlineGuard &) = delete;
+  DeadlineGuard &operator=(const DeadlineGuard &) = delete;
+
+private:
+  std::function<void()> on_deadline_;
+  std::mutex mutex_;
+  std::condition_variable cv_;
+  bool done_ = false;
+  std::thread thread_;
+};
 
 // 简单的按行日志，串行输出避免多 worker 线程交错。
 void log_line(std::string line) {
@@ -704,7 +796,9 @@ public:
     }
   }
 
-  gql::service::AwaitableScalar<std::string> getPing() const {
+  gql::service::AwaitableScalar<std::string>
+  getPing(gql::service::FieldParams &&params) const {
+    RequestScope request(std::move(params));
     return gql::service::AwaitableScalar<std::string>(std::string("pong"));
   }
 
@@ -754,16 +848,19 @@ public:
   }
 
   gql::service::AwaitableObject<std::shared_ptr<gql::tagimg::object::Artwork>>
-  getArtwork(IdType id) const {
+  getArtwork(gql::service::FieldParams &&params, IdType id) const {
+    RequestScope request(std::move(params));
     const std::string text = id_text(id);
     if (!is_uuid(text)) {
       fail("INVALID_ARGUMENT", "id is not a valid uuid");
     }
 
+    request.check();
     const auto result = repository_->find_artwork(text);
     if (!result) {
       fail_repository(result.error());
     }
+    request.check();
     if (!result->has_value()) {
       return gql::service::AwaitableObject<
           std::shared_ptr<gql::tagimg::object::Artwork>>(
@@ -778,12 +875,14 @@ public:
 
   gql::service::AwaitableObject<
       std::shared_ptr<gql::tagimg::object::ArtworkConnection>>
-  getArtworks(std::unique_ptr<gql::tagimg::ArtworkFilter> filter,
+  getArtworks(gql::service::FieldParams &&params,
+              std::unique_ptr<gql::tagimg::ArtworkFilter> filter,
               std::optional<gql::tagimg::ArtworkOrderField> order_by,
               std::optional<gql::tagimg::SortDirection> direction,
               std::optional<int> limit, std::optional<int> offset,
               std::optional<bool> include_total,
               std::optional<std::string> sort_text) const {
+    RequestScope request(std::move(params));
     ArtworkSearchQuery query;
     if (filter) {
       if (filter->title) {
@@ -842,7 +941,9 @@ public:
         fail("INVALID_ARGUMENT", "sortText must not be blank");
       }
       // 这里同步调用 sidecar 编码文本，会阻塞当前线程直到返回。
+      request.check();
       auto embedding = clip_embedder_->embed_text(*sort_text);
+      request.check();
       if (!embedding) {
         fail("AI_UNAVAILABLE",
              std::string("failed to embed sortText: ") +
@@ -890,10 +991,12 @@ public:
     }
     query.include_total = include_total.value_or(false);
 
+    request.check();
     const auto result = repository_->search_artworks(query);
     if (!result) {
       fail_repository(result.error());
     }
+    request.check();
 
     std::vector<std::shared_ptr<gql::tagimg::object::Artwork>> items;
     items.reserve(result->items.size());
@@ -917,13 +1020,15 @@ public:
 
   gql::service::AwaitableObject<
       std::shared_ptr<gql::tagimg::object::ImageConnection>>
-  getImages(std::unique_ptr<gql::tagimg::ImageFilter> filter,
+  getImages(gql::service::FieldParams &&params,
+            std::unique_ptr<gql::tagimg::ImageFilter> filter,
             std::optional<gql::tagimg::ImageOrderField> order_by,
             std::optional<gql::tagimg::SortDirection> direction,
             std::optional<int> limit, std::optional<int> offset,
             std::optional<bool> include_total,
             std::optional<std::string> sort_text,
             std::optional<IdType> reference_image_id) const {
+    RequestScope request(std::move(params));
     ImageSearchQuery query;
     if (filter) {
       const auto read_ids = [](const std::optional<std::vector<IdType>> &ids,
@@ -974,8 +1079,10 @@ public:
              "referenceImageId");
       }
       if (reference_id) {
+        request.check();
         const auto embedding =
             repository_->find_clip_embedding(*reference_id);
+        request.check();
         if (!embedding) {
           fail_repository(embedding.error());
         }
@@ -1000,7 +1107,9 @@ public:
         if (blank) {
           fail("INVALID_ARGUMENT", "sortText must not be blank");
         }
+        request.check();
         auto embedding = clip_embedder_->embed_text(*sort_text);
+        request.check();
         if (!embedding) {
           fail("SERVICE_UNAVAILABLE",
                std::string("failed to embed sortText: ") +
@@ -1051,10 +1160,12 @@ public:
     }
     query.include_total = include_total.value_or(false);
 
+    request.check();
     const auto result = repository_->search_images(query);
     if (!result) {
       fail_repository(result.error());
     }
+    request.check();
 
     std::vector<std::shared_ptr<gql::tagimg::object::Image>> items;
     items.reserve(result->items.size());
@@ -1078,8 +1189,10 @@ public:
 
   gql::service::AwaitableObject<
       std::vector<std::shared_ptr<gql::tagimg::object::TagMatch>>>
-  getTags(std::string query, std::unique_ptr<gql::tagimg::TagSearchScope> scope,
+  getTags(gql::service::FieldParams &&params, std::string query,
+          std::unique_ptr<gql::tagimg::TagSearchScope> scope,
           std::optional<int> limit) const {
+    RequestScope request(std::move(params));
     TagSearchQuery search;
     search.text = std::move(query);
     if (search.text.empty() || utf8_length(search.text) > kMaxTagSearchLength) {
@@ -1110,6 +1223,7 @@ public:
     if (!result) {
       fail_repository(result.error());
     }
+    request.check();
 
     std::vector<std::shared_ptr<gql::tagimg::object::TagMatch>> items;
     items.reserve(result->size());
@@ -1124,8 +1238,10 @@ public:
 
   gql::service::AwaitableObject<
       std::shared_ptr<gql::tagimg::object::OrphanImageConnection>>
-  getOrphanImages(std::optional<int> limit, std::optional<int> offset,
+  getOrphanImages(gql::service::FieldParams &&params,
+                  std::optional<int> limit, std::optional<int> offset,
                   std::optional<bool> include_total) const {
+    RequestScope request(std::move(params));
     OrphanImageQuery query;
     if (limit) {
       if (*limit < 1 || *limit > 100) {
@@ -1145,6 +1261,7 @@ public:
     if (!result) {
       fail_repository(result.error());
     }
+    request.check();
 
     std::vector<std::shared_ptr<gql::tagimg::object::OrphanImage>> items;
     items.reserve(result->items.size());
@@ -1364,7 +1481,8 @@ Value attach_error_codes(Value response) {
   static constexpr std::string_view kCodes[] = {
       "INVALID_ARGUMENT", "SERVICE_UNAVAILABLE", "AI_UNAVAILABLE",
       "INTERNAL_ERROR",   "QUERY_FAILED",        "UNKNOWN_TAG",
-      "UNKNOWN_ARTIST",   "NOT_FOUND"};
+      "UNKNOWN_ARTIST",   "NOT_FOUND",           "TIMEOUT",
+      "CANCELLED"};
 
   auto fields = response.release<MapType>();
   for (auto &[name, value] : fields) {
@@ -1421,6 +1539,20 @@ std::string error_body(const std::string &message) {
   return body.dump();
 }
 
+std::string error_body_with_code(std::string code, std::string message,
+                                 bool retryable = false) {
+  nlohmann::json extensions;
+  extensions["code"] = std::move(code);
+  if (retryable) {
+    extensions["retryable"] = true;
+  }
+  nlohmann::json body;
+  body["errors"] = nlohmann::json::array();
+  body["errors"].push_back(
+      {{"message", std::move(message)}, {"extensions", std::move(extensions)}});
+  return body.dump();
+}
+
 drogon::HttpResponsePtr json_response(std::string body,
                                       drogon::HttpStatusCode status) {
   auto response = drogon::HttpResponse::newHttpResponse();
@@ -1432,12 +1564,30 @@ drogon::HttpResponsePtr json_response(std::string body,
 
 } // namespace
 
-struct GraphQLService::Impl {
+struct GraphQLService::Impl
+    : std::enable_shared_from_this<GraphQLService::Impl> {
+  // GraphQL 查询固定 4 个 worker，配合 8 条数据库连接，剩余连接留给图片流
+  // 与 JobWorker。排队上限 64，避免慢查询把内存和连接池拖垮。
+  static constexpr std::size_t kWorkerCount = 4;
+  static constexpr std::size_t kQueueLimit = 64;
+  static constexpr auto kQueryTimeout = std::chrono::seconds(90);
+
+  struct Job {
+    std::uint64_t id = 0;
+    std::shared_ptr<RequestContext> context;
+    std::string query;
+    std::string operation_name;
+    std::string variables;
+    std::function<void(const drogon::HttpResponsePtr &)> callback;
+  };
+
   Impl(std::shared_ptr<ServiceRuntime> runtime_ref,
        std::shared_ptr<const TagimgRepository> repository_ref,
-       std::shared_ptr<ClipEmbedder> embedder_ref)
+       std::shared_ptr<ClipEmbedder> embedder_ref,
+       std::shared_ptr<ConnectionRegistry> registry_ref)
       : runtime(std::move(runtime_ref)), repository(std::move(repository_ref)),
-        clip_embedder(std::move(embedder_ref)) {
+        clip_embedder(std::move(embedder_ref)),
+        registry(std::move(registry_ref)) {
     if (!runtime || !repository || !clip_embedder) {
       throw std::invalid_argument(
           "GraphQLService requires a ServiceRuntime, a repository and a "
@@ -1447,11 +1597,21 @@ struct GraphQLService::Impl {
     query = std::make_shared<gql::tagimg::object::Query>(root);
     mutation = std::make_shared<gql::tagimg::object::Mutation>(root);
     operations = std::make_shared<gql::tagimg::Operations>(query, mutation);
+
+    workers.reserve(kWorkerCount);
+    for (std::size_t i = 0; i < kWorkerCount; ++i) {
+      workers.emplace_back([this] { worker_loop(); });
+    }
+  }
+
+  ~Impl() {
+    shutdown();
   }
 
   std::string execute(const std::string &query_text,
                       std::string_view operation_name,
-                      const std::string &variables_text) const {
+                      const std::string &variables_text,
+                      const std::shared_ptr<RequestContext> &context) const {
     gql::peg::ast ast;
     try {
       ast = gql::peg::parseString(query_text);
@@ -1469,35 +1629,201 @@ struct GraphQLService::Impl {
       return error_body(std::string("invalid variables: ") + exception.what());
     }
 
+    auto state = std::make_shared<GraphQLRequestState>(context);
     Value result;
     try {
-      result = operations->resolve({ast, operation_name, std::move(variables)})
-                   .get();
+      result =
+          operations
+              ->resolve({ast, operation_name, std::move(variables), {}, state})
+              .get();
     } catch (const std::exception &exception) {
       return error_body(exception.what());
     }
     return gql::response::toJSON(attach_error_codes(std::move(result)));
   }
 
+  // 入队并注册取消回调。返回 false 时 job 未被移动，调用方仍可拿回 callback。
+  bool enqueue(Job &&job) {
+    auto context = job.context;
+    std::uint64_t id = 0;
+    {
+      std::lock_guard lock(queue_mutex);
+      if (stopping || queue.size() >= kQueueLimit) {
+        return false;
+      }
+      id = next_job_id++;
+      job.id = id;
+      queue.push_back(std::move(job));
+    }
+
+    std::weak_ptr<Impl> weak = weak_from_this();
+    context->add_cancel_handler([weak, id](CancelReason) {
+      if (auto self = weak.lock()) {
+        self->remove_queued(id);
+      }
+    });
+    queue_cv.notify_one();
+    return true;
+  }
+
+  void remove_queued(std::uint64_t id) {
+    std::shared_ptr<RequestContext> removed;
+    {
+      std::lock_guard lock(queue_mutex);
+      for (auto it = queue.begin(); it != queue.end(); ++it) {
+        if (it->id == id) {
+          removed = it->context;
+          queue.erase(it);
+          break;
+        }
+      }
+    }
+    if (removed && registry) {
+      registry->unregister_context(removed);
+    }
+  }
+
+  void worker_loop() {
+    for (;;) {
+      Job job;
+      {
+        std::unique_lock lock(queue_mutex);
+        queue_cv.wait(lock,
+                      [this] { return stopping || !queue.empty(); });
+        if (stopping && queue.empty()) {
+          return;
+        }
+        job = std::move(queue.front());
+        queue.pop_front();
+      }
+      run_job(std::move(job));
+    }
+  }
+
+  void run_job(Job job) {
+    auto context = job.context;
+    const auto finish = [this, &context] {
+      if (registry) {
+        registry->unregister_context(context);
+      }
+    };
+
+    // 断开回调可能漏掉（例如连接在入队与注册之间失效），出队时再确认一次。
+    (void)context->cancelled();
+    switch (context->reason()) {
+    case CancelReason::ClientClosed:
+    case CancelReason::Shutdown:
+      finish();
+      return;
+    case CancelReason::Timeout:
+      finish();
+      job.callback(json_response(
+          error_body_with_code("TIMEOUT", "request timed out"),
+          drogon::k200OK));
+      return;
+    case CancelReason::Explicit:
+      finish();
+      job.callback(json_response(
+          error_body_with_code("CANCELLED", "request cancelled"),
+          drogon::k200OK));
+      return;
+    case CancelReason::None:
+      break;
+    }
+
+    std::string body;
+    {
+      DeadlineGuard guard(kQueryTimeout, [context] {
+        context->cancel(CancelReason::Timeout);
+      });
+      body = execute(job.query, job.operation_name, job.variables, context);
+    }
+
+    finish();
+    (void)context->cancelled();
+    switch (context->reason()) {
+    case CancelReason::ClientClosed:
+    case CancelReason::Shutdown:
+      return;
+    case CancelReason::Timeout:
+      job.callback(json_response(
+          error_body_with_code("TIMEOUT", "request timed out"),
+          drogon::k200OK));
+      return;
+    case CancelReason::Explicit:
+      job.callback(json_response(
+          error_body_with_code("CANCELLED", "request cancelled"),
+          drogon::k200OK));
+      return;
+    case CancelReason::None:
+      job.callback(json_response(std::move(body), drogon::k200OK));
+      return;
+    }
+  }
+
+  void shutdown() {
+    std::list<Job> pending;
+    {
+      std::lock_guard lock(queue_mutex);
+      if (!stopping) {
+        stopping = true;
+        pending.swap(queue);
+      }
+    }
+    queue_cv.notify_all();
+
+    for (auto &job : pending) {
+      if (job.context) {
+        job.context->cancel(CancelReason::Shutdown);
+        if (registry) {
+          registry->unregister_context(job.context);
+        }
+      }
+    }
+
+    for (auto &worker : workers) {
+      if (worker.joinable()) {
+        worker.join();
+      }
+    }
+    workers.clear();
+  }
+
   std::shared_ptr<ServiceRuntime> runtime;
   std::shared_ptr<const TagimgRepository> repository;
   std::shared_ptr<ClipEmbedder> clip_embedder;
+  std::shared_ptr<ConnectionRegistry> registry;
   std::shared_ptr<Root> root;
   std::shared_ptr<gql::tagimg::object::Query> query;
   std::shared_ptr<gql::tagimg::object::Mutation> mutation;
   std::shared_ptr<gql::tagimg::Operations> operations;
+
+  std::mutex queue_mutex;
+  std::condition_variable queue_cv;
+  std::list<Job> queue;
+  std::vector<std::thread> workers;
+  std::uint64_t next_job_id = 0;
+  bool stopping = false;
 };
 
 GraphQLService::GraphQLService(
     std::shared_ptr<ServiceRuntime> runtime,
     std::shared_ptr<const TagimgRepository> tagimg_repository,
-    std::shared_ptr<ClipEmbedder> clip_embedder)
+    std::shared_ptr<ClipEmbedder> clip_embedder,
+    std::shared_ptr<ConnectionRegistry> connection_registry)
     : impl_(std::make_shared<Impl>(std::move(runtime),
                                    std::move(tagimg_repository),
-                                   std::move(clip_embedder))) {
+                                   std::move(clip_embedder),
+                                   std::move(connection_registry))) {
 }
 
 GraphQLService::~GraphQLService() = default;
+
+void GraphQLService::shutdown() {
+  if (impl_) {
+    impl_->shutdown();
+  }
+}
 
 void GraphQLService::handle(
     const drogon::HttpRequestPtr &request,
@@ -1556,9 +1882,30 @@ void GraphQLService::handle(
     variables_text = variables->dump();
   }
 
-  callback(json_response(
-      impl_->execute(query->get<std::string>(), operation_name, variables_text),
-      drogon::k200OK));
+  GraphQLService::Impl::Job job;
+  job.context = std::make_shared<RequestContext>(request->getConnectionPtr());
+  job.query = query->get<std::string>();
+  job.operation_name = std::move(operation_name);
+  job.variables = std::move(variables_text);
+  job.callback = std::move(callback);
+
+  const auto context = job.context;
+  if (impl_->registry) {
+    impl_->registry->register_context(context);
+  }
+
+  if (!impl_->enqueue(std::move(job))) {
+    if (impl_->registry) {
+      impl_->registry->unregister_context(context);
+    }
+    auto response = json_response(
+        error_body_with_code("SERVICE_UNAVAILABLE", "server is busy", true),
+        drogon::k503ServiceUnavailable);
+    response->addHeader("Retry-After", "1");
+    // enqueue 失败时 job 未被移动，callback 仍然有效。
+    job.callback(std::move(response));
+    return;
+  }
 }
 
 } // namespace tagimg

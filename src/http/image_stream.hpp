@@ -15,6 +15,9 @@
 
 namespace tagimg {
 
+class ConnectionRegistry;
+class RequestContext;
+
 // GET /api/v1/image/{imageId} 的请求参数。
 struct ImageStreamOptions {
   std::string image_id;
@@ -25,6 +28,8 @@ struct ImageStreamOptions {
   std::optional<std::string> request_id;
   // 客户端带来的 If-None-Match，命中时返回 304。
   std::optional<std::string> if_none_match;
+  // 请求生命周期上下文；为空时 handle() 会创建一个无连接的上下文。
+  std::shared_ptr<RequestContext> context;
 };
 
 // 图片流式下载端点。
@@ -42,7 +47,8 @@ public:
                 StorageConfig storage,
                 ImageStreamMode mode = ImageStreamMode::Proxy,
                 ImageProcessingConfig processing = {},
-                std::filesystem::path work_dir = {});
+                std::filesystem::path work_dir = {},
+                std::shared_ptr<ConnectionRegistry> registry = {});
 
   ~ImageStreamer();
 

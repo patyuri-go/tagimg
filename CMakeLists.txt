@@ -92,6 +92,16 @@ target_include_directories(tagimg_common PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
+add_library(tagimg_request STATIC
+    src/http/request_context.cpp
+)
+target_include_directories(tagimg_request PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+target_link_libraries(tagimg_request PUBLIC
+    Drogon::Drogon
+)
+
 add_library(tagimg_db STATIC
     src/db/tagimg_repository.cpp
 )
@@ -171,6 +181,7 @@ target_include_directories(tagimg_http PUBLIC
 target_link_libraries(tagimg_http PUBLIC
     tagimg_image
     tagimg_job
+    tagimg_request
     Drogon::Drogon
     nlohmann_json::nlohmann_json
 )
@@ -198,6 +209,7 @@ target_include_directories(tagimg_graphql PUBLIC
 )
 target_link_libraries(tagimg_graphql PUBLIC
     tagimg_job
+    tagimg_request
     cppgraphqlgen::graphqlservice
     cppgraphqlgen::graphqljson
     nlohmann_json::nlohmann_json
