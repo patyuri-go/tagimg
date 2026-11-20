@@ -8,7 +8,8 @@
 --      title、description、artist.name、图片尺寸等允许为空。
 --   3. images.entity_id 是外部实体库 ID，本库没有 entities 表，因此不建外键；
 --      允许为 NULL（尚未映射时），非 NULL 值唯一。
---   4. images.width / height / frame_count 允许为空：C++ 侧暂不解码图片，后续回填。
+--   4. images.width / height / frame_count / mime_type / taken_at
+--      由扫描阶段用 libvips 读取；图片能打开但缺少某项时该列为空。
 --   5. images.scan_at 记录上次模型扫描时间，为空表示从未扫描。
 --   6. 所有 created_at / updated_at 默认 now()；updated_at 由应用在更新时维护。
 --   7. tag_name.type 的枚举值使用英文 standard / alias，分别对应“标准名称 / 别名”。
@@ -54,6 +55,8 @@ CREATE TABLE images (
     width       INTEGER,
     height      INTEGER,
     frame_count INTEGER,
+    mime_type   TEXT,
+    taken_at    TIMESTAMP,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     scan_at     TIMESTAMPTZ,
 
@@ -65,9 +68,11 @@ CREATE TABLE images (
 COMMENT ON TABLE images IS '图片表';
 COMMENT ON COLUMN images.id IS '图片 ID';
 COMMENT ON COLUMN images.entity_id IS '外部实体库 ID；本库不建外键，非 NULL 值唯一';
-COMMENT ON COLUMN images.width IS '图片宽度（像素），可空，待后续回填';
-COMMENT ON COLUMN images.height IS '图片高度（像素），可空，待后续回填';
+COMMENT ON COLUMN images.width IS '单帧宽度（像素），按 EXIF orientation 校正后写入';
+COMMENT ON COLUMN images.height IS '单帧高度（像素），按 EXIF orientation 校正后写入';
 COMMENT ON COLUMN images.frame_count IS '动画帧数；静态图为 1，未知时为空';
+COMMENT ON COLUMN images.mime_type IS '图片真实格式的标准 MIME 类型，例如 image/jpeg';
+COMMENT ON COLUMN images.taken_at IS '相机记录的本地拍摄时间，不做时区转换';
 COMMENT ON COLUMN images.created_at IS '入库时间';
 COMMENT ON COLUMN images.scan_at IS '上次模型扫描时间；为空表示从未扫描';
 

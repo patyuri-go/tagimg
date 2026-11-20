@@ -39,10 +39,22 @@ nlohmann::json optional_to_json(const std::optional<std::string> &value) {
   return *value;
 }
 
+nlohmann::json optional_int_to_json(const std::optional<int> &value) {
+  if (!value) {
+    return nullptr;
+  }
+  return *value;
+}
+
 nlohmann::json scan_to_json(const tagimg::ScanResult &scan) {
   nlohmann::json item;
   item["entity_id"] = scan.entity_id;
   item["bytes"] = scan.bytes;
+  item["width"] = optional_int_to_json(scan.metadata.width);
+  item["height"] = optional_int_to_json(scan.metadata.height);
+  item["frame_count"] = optional_int_to_json(scan.metadata.frame_count);
+  item["mime_type"] = optional_to_json(scan.metadata.mime_type);
+  item["taken_at"] = optional_to_json(scan.metadata.taken_at);
   item["general"] = tags_to_json(scan.tags.general);
   item["character"] = tags_to_json(scan.tags.character);
   item["rating"] = tags_to_json(scan.tags.rating);

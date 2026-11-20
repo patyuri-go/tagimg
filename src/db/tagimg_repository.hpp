@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "common/result.hpp"
+#include "image/image_metadata.hpp"
 
 namespace tagimg {
 
@@ -67,6 +68,10 @@ struct ArtworkInput {
   // Chinese-CLIP 图像向量，与 entity_ids 顺序一致。
   // 每项必须是 768 维、已 L2 归一化；空数组表示该图片不写向量。
   std::vector<std::vector<float>> embeddings;
+
+  // 从图片读出的元数据，与 entity_ids 顺序一致。
+  // 空数组表示不写元数据（例如调用方没有扫描结果）。
+  std::vector<ImageMetadata> metadata;
 };
 
 // 用已有图片新建作品的输入。
@@ -93,6 +98,10 @@ struct ImageArtworkInput {
   // rescan 时是本次重扫结果；否则保持空数组，不覆盖已有向量。
   std::vector<std::vector<float>> embeddings;
 
+  // 从图片读出的元数据，与 image_ids 顺序一致。
+  // rescan 时是本次重扫结果；否则保持空数组，不覆盖已有元数据。
+  std::vector<ImageMetadata> metadata;
+
   // 是否更新图片的 scan_at。
   bool rescan = false;
 };
@@ -107,6 +116,12 @@ struct ImageEmbeddingInput {
   std::string image_id;
   // 768 维、已 L2 归一化。
   std::vector<float> values;
+};
+
+// 一条待写入的图片元数据。
+struct ImageMetadataInput {
+  std::string image_id;
+  ImageMetadata metadata;
 };
 
 // 回填时列出的一张缺向量的图片。
@@ -367,6 +382,11 @@ public:
   // 把图片的 scan_at 更新为当前时间。
   [[nodiscard]] Result<std::size_t, TagimgRepositoryError>
   touch_image_scans(const std::vector<std::string> &image_ids);
+
+  // 更新图片元数据并把 scan_at 更新为当前时间。
+  // 每个条目的 image_id 必须属于当前作品。
+  [[nodiscard]] Result<std::size_t, TagimgRepositoryError>
+  update_image_metadata(const std::vector<ImageMetadataInput> &items);
 
   // 提交事务。没有做过任何修改时返回 InvalidArgument。
   [[nodiscard]] Result<void, TagimgRepositoryError> commit();

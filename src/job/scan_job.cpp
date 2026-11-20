@@ -1,13 +1,14 @@
 #include "job/scan_job.hpp"
 
+#include <algorithm>
 #include <array>
-#include <cctype>
 #include <cstddef>
 #include <span>
 #include <utility>
 #include <vector>
 
 #include "common/uuid.hpp"
+#include "image/image_metadata.hpp"
 #include "io/byte_stream.hpp"
 #include "io/temp_file.hpp"
 #include "job/ai_preflight.hpp"
@@ -80,36 +81,14 @@ JobError map_tagimg_lookup_error(TagimgRepositoryError error) {
   }
 }
 
-// 只按实体库记录的 mime_type 判断是否为图片。
-bool is_image_mime(std::string_view mime_type) {
-  constexpr std::string_view kPrefix = "image/";
-  if (mime_type.size() < kPrefix.size()) {
-    return false;
+JobError map_metadata_error(ImageMetadataError error) {
+  switch (error) {
+  case ImageMetadataError::InitializationFailed:
+    return JobError::InternalError;
+  case ImageMetadataError::OpenFailed:
+    return JobError::NotImage;
   }
-  for (std::size_t index = 0; index < kPrefix.size(); ++index) {
-    const auto actual = static_cast<unsigned char>(mime_type[index]);
-    if (std::tolower(actual) != static_cast<unsigned char>(kPrefix[index])) {
-      return false;
-    }
-  }
-  return true;
-}
-
-// 去掉 Content-Type 的参数部分和首尾空白，得到纯媒体类型。
-std::string media_type(std::string_view content_type) {
-  const std::size_t semicolon = content_type.find(';');
-  std::string_view value = content_type.substr(0, semicolon);
-  while (!value.empty() &&
-         (value.front() == ' ' || value.front() == '\t' ||
-          value.front() == '\r' || value.front() == '\n')) {
-    value.remove_prefix(1);
-  }
-  while (!value.empty() &&
-         (value.back() == ' ' || value.back() == '\t' ||
-          value.back() == '\r' || value.back() == '\n')) {
-    value.remove_suffix(1);
-  }
-  return std::string(value);
+  return JobError::InternalError;
 }
 
 } // namespace
@@ -200,7 +179,7 @@ ScanJob::scan_content(JobContext &context) {
     return map_stream_error(stream.error());
   }
 
-  // 拿到响应头后才能判断内容类型和长度。
+  // 拿到响应头后才能判断长度。
   const auto started = (*stream)->wait_started();
   if (!started) {
     if (started.error() == ByteStreamError::HttpError &&
@@ -210,10 +189,6 @@ ScanJob::scan_content(JobContext &context) {
     return map_stream_error(started.error());
   }
 
-  const std::string mime_type = media_type((*stream)->content_type());
-  if (!mime_type.empty() && !is_image_mime(mime_type)) {
-    return JobError::NotImage;
-  }
   const auto content_length = (*stream)->content_length();
   if (content_length && *content_length > WdTagger::kMaxImageBytes) {
     return JobError::ImageTooLarge;
@@ -223,6 +198,11 @@ ScanJob::scan_content(JobContext &context) {
   if (!file) {
     return JobError::FileError;
   }
+
+  // 只缓存前 64KB 用于格式探测；超过后释放，避免整图驻留内存。
+  std::vector<std::byte> prefix;
+  prefix.reserve(kReadBufferSize);
+  bool probed = false;
 
   std::array<std::byte, kReadBufferSize> buffer{};
   while (true) {
@@ -238,11 +218,44 @@ ScanJob::scan_content(JobContext &context) {
     if (!written) {
       return JobError::FileError;
     }
+
+    if (!probed) {
+      const std::size_t remaining = kReadBufferSize - prefix.size();
+      const std::size_t take = std::min(*chunk, remaining);
+      prefix.insert(prefix.end(), buffer.begin(), buffer.begin() + take);
+      if (prefix.size() >= kReadBufferSize) {
+        auto supported = probe_supported_image(prefix);
+        if (!supported) {
+          return map_metadata_error(supported.error());
+        }
+        if (!*supported) {
+          return JobError::NotImage;
+        }
+        probed = true;
+        prefix.clear();
+        prefix.shrink_to_fit();
+      }
+    }
+  }
+
+  if (!probed) {
+    auto supported = probe_supported_image(prefix);
+    if (!supported) {
+      return map_metadata_error(supported.error());
+    }
+    if (!*supported) {
+      return JobError::NotImage;
+    }
   }
 
   auto closed = file->close();
   if (!closed) {
     return JobError::FileError;
+  }
+
+  auto metadata = read_image_metadata(file->path());
+  if (!metadata) {
+    return map_metadata_error(metadata.error());
   }
 
   auto tags = context.tagger.get().tag_file(file->path());
@@ -261,6 +274,7 @@ ScanJob::scan_content(JobContext &context) {
   result.entity_id = entity_id_;
   result.bytes = file->size();
   result.tags = std::move(*tags);
+  result.metadata = std::move(*metadata);
   if (embedding) {
     result.embedding = std::move(embedding->values);
   }

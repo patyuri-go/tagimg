@@ -151,6 +151,13 @@ void AddJob::finish(JobContext &context) {
     embeddings.push_back(scan.embedding);
   }
 
+  // 元数据同样按扫描顺序写库。
+  std::vector<ImageMetadata> metadata;
+  metadata.reserve(result.scans.size());
+  for (const ScanResult &scan : result.scans) {
+    metadata.push_back(scan.metadata);
+  }
+
   Result<SavedArtwork, TagimgRepositoryError> saved =
       TagimgRepositoryError::InvalidArgument;
   if (image_request_) {
@@ -163,6 +170,7 @@ void AddJob::finish(JobContext &context) {
     input.artist_ids = image_request_->artist_ids;
     input.scanned_tags = std::move(scanned_tags);
     input.embeddings = std::move(embeddings);
+    input.metadata = std::move(metadata);
     input.rescan = image_request_->rescan;
     saved = context.tagimg_repository.get().save_artwork_from_images(input);
   } else {
@@ -175,6 +183,7 @@ void AddJob::finish(JobContext &context) {
     input.entity_ids = result.request.entity_ids;
     input.scanned_tags = std::move(scanned_tags);
     input.embeddings = std::move(embeddings);
+    input.metadata = std::move(metadata);
     saved = context.tagimg_repository.get().save_artwork(input);
   }
 

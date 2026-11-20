@@ -108,7 +108,7 @@ StepResult RescanArtworkJob::step(JobContext &context, const JobRun &run) {
   }
 
   // 扫描全部成功，接下来才动数据库。三件事放在同一个事务里：
-  // 替换向量、把本次扫描出的标签增量挂上去、刷新图片扫描时间。
+  // 替换向量、把本次扫描出的标签增量挂上去、更新图片元数据与扫描时间。
   // 任何一步失败都整体回滚，作品的旧向量与旧标签保持原样。
   std::vector<ImageEmbeddingInput> embeddings;
   embeddings.reserve(scans.size());
@@ -123,6 +123,13 @@ StepResult RescanArtworkJob::step(JobContext &context, const JobRun &run) {
     scanned_tags.push_back(
         ImageScannedTags{image_ids[index],
                          build_image_scanned_tags(scans[index].tags)});
+  }
+
+  std::vector<ImageMetadataInput> metadata;
+  metadata.reserve(scans.size());
+  for (std::size_t index = 0; index < scans.size(); ++index) {
+    metadata.push_back(
+        ImageMetadataInput{image_ids[index], scans[index].metadata});
   }
 
   std::size_t added_tag_count = 0;
@@ -156,10 +163,10 @@ StepResult RescanArtworkJob::step(JobContext &context, const JobRun &run) {
     }
     added_tag_count = *tagged;
 
-    const auto touched = txn.touch_image_scans(image_ids);
-    if (!touched) {
+    const auto updated = txn.update_image_metadata(metadata);
+    if (!updated) {
       outcome_ =
-          Result<JobOutcome, JobError>::err(map_write_error(touched.error()));
+          Result<JobOutcome, JobError>::err(map_write_error(updated.error()));
       return StepResult::Done;
     }
 

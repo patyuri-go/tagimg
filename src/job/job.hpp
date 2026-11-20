@@ -17,6 +17,7 @@
 #include "common/result.hpp"
 #include "common/storage.hpp"
 #include "db/tagimg_repository.hpp"
+#include "image/image_metadata.hpp"
 
 namespace tagimg {
 
@@ -54,6 +55,8 @@ struct ScanResult {
   TaggingResult tags;
   // Chinese-CLIP 图像向量（768 维，已 L2 归一化）。
   std::vector<float> embedding;
+  // 从图片本身读出的尺寸、帧数、真实格式与拍摄时间。
+  ImageMetadata metadata;
 };
 
 // AddJob 的完整输入；entity_ids 与 title 必填。

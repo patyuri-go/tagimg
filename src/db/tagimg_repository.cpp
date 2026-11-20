@@ -62,7 +62,7 @@ FROM images
 WHERE id = :image_id
 )sql";
 
-// 重新扫描已有图片时只更新时间，宽高仍由后续的解码流程回填。
+// 没有元数据时的兼容路径：只更新时间。
 constexpr const char *kTouchImageScanSql = R"sql(
 UPDATE images
 SET scan_at = now()
@@ -226,9 +226,23 @@ RETURNING id::text
 )sql";
 
 constexpr const char *kInsertImageSql = R"sql(
-INSERT INTO images (entity_id, scan_at)
-VALUES (:entity_id, now())
+INSERT INTO images
+  (entity_id, width, height, frame_count, mime_type, taken_at, scan_at)
+VALUES
+  (:entity_id, :width, :height, :frame_count, :mime_type,
+   CAST(:taken_at AS timestamp), now())
 RETURNING id::text
+)sql";
+
+constexpr const char *kUpdateImageMetadataSql = R"sql(
+UPDATE images
+SET width = :width,
+    height = :height,
+    frame_count = :frame_count,
+    mime_type = :mime_type,
+    taken_at = CAST(:taken_at AS timestamp),
+    scan_at = now()
+WHERE id = :image_id
 )sql";
 
 // 表名含含义但全为下划线，不需要双引号。
@@ -322,6 +336,83 @@ std::string insert_returning_id(soci::session &sql, const char *statement,
   return row->get<std::string>(0);
 }
 
+// 可空元数据字段的 SOCI 绑定值。
+struct ImageMetadataBinding {
+  int width = 0;
+  soci::indicator width_indicator = soci::i_null;
+  int height = 0;
+  soci::indicator height_indicator = soci::i_null;
+  int frame_count = 0;
+  soci::indicator frame_count_indicator = soci::i_null;
+  std::string mime_type;
+  soci::indicator mime_type_indicator = soci::i_null;
+  std::string taken_at;
+  soci::indicator taken_at_indicator = soci::i_null;
+};
+
+ImageMetadataBinding make_image_metadata_binding(const ImageMetadata &metadata) {
+  ImageMetadataBinding binding;
+  if (metadata.width) {
+    binding.width = *metadata.width;
+    binding.width_indicator = soci::i_ok;
+  }
+  if (metadata.height) {
+    binding.height = *metadata.height;
+    binding.height_indicator = soci::i_ok;
+  }
+  if (metadata.frame_count) {
+    binding.frame_count = *metadata.frame_count;
+    binding.frame_count_indicator = soci::i_ok;
+  }
+  if (metadata.mime_type) {
+    binding.mime_type = *metadata.mime_type;
+    binding.mime_type_indicator = soci::i_ok;
+  }
+  if (metadata.taken_at) {
+    binding.taken_at = *metadata.taken_at;
+    binding.taken_at_indicator = soci::i_ok;
+  }
+  return binding;
+}
+
+bool is_valid_image_metadata(const ImageMetadata &metadata) {
+  return (!metadata.width || *metadata.width > 0) &&
+         (!metadata.height || *metadata.height > 0) &&
+         (!metadata.frame_count || *metadata.frame_count > 0) &&
+         (!metadata.mime_type || !metadata.mime_type->empty()) &&
+         (!metadata.taken_at || !metadata.taken_at->empty());
+}
+
+std::string insert_image_returning_id(soci::session &sql,
+                                      const std::string &entity_id,
+                                      const ImageMetadata &metadata) {
+  ImageMetadataBinding binding = make_image_metadata_binding(metadata);
+  soci::rowset<soci::row> rows =
+      (sql.prepare << kInsertImageSql, soci::use(entity_id),
+       soci::use(binding.width, binding.width_indicator),
+       soci::use(binding.height, binding.height_indicator),
+       soci::use(binding.frame_count, binding.frame_count_indicator),
+       soci::use(binding.mime_type, binding.mime_type_indicator),
+       soci::use(binding.taken_at, binding.taken_at_indicator));
+  const auto row = rows.begin();
+  if (row == rows.end()) {
+    return {};
+  }
+  return row->get<std::string>(0);
+}
+
+void update_image_metadata_row(soci::session &sql, const std::string &image_id,
+                               const ImageMetadata &metadata) {
+  ImageMetadataBinding binding = make_image_metadata_binding(metadata);
+  sql << kUpdateImageMetadataSql,
+      soci::use(binding.width, binding.width_indicator),
+      soci::use(binding.height, binding.height_indicator),
+      soci::use(binding.frame_count, binding.frame_count_indicator),
+      soci::use(binding.mime_type, binding.mime_type_indicator),
+      soci::use(binding.taken_at, binding.taken_at_indicator),
+      soci::use(image_id);
+}
+
 // 把 UUID 列表拼成 PostgreSQL 数组字面量；调用前必须校验过 UUID 格式。
 std::string uuid_array_literal(const std::vector<std::string> &ids) {
   std::string literal = "{";
@@ -399,6 +490,8 @@ struct ArtworkWriteInput {
   std::vector<std::vector<ArtworkTag>> scanned_tags;
   // 与 entity_ids（或 image_ids）顺序一致；空向量表示该图不写向量。
   std::vector<std::vector<float>> embeddings;
+  // 与 entity_ids（或 image_ids）顺序一致；空数组表示不写元数据。
+  std::vector<ImageMetadata> metadata;
 };
 
 // 在单个事务里写作品、图片关联、标签与艺术家。
@@ -418,6 +511,14 @@ write_artwork(soci::session &sql, const ArtworkWriteInput &input,
       new_entity_ids.empty() ? existing_image_ids.size() : new_entity_ids.size();
   if (!input.scanned_tags.empty() && input.scanned_tags.size() != image_count) {
     return TagimgRepositoryError::InvalidArgument;
+  }
+  if (!input.metadata.empty() && input.metadata.size() != image_count) {
+    return TagimgRepositoryError::InvalidArgument;
+  }
+  for (const ImageMetadata &metadata : input.metadata) {
+    if (!is_valid_image_metadata(metadata)) {
+      return TagimgRepositoryError::InvalidArgument;
+    }
   }
 
   try {
@@ -473,7 +574,9 @@ write_artwork(soci::session &sql, const ArtworkWriteInput &input,
         }
 
         std::string image_id =
-            insert_returning_id(sql, kInsertImageSql, entity_id);
+            insert_image_returning_id(
+                sql, entity_id,
+                input.metadata.empty() ? ImageMetadata{} : input.metadata[index]);
         if (image_id.empty()) {
           return TagimgRepositoryError::QueryFailed;
         }
@@ -507,7 +610,11 @@ write_artwork(soci::session &sql, const ArtworkWriteInput &input,
         sql << kInsertArtworkImageSql, soci::use(saved.artwork_id),
             soci::use(image_id), soci::use(position);
         if (touch_scan_at) {
-          sql << kTouchImageScanSql, soci::use(image_id);
+          if (input.metadata.empty()) {
+            sql << kTouchImageScanSql, soci::use(image_id);
+          } else {
+            update_image_metadata_row(sql, image_id, input.metadata[index]);
+          }
         }
         saved.image_ids.push_back(image_id);
       }
@@ -1175,6 +1282,7 @@ TagimgRepository::save_artwork(const ArtworkInput &input) const {
   write.artist_ids = input.artist_ids;
   write.scanned_tags = input.scanned_tags;
   write.embeddings = input.embeddings;
+  write.metadata = input.metadata;
 
   try {
     db_detail::PoolLease lease(*impl_->pool);
@@ -1232,6 +1340,7 @@ TagimgRepository::save_artwork_from_images(
   write.artist_ids = input.artist_ids;
   write.scanned_tags = input.scanned_tags;
   write.embeddings = input.embeddings;
+  write.metadata = input.metadata;
 
   try {
     db_detail::PoolLease lease(*impl_->pool);
@@ -2147,6 +2256,41 @@ ArtworkUpdateTransaction::touch_image_scans(
   impl_->sql << kTouchImageScansSql, soci::use(image_array);
   impl_->dirty = true;
   return image_ids.size();
+}
+
+Result<std::size_t, TagimgRepositoryError>
+ArtworkUpdateTransaction::update_image_metadata(
+    const std::vector<ImageMetadataInput> &items) {
+  if (items.empty()) {
+    return std::size_t{0};
+  }
+
+  // 只允许写当前作品的图片，避免拿错 image_id 串到别的作品。
+  std::set<std::string> current_images;
+  {
+    soci::rowset<soci::row> rows =
+        (impl_->sql.prepare << kLockArtworkImagesSql,
+         soci::use(impl_->artwork_id));
+    for (const soci::row &row : rows) {
+      current_images.insert(row.get<std::string>(0));
+    }
+  }
+
+  std::set<std::string> seen;
+  for (const ImageMetadataInput &item : items) {
+    if (!is_uuid(item.image_id) ||
+        current_images.count(item.image_id) == 0 ||
+        !seen.insert(item.image_id).second ||
+        !is_valid_image_metadata(item.metadata)) {
+      return TagimgRepositoryError::InvalidArgument;
+    }
+  }
+
+  for (const ImageMetadataInput &item : items) {
+    update_image_metadata_row(impl_->sql, item.image_id, item.metadata);
+  }
+  impl_->dirty = true;
+  return items.size();
 }
 
 Result<void, TagimgRepositoryError> ArtworkUpdateTransaction::commit() {

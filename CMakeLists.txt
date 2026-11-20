@@ -126,6 +126,7 @@ target_link_libraries(tagimg_io PUBLIC
 )
 
 add_library(tagimg_image STATIC
+    src/image/image_metadata.cpp
     src/image/image_processor.cpp
 )
 target_include_directories(tagimg_image PUBLIC
@@ -150,6 +151,7 @@ target_include_directories(tagimg_job PUBLIC
 target_link_libraries(tagimg_job PUBLIC
     tagimg_ai
     tagimg_db
+    tagimg_image
     tagimg_io
     Threads::Threads
 )
