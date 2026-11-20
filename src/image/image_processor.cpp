@@ -1,5 +1,6 @@
 #include "image/image_processor.hpp"
 
+#include <algorithm>
 #include <cstring>
 #include <iostream>
 #include <mutex>
@@ -59,9 +60,12 @@ int preset_dimension(ImageSizePreset preset) noexcept {
   return 0;
 }
 
+// imageSpeed 采用“越大越快”的语义（0 最慢、9 最快）。libvips heifsave 的
+// effort 正好相反（0 最快、9 最慢），这里换算后再写入。
 std::string avif_save_options(const ImageProcessingConfig &config) {
+  const std::uint32_t speed = std::min<std::uint32_t>(config.speed, 9);
   return ".avif[Q=" + std::to_string(config.quality) +
-         ",effort=" + std::to_string(config.speed) + "]";
+         ",effort=" + std::to_string(9 - speed) + "]";
 }
 
 std::optional<ImageSizePreset>

@@ -30,6 +30,7 @@
 #include "common/uuid.hpp"
 #include "http/json_helpers.hpp"
 #include "http/request_context.hpp"
+#include "image/animated_avif.hpp"
 #include "io/byte_stream.hpp"
 #include "io/temp_file.hpp"
 
@@ -147,10 +148,6 @@ bool etag_matches(std::string_view header, std::string_view etag) {
   return false;
 }
 
-bool is_image_mime(std::string_view mime_type) {
-  return mime_type.rfind("image/", 0) == 0;
-}
-
 // 去掉 Content-Type 的参数部分和首尾空白，得到纯媒体类型。
 std::string media_type(std::string_view content_type) {
   const std::size_t semicolon = content_type.find(';');
@@ -178,19 +175,51 @@ void log_vips_error(std::string_view context) {
   vips_error_clear();
 }
 
-// 只有这些格式的多页结果才代表动图；多页 TIFF 等仍然按静态图缩略。
-bool mime_can_be_animated(std::string_view mime_type) {
+// 存储服务返回的 Content-Type 不一定可信（例如 .jpg 上传的 GIF 会被
+// 标成 image/jpeg），所以直接嗅探文件头，用真实格式决定加载方式。
+constexpr std::size_t kSniffBytes = 16;
+
+std::string sniff_image_mime(const std::uint8_t *data, std::size_t size) {
+  if (size >= 6 && (std::memcmp(data, "GIF87a", 6) == 0 ||
+                    std::memcmp(data, "GIF89a", 6) == 0)) {
+    return "image/gif";
+  }
+  if (size >= 12 && std::memcmp(data, "RIFF", 4) == 0 &&
+      std::memcmp(data + 8, "WEBP", 4) == 0) {
+    return "image/webp";
+  }
+  if (size >= 8 && std::memcmp(data, "\x89PNG\r\n\x1a\n", 8) == 0) {
+    return "image/png";
+  }
+  if (size >= 3 && data[0] == 0xFF && data[1] == 0xD8 && data[2] == 0xFF) {
+    return "image/jpeg";
+  }
+  if (size >= 12 && std::memcmp(data + 4, "ftyp", 4) == 0) {
+    if (std::memcmp(data + 8, "avif", 4) == 0 ||
+        std::memcmp(data + 8, "avis", 4) == 0) {
+      return "image/avif";
+    }
+    if (std::memcmp(data + 8, "heic", 4) == 0 ||
+        std::memcmp(data + 8, "heix", 4) == 0 ||
+        std::memcmp(data + 8, "mif1", 4) == 0 ||
+        std::memcmp(data + 8, "msf1", 4) == 0) {
+      return "image/heic";
+    }
+  }
+  return {};
+}
+
+// libvips 只有部分加载器接受 "n" 参数；pngload 不认 "n"，传了会直接加载失败。
+// 这里传入的是嗅探出的真实格式，而不是存储返回的 Content-Type。
+bool mime_supports_multipage_load(std::string_view mime_type) {
   return mime_type == "image/gif" || mime_type == "image/webp" ||
-         mime_type == "image/png" || mime_type == "image/avif" ||
-         mime_type == "image/heic" || mime_type == "image/heif";
+         mime_type == "image/avif" || mime_type == "image/heic" ||
+         mime_type == "image/heif";
 }
 
 // 判断图片是否是真正的多帧图片。page-height 用于 GIF/WebP 等把多帧
 // 拼接成一张长图的加载结果；n-pages 则直接表达页数。
-bool image_is_animated(VipsImage *image, std::string_view mime_type) {
-  if (!mime_can_be_animated(mime_type)) {
-    return false;
-  }
+bool image_is_animated(VipsImage *image) {
   const int pages = vips_image_get_n_pages(image);
   if (pages > 1) {
     return true;
@@ -203,6 +232,9 @@ struct SourceContext {
   std::shared_ptr<HttpByteStream> stream;
   std::shared_ptr<RequestContext> request;
   bool failed = false;
+  // 加载前预读的文件头，source_read 先吐这部分再继续读流。
+  std::vector<std::byte> prefix;
+  std::size_t prefix_pos = 0;
 };
 
 void destroy_source_context(gpointer data, GClosure *) {
@@ -220,13 +252,25 @@ gint64 source_read(VipsSourceCustom *, void *buffer, gint64 length,
     return -1;
   }
   const auto requested = static_cast<std::size_t>(length);
+  auto *out = static_cast<std::byte *>(buffer);
+  std::size_t copied = 0;
+  if (context->prefix_pos < context->prefix.size()) {
+    const std::size_t available = context->prefix.size() - context->prefix_pos;
+    const std::size_t take = std::min(available, requested);
+    std::memcpy(out, context->prefix.data() + context->prefix_pos, take);
+    context->prefix_pos += take;
+    copied = take;
+  }
+  if (copied == requested) {
+    return static_cast<gint64>(copied);
+  }
   auto read = context->stream->read(
-      std::span<std::byte>(static_cast<std::byte *>(buffer), requested));
+      std::span<std::byte>(out + copied, requested - copied));
   if (!read) {
     context->failed = true;
     return -1;
   }
-  return static_cast<gint64>(*read);
+  return static_cast<gint64>(copied + *read);
 }
 
 struct TargetContext {
@@ -424,14 +468,14 @@ struct ImageStreamer::Impl : std::enable_shared_from_this<ImageStreamer::Impl> {
 
   ProcessResult process_streaming(
       const std::shared_ptr<StreamSession> &session, const std::string &url,
-      const std::string &mime_type, const ImageStreamOptions &options,
-      const std::string &etag, Clock::time_point deadline,
+      const ImageStreamOptions &options, const std::string &etag,
+      Clock::time_point deadline,
       std::function<void(const drogon::HttpResponsePtr &)> callback);
 
   ProcessResult process_temp(
       const std::shared_ptr<StreamSession> &session, const std::string &url,
-      const std::string &mime_type, const ImageStreamOptions &options,
-      const std::string &etag, Clock::time_point deadline,
+      const ImageStreamOptions &options, const std::string &etag,
+      Clock::time_point deadline,
       std::function<void(const drogon::HttpResponsePtr &)> callback);
 
   void respond_ok(
@@ -440,17 +484,11 @@ struct ImageStreamer::Impl : std::enable_shared_from_this<ImageStreamer::Impl> {
       std::string etag,
       const std::function<void(const drogon::HttpResponsePtr &)> &callback);
 
-  void respond_temp_ok(
-      const std::shared_ptr<StreamSession> &session, TempFilePtr temp,
-      const std::string &mime_type, const ImageStreamOptions &options,
-      std::string etag,
-      const std::function<void(const drogon::HttpResponsePtr &)> &callback);
-
   // 在 IO 线程构造流式 AVIF 响应，随后在独立 pump 线程里编码。
   void respond_avif_stream(
       const std::shared_ptr<StreamSession> &session, VipsImagePtr image,
       VipsSourcePtr source, TempFilePtr temp, ImageStreamOptions options,
-      std::string etag, Clock::time_point deadline,
+      std::string etag, Clock::time_point deadline, bool animated,
       const std::function<void(const drogon::HttpResponsePtr &)> &callback);
 
   // 302 模式下把上游内容地址交给客户端直连。
@@ -474,13 +512,10 @@ struct ImageStreamer::Impl : std::enable_shared_from_this<ImageStreamer::Impl> {
   void pump(const std::shared_ptr<StreamSession> &session,
             drogon::ResponseStreamPtr stream);
 
-  void pump_temp(const std::shared_ptr<StreamSession> &session, TempFilePtr temp,
-                 drogon::ResponseStreamPtr stream);
-
   void pump_avif(const std::shared_ptr<StreamSession> &session,
                  VipsImagePtr image, VipsSourcePtr source, TempFilePtr temp,
                  ImageStreamOptions options, Clock::time_point deadline,
-                 drogon::ResponseStreamPtr stream);
+                 bool animated, drogon::ResponseStreamPtr stream);
 
   void finish(const std::shared_ptr<StreamSession> &session);
 
@@ -785,11 +820,6 @@ void ImageStreamer::Impl::resolve(
   }
 
   const std::string mime_type = media_type(source->content_type());
-  if (!mime_type.empty() && !is_image_mime(mime_type)) {
-    fail(session, options, drogon::k502BadGateway, "STORAGE_INVALID_RESPONSE",
-         "storage service did not return an image", false, callback);
-    return;
-  }
   const auto content_length = source->content_length();
   if (content_length && *content_length > kMaxImageBytes) {
     fail(session, options, drogon::k413RequestEntityTooLarge, "IMAGE_TOO_LARGE",
@@ -814,11 +844,10 @@ void ImageStreamer::Impl::resolve(
     return;
   }
 
-  auto result = process_streaming(session, url, mime_type, options, etag,
-                                  deadline, callback);
+  auto result = process_streaming(session, url, options, etag, deadline,
+                                  callback);
   if (result == ProcessResult::Fallback) {
-    result = process_temp(session, url, mime_type, options, etag, deadline,
-                          callback);
+    result = process_temp(session, url, options, etag, deadline, callback);
   }
   if (result == ProcessResult::Retry) {
     if (stop_if_cancelled()) {
@@ -836,8 +865,8 @@ void ImageStreamer::Impl::resolve(
 
 ImageStreamer::Impl::ProcessResult ImageStreamer::Impl::process_streaming(
     const std::shared_ptr<StreamSession> &session, const std::string &url,
-    const std::string &mime_type, const ImageStreamOptions &options,
-    const std::string &etag, Clock::time_point deadline,
+    const ImageStreamOptions &options, const std::string &etag,
+    Clock::time_point deadline,
     std::function<void(const drogon::HttpResponsePtr &)> callback) {
   if (session->context->cancelled()) {
     return ProcessResult::TimedOut;
@@ -863,9 +892,33 @@ ImageStreamer::Impl::ProcessResult ImageStreamer::Impl::process_streaming(
                         destroy_source_context, G_CONNECT_DEFAULT);
   VipsSourcePtr source(raw_source, VipsSourceDeleter{});
 
-  VipsImage *raw_image =
-      vips_image_new_from_source(source.get(), "",
-                                 "access", VIPS_ACCESS_SEQUENTIAL, nullptr);
+  // 先读文件头嗅探真实格式；预读的字节由 source_read 回放给 libvips。
+  std::array<std::byte, kSniffBytes> probe{};
+  std::size_t probed = 0;
+  while (probed < probe.size()) {
+    auto read = context->stream->read(std::span<std::byte>(
+        probe.data() + probed, probe.size() - probed));
+    if (!read || *read == 0) {
+      break;
+    }
+    probed += *read;
+  }
+  if (probed > 0) {
+    context->prefix.assign(probe.begin(),
+                           probe.begin() + static_cast<std::ptrdiff_t>(probed));
+  }
+  const std::string load_mime = sniff_image_mime(
+      reinterpret_cast<const std::uint8_t *>(probe.data()), probed);
+
+  // GIF / WebP 可能有多帧；按多页加载，动图直接复用这次下载。
+  VipsImage *raw_image = nullptr;
+  if (mime_supports_multipage_load(load_mime)) {
+    raw_image = vips_image_new_from_source(
+        source.get(), "", "access", VIPS_ACCESS_SEQUENTIAL, "n", -1, nullptr);
+  } else {
+    raw_image = vips_image_new_from_source(
+        source.get(), "", "access", VIPS_ACCESS_SEQUENTIAL, nullptr);
+  }
   if (raw_image == nullptr) {
     log_vips_error("sequential source probe failed");
     if (session->context->cancelled()) {
@@ -885,44 +938,42 @@ ImageStreamer::Impl::ProcessResult ImageStreamer::Impl::process_streaming(
     return ProcessResult::Fallback;
   }
 
-  if (image_is_animated(image.get(), mime_type)) {
-    reset_session_image(session);
-    std::shared_ptr<HttpByteStream> old = session_stream(session);
-    {
-      std::lock_guard lock(mutex);
-      session->stream.reset();
-    }
-    if (old) {
-      old->cancel();
-    }
-
-    if (mode == ImageStreamMode::Redirect) {
-      auto self = shared_from_this();
-      post([self, session, url, callback = std::move(callback)]() mutable {
-        self->respond_redirect(session, url, callback);
-      });
+  if (image_is_animated(image.get())) {
+    const int pages = vips_image_get_n_pages(image.get());
+    const int page_height = vips_image_get_page_height(image.get());
+    const auto total_pixels = static_cast<std::uint64_t>(width) *
+                              static_cast<std::uint64_t>(page_height) *
+                              static_cast<std::uint64_t>(pages);
+    if (pages <= 0 || page_height <= 0 ||
+        static_cast<std::uint64_t>(pages) > processing.animated_max_frames ||
+        total_pixels > processing.animated_max_total_pixels) {
+      fail(session, options, drogon::k413RequestEntityTooLarge,
+           "IMAGE_TOO_LARGE", "animated image exceeds the size limit", false,
+           callback);
       return ProcessResult::Done;
     }
 
-    auto opened = HttpByteStream::open(url);
-    if (!opened) {
-      return ProcessResult::Retry;
-    }
-    auto stream = std::shared_ptr<HttpByteStream>(std::move(*opened));
     {
       std::lock_guard lock(mutex);
-      session->stream = stream;
+      session->image = image;
+      session->source = source;
     }
-    if (!stream->wait_started()) {
-      return ProcessResult::Retry;
+
+    if (!acquire_encode_slot(session, deadline)) {
+      stop_session(session, options, callback);
+      return ProcessResult::Done;
     }
     if (session->context->cancelled()) {
-      return ProcessResult::TimedOut;
+      stop_session(session, options, callback);
+      return ProcessResult::Done;
     }
+
     auto self = shared_from_this();
-    post([self, session, mime_type, options, etag,
+    post([self, session, image, source, temp = TempFilePtr(),
+          options = options, etag = etag, deadline,
           callback = std::move(callback)]() mutable {
-      self->respond_ok(session, mime_type, options, etag, callback);
+      self->respond_avif_stream(session, image, source, temp, options, etag,
+                                deadline, true, callback);
     });
     return ProcessResult::Done;
   }
@@ -956,15 +1007,15 @@ ImageStreamer::Impl::ProcessResult ImageStreamer::Impl::process_streaming(
         options = options, etag = etag, deadline,
         callback = std::move(callback)]() mutable {
     self->respond_avif_stream(session, image, source, temp, options, etag,
-                              deadline, callback);
+                              deadline, false, callback);
   });
   return ProcessResult::Done;
 }
 
 ImageStreamer::Impl::ProcessResult ImageStreamer::Impl::process_temp(
     const std::shared_ptr<StreamSession> &session, const std::string &url,
-    const std::string &mime_type, const ImageStreamOptions &options,
-    const std::string &etag, Clock::time_point deadline,
+    const ImageStreamOptions &options, const std::string &etag,
+    Clock::time_point deadline,
     std::function<void(const drogon::HttpResponsePtr &)> callback) {
   if (session->context->cancelled()) {
     return ProcessResult::TimedOut;
@@ -1086,8 +1137,27 @@ ImageStreamer::Impl::ProcessResult ImageStreamer::Impl::process_temp(
   }
   source.reset();
 
-  VipsImage *raw_image = vips_image_new_from_file(
-      temp->path().c_str(), "access", VIPS_ACCESS_SEQUENTIAL, nullptr);
+  std::string load_mime;
+  {
+    std::ifstream probe(temp->path(), std::ios::binary);
+    if (probe) {
+      std::array<char, kSniffBytes> head{};
+      probe.read(head.data(), static_cast<std::streamsize>(head.size()));
+      const auto got = static_cast<std::size_t>(probe.gcount());
+      load_mime = sniff_image_mime(
+          reinterpret_cast<const std::uint8_t *>(head.data()), got);
+    }
+  }
+
+  VipsImage *raw_image = nullptr;
+  if (mime_supports_multipage_load(load_mime)) {
+    raw_image = vips_image_new_from_file(temp->path().c_str(), "access",
+                                         VIPS_ACCESS_SEQUENTIAL, "n", -1,
+                                         nullptr);
+  } else {
+    raw_image = vips_image_new_from_file(
+        temp->path().c_str(), "access", VIPS_ACCESS_SEQUENTIAL, nullptr);
+  }
   if (raw_image == nullptr) {
     log_vips_error("temp file decode failed");
     fail(session, options, drogon::k500InternalServerError,
@@ -1111,18 +1181,41 @@ ImageStreamer::Impl::ProcessResult ImageStreamer::Impl::process_temp(
     return ProcessResult::Done;
   }
 
-  if (image_is_animated(image.get(), mime_type)) {
-    if (mode == ImageStreamMode::Redirect) {
-      auto self = shared_from_this();
-      post([self, session, url, callback = std::move(callback)]() mutable {
-        self->respond_redirect(session, url, callback);
-      });
+  if (image_is_animated(image.get())) {
+    const int pages = vips_image_get_n_pages(image.get());
+    const int page_height = vips_image_get_page_height(image.get());
+    const auto total_pixels = static_cast<std::uint64_t>(width) *
+                              static_cast<std::uint64_t>(page_height) *
+                              static_cast<std::uint64_t>(pages);
+    if (pages <= 0 || page_height <= 0 ||
+        static_cast<std::uint64_t>(pages) > processing.animated_max_frames ||
+        total_pixels > processing.animated_max_total_pixels) {
+      fail(session, options, drogon::k413RequestEntityTooLarge,
+           "IMAGE_TOO_LARGE", "animated image exceeds the size limit", false,
+           callback);
       return ProcessResult::Done;
     }
+
+    {
+      std::lock_guard lock(mutex);
+      session->image = image;
+      session->source.reset();
+    }
+
+    if (!acquire_encode_slot(session, deadline)) {
+      stop_session(session, options, callback);
+      return ProcessResult::Done;
+    }
+    if (session->context->cancelled()) {
+      stop_session(session, options, callback);
+      return ProcessResult::Done;
+    }
+
     auto self = shared_from_this();
-    post([self, session, temp, mime_type, options, etag,
+    post([self, session, image, temp, options = options, etag = etag, deadline,
           callback = std::move(callback)]() mutable {
-      self->respond_temp_ok(session, temp, mime_type, options, etag, callback);
+      self->respond_avif_stream(session, image, VipsSourcePtr(), temp, options,
+                                etag, deadline, true, callback);
     });
     return ProcessResult::Done;
   }
@@ -1155,7 +1248,7 @@ ImageStreamer::Impl::ProcessResult ImageStreamer::Impl::process_temp(
   post([self, session, image, temp, options = options, etag = etag, deadline,
         callback = std::move(callback)]() mutable {
     self->respond_avif_stream(session, image, VipsSourcePtr(), temp, options,
-                              etag, deadline, callback);
+                              etag, deadline, false, callback);
   });
   return ProcessResult::Done;
 }
@@ -1199,48 +1292,10 @@ void ImageStreamer::Impl::respond_ok(
   callback(response);
 }
 
-void ImageStreamer::Impl::respond_temp_ok(
-    const std::shared_ptr<StreamSession> &session, TempFilePtr temp,
-    const std::string &mime_type, const ImageStreamOptions &options,
-    std::string etag,
-    const std::function<void(const drogon::HttpResponsePtr &)> &callback) {
-  if (session->context->cancelled()) {
-    stop_session(session, options, callback);
-    return;
-  }
-  const std::string content_type =
-      mime_type.empty() ? "application/octet-stream" : mime_type;
-
-  auto self = shared_from_this();
-  auto response = drogon::HttpResponse::newAsyncStreamResponse(
-      [self, session, temp](drogon::ResponseStreamPtr stream) {
-        self->pump_temp(session, temp, std::move(stream));
-      });
-  response->setStatusCode(drogon::k200OK);
-  response->setContentTypeString(content_type);
-  response->addHeader("Content-Disposition",
-                      content_disposition(session->image_id, mime_type,
-                                          options.download));
-  response->addHeader("ETag", etag);
-  response->addHeader("Cache-Control", "private, max-age=3600");
-  response->addHeader("X-Content-Type-Options", "nosniff");
-
-  drogon::app().getLoop()->runAfter(kStartTimeoutSeconds, [self, session] {
-    bool expected = false;
-    if (!session->started.compare_exchange_strong(expected, true)) {
-      return;
-    }
-    session->context->cancel(CancelReason::ClientClosed);
-    self->finish(session);
-  });
-
-  callback(response);
-}
-
 void ImageStreamer::Impl::respond_avif_stream(
     const std::shared_ptr<StreamSession> &session, VipsImagePtr image,
     VipsSourcePtr source, TempFilePtr temp, ImageStreamOptions options,
-    std::string etag, Clock::time_point deadline,
+    std::string etag, Clock::time_point deadline, bool animated,
     const std::function<void(const drogon::HttpResponsePtr &)> &callback) {
   if (session->context->cancelled()) {
     stop_session(session, options, callback);
@@ -1248,10 +1303,10 @@ void ImageStreamer::Impl::respond_avif_stream(
   }
   auto self = shared_from_this();
   auto response = drogon::HttpResponse::newAsyncStreamResponse(
-      [self, session, image, source, temp, options, deadline](
+      [self, session, image, source, temp, options, deadline, animated](
           drogon::ResponseStreamPtr stream) mutable {
         self->pump_avif(session, image, source, temp, options, deadline,
-                        std::move(stream));
+                        animated, std::move(stream));
       });
   response->setStatusCode(drogon::k200OK);
   response->setContentTypeString("image/avif");
@@ -1356,43 +1411,11 @@ void ImageStreamer::Impl::pump(const std::shared_ptr<StreamSession> &session,
   }).detach();
 }
 
-void ImageStreamer::Impl::pump_temp(
-    const std::shared_ptr<StreamSession> &session, TempFilePtr temp,
-    drogon::ResponseStreamPtr stream) {
-  session->started.store(true, std::memory_order_relaxed);
-
-  auto self = shared_from_this();
-  std::thread([self, session, temp = std::move(temp),
-               stream = std::move(stream)]() mutable {
-    std::ifstream file(temp->path(), std::ios::binary);
-    if (!file) {
-      stream->close();
-      self->finish(session);
-      return;
-    }
-    std::array<char, kChunkBytes> buffer{};
-    while (file && !session->context->cancelled()) {
-      file.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
-      const auto count = file.gcount();
-      if (count <= 0) {
-        break;
-      }
-      if (!stream->send(std::string(buffer.data(),
-                                    static_cast<std::size_t>(count)))) {
-        session->context->cancel(CancelReason::ClientClosed);
-        break;
-      }
-    }
-    stream->close();
-    stream.reset();
-    self->finish(session);
-  }).detach();
-}
-
 void ImageStreamer::Impl::pump_avif(
     const std::shared_ptr<StreamSession> &session, VipsImagePtr image,
     VipsSourcePtr source, TempFilePtr temp, ImageStreamOptions options,
-    Clock::time_point deadline, drogon::ResponseStreamPtr stream) {
+    Clock::time_point deadline, bool animated,
+    drogon::ResponseStreamPtr stream) {
   session->started.store(true, std::memory_order_relaxed);
 
   const std::string suffix = avif_save_options(processing);
@@ -1404,7 +1427,7 @@ void ImageStreamer::Impl::pump_avif(
   }
   std::thread([self, session, image = std::move(image),
                source = std::move(source), temp = std::move(temp),
-               options = std::move(options), deadline, suffix,
+               options = std::move(options), deadline, animated, suffix,
                stream = std::move(stream)]() mutable {
     const auto now = Clock::now();
     if (now >= deadline) {
@@ -1417,6 +1440,39 @@ void ImageStreamer::Impl::pump_avif(
     TimeoutGuard guard(deadline - now, [session] {
       session->context->cancel(CancelReason::Timeout);
     });
+
+    // 动图走 libheif 序列编码：保留每帧时长和循环次数，逐块写出。
+    if (animated) {
+      AnimatedAvifConfig config;
+      config.quality = self->processing.animated_quality;
+      config.speed = self->processing.animated_speed;
+      const int target = preset_dimension(options.preset);
+      config.max_dimension =
+          target > 0 ? static_cast<std::uint32_t>(target) : 0;
+      config.max_frames = self->processing.animated_max_frames;
+      config.max_total_pixels = self->processing.animated_max_total_pixels;
+      config.max_output_bytes = self->processing.animated_max_output_bytes;
+
+      auto *stream_ptr = stream.get();
+      const auto result = encode_animated_avif(
+          image.get(), config,
+          [session] { return session->context->cancelled(); },
+          [stream_ptr](const void *data, std::size_t size) {
+            return stream_ptr->send(
+                std::string(static_cast<const char *>(data), size));
+          });
+      if (result != AnimatedAvifError::None) {
+        std::cerr << "animated avif encoding failed: " << to_string(result)
+                  << std::endl;
+        if (result == AnimatedAvifError::SinkFailed) {
+          session->context->cancel(CancelReason::ClientClosed);
+        }
+      }
+      stream->close();
+      stream.reset();
+      self->finish(session);
+      return;
+    }
 
     const int dimension = preset_dimension(options.preset);
     VipsImage *thumbnail_raw = nullptr;

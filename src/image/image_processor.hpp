@@ -35,11 +35,18 @@ struct ImageProcessingConfig {
   std::uint64_t max_pixels = 100'000'000;
   // 单个转码任务从开始处理到结束的时间上限。
   std::uint32_t timeout_seconds = 30;
+  // 动图编码参数。quality/speed 已由配置层解析成具体值；speed 为
+  // 0-9 且越大越快，与静态图的 imageSpeed 含义一致。
+  std::uint32_t animated_quality = 65;
+  std::uint32_t animated_speed = 6;
+  std::uint32_t animated_max_frames = 300;
+  std::uint64_t animated_max_total_pixels = 300'000'000;
+  std::uint64_t animated_max_output_bytes = 50 * 1024 * 1024;
 };
 
 [[nodiscard]] int preset_dimension(ImageSizePreset preset) noexcept;
 
-// heifsave 的选项串，例如 ".avif[Q=65,effort=6]"。
+// heifsave 的选项串，例如 ".avif[Q=65,effort=4]"。
 [[nodiscard]] std::string
 avif_save_options(const ImageProcessingConfig &config);
 

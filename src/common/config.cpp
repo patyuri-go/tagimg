@@ -221,6 +221,53 @@ Result<AppConfig, ConfigError> load_config(const std::filesystem::path &path) {
       }
       config.http.image_max_pixels = static_cast<std::uint64_t>(value);
     }
+
+    const auto read_optional_http_integer =
+        [&http](const char *key, long long minimum, long long maximum,
+                std::optional<std::uint32_t> &output)
+        -> std::optional<ConfigError> {
+      const auto it = http->find(key);
+      if (it == http->end()) {
+        return std::nullopt;
+      }
+      if (!it->is_number_integer()) {
+        return ConfigError::InvalidField;
+      }
+      const auto value = it->get<long long>();
+      if (value < minimum || value > maximum) {
+        return ConfigError::InvalidField;
+      }
+      output = static_cast<std::uint32_t>(value);
+      return std::nullopt;
+    };
+
+    if (const auto error = read_optional_http_integer(
+            "imageAnimatedQuality", 1, 100,
+            config.http.image_animated_quality)) {
+      return *error;
+    }
+    if (const auto error = read_optional_http_integer(
+            "imageAnimatedSpeed", 0, 9, config.http.image_animated_speed)) {
+      return *error;
+    }
+    if (const auto error =
+            read_http_integer("imageAnimatedMaxFrames", 1, 10000,
+                              config.http.image_animated_max_frames)) {
+      return *error;
+    }
+
+    const auto animated_pixels = http->find("imageAnimatedMaxTotalPixels");
+    if (animated_pixels != http->end()) {
+      if (!animated_pixels->is_number_integer()) {
+        return ConfigError::InvalidField;
+      }
+      const auto value = animated_pixels->get<long long>();
+      if (value < 1 || value > 10'000'000'000LL) {
+        return ConfigError::InvalidField;
+      }
+      config.http.image_animated_max_total_pixels =
+          static_cast<std::uint64_t>(value);
+    }
   }
 
   // ai 段是必填项：wd14_threshold 没有可接受的隐式默认值。

@@ -547,8 +547,8 @@ void ApiService::handle_schema(
   resource["description"] =
       "按图片 ID 返回图片；size=original 时 proxy 模式流式返回原始字节、"
       "redirect 模式返回 302 指向存储服务的内容地址；其他 size 预设由"
-      "服务端等比缩放并编码为 AVIF。动图（GIF、动态 WebP、APNG、AVIF "
-      "序列）忽略 size，按 imageMode 返回原图。";
+      "服务端等比缩放并编码为 AVIF。GIF 和动态 WebP 会保留动画帧并转码为"
+      "动图 AVIF；APNG 等多帧格式无法通过 libvips 解码，按首帧静态图处理。";
   resource["body"] = "binary";
   resource["parameters"] = Json::array(
       {{{"name", "size"},
@@ -560,8 +560,8 @@ void ApiService::handle_schema(
         {"default", "regular"},
         {"description",
          "输出尺寸预设：mini 48px、thumb 250px、small 540px、regular 长边 "
-         "1200px、original 原始字节；非 original 静态图转码为 AVIF，动图"
-         "始终返回原图"}},
+         "1200px、original 原始字节；除 original 外均转码为 AVIF，动图保留"
+         "动画（APNG 仅首帧）"}},
        {{"name", "download"},
         {"in", "query"},
         {"required", false},

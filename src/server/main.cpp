@@ -168,6 +168,15 @@ int main() {
   image_processing.max_concurrency = config->http.image_max_concurrency;
   image_processing.max_pixels = config->http.image_max_pixels;
   image_processing.timeout_seconds = config->http.image_timeout_seconds;
+  image_processing.animated_quality =
+      config->http.image_animated_quality.value_or(
+          config->http.image_quality);
+  image_processing.animated_speed =
+      config->http.image_animated_speed.value_or(config->http.image_speed);
+  image_processing.animated_max_frames =
+      config->http.image_animated_max_frames;
+  image_processing.animated_max_total_pixels =
+      config->http.image_animated_max_total_pixels;
 
   // 图片流管理器要活到 Drogon 停止之后，因此声明在 service 之前。
   auto connection_registry = std::make_shared<tagimg::ConnectionRegistry>();

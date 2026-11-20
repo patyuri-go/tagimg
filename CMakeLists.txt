@@ -29,6 +29,9 @@ endif()
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(VIPS REQUIRED IMPORTED_TARGET vips)
 
+# 动图 AVIF 序列编码需要直接调用 libheif（vips 的 heifsave 不写帧时长/循环）。
+find_package(libheif CONFIG REQUIRED)
+
 add_library(tagimg_ai STATIC
     src/ai/clip_embedder.cpp
     src/ai/health.cpp
@@ -126,6 +129,7 @@ target_link_libraries(tagimg_io PUBLIC
 )
 
 add_library(tagimg_image STATIC
+    src/image/animated_avif.cpp
     src/image/image_metadata.cpp
     src/image/image_processor.cpp
 )
@@ -134,6 +138,7 @@ target_include_directories(tagimg_image PUBLIC
 )
 target_link_libraries(tagimg_image PUBLIC
     PkgConfig::VIPS
+    heif
 )
 
 add_library(tagimg_job STATIC
@@ -230,6 +235,13 @@ add_executable(tagimg_vips_smoke
     tools/vips_smoke.cpp
 )
 target_link_libraries(tagimg_vips_smoke PRIVATE
+    tagimg_image
+)
+
+add_executable(tagimg_animated_avif_smoke
+    tools/animated_avif_smoke.cpp
+)
+target_link_libraries(tagimg_animated_avif_smoke PRIVATE
     tagimg_image
 )
 

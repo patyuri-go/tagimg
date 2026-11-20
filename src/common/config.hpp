@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -32,7 +33,8 @@ struct HttpConfig {
   std::uint16_t port = 8080;
   // 缺省为服务端代理，保证旧配置文件行为不变。
   ImageStreamMode image_mode = ImageStreamMode::Proxy;
-  // AVIF 编码参数；具体含义见 ImageProcessingConfig。
+  // AVIF 编码参数：quality 为 1-100，speed 为 0-9 且越大越快
+  // （0 最慢、9 最快），与 imageAnimatedSpeed 语义一致。
   std::uint32_t image_quality = 65;
   std::uint32_t image_speed = 6;
   // 同时进行的转码任务数上限；libvips 内部固定单线程。
@@ -41,6 +43,12 @@ struct HttpConfig {
   std::uint64_t image_max_pixels = 100'000'000;
   // 单个图片转码任务的超时时间，从拿到 worker 开始计算。
   std::uint32_t image_timeout_seconds = 30;
+  // 动图（GIF / 动图 WebP）转码参数。
+  // quality/speed 为空时分别继承 image_quality / image_speed。
+  std::optional<std::uint32_t> image_animated_quality;
+  std::optional<std::uint32_t> image_animated_speed;
+  std::uint32_t image_animated_max_frames = 300;
+  std::uint64_t image_animated_max_total_pixels = 300'000'000;
 };
 
 // Python 推理服务（sidecar）的启动参数。
