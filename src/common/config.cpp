@@ -1,9 +1,12 @@
 #include "common/config.hpp"
 
 #include <cmath>
+#include <cctype>
 #include <fstream>
 #include <iterator>
+#include <limits>
 #include <optional>
+#include <string_view>
 #include <system_error>
 
 #include <nlohmann/json.hpp>
@@ -21,6 +24,69 @@ bool read_required_string(const Json &object, const char *key,
   }
   output = it->get<std::string>();
   return allow_empty || !output.empty();
+}
+
+// 解析 "2G" / "512MB" / 1024 这类容量写法。K/M/G/T 均按 1024 进制。
+std::optional<std::uint64_t> parse_readable_size(std::string_view text) {
+  while (!text.empty() &&
+         std::isspace(static_cast<unsigned char>(text.front())) != 0) {
+    text.remove_prefix(1);
+  }
+  while (!text.empty() &&
+         std::isspace(static_cast<unsigned char>(text.back())) != 0) {
+    text.remove_suffix(1);
+  }
+  if (text.empty()) {
+    return std::nullopt;
+  }
+
+  std::uint64_t value = 0;
+  std::size_t index = 0;
+  bool has_digit = false;
+  for (; index < text.size(); ++index) {
+    const unsigned char ch = static_cast<unsigned char>(text[index]);
+    if (std::isdigit(ch) == 0) {
+      break;
+    }
+    has_digit = true;
+    const std::uint64_t digit = static_cast<std::uint64_t>(ch - '0');
+    if (value > (std::numeric_limits<std::uint64_t>::max() - digit) / 10) {
+      return std::nullopt;
+    }
+    value = value * 10 + digit;
+  }
+  if (!has_digit) {
+    return std::nullopt;
+  }
+
+  std::string suffix;
+  for (; index < text.size(); ++index) {
+    const unsigned char ch = static_cast<unsigned char>(text[index]);
+    if (std::isspace(ch) != 0) {
+      continue;
+    }
+    suffix.push_back(static_cast<char>(std::tolower(ch)));
+  }
+
+  std::uint64_t multiplier = 1;
+  if (suffix.empty() || suffix == "b") {
+    multiplier = 1;
+  } else if (suffix == "k" || suffix == "kb" || suffix == "kib") {
+    multiplier = 1024ULL;
+  } else if (suffix == "m" || suffix == "mb" || suffix == "mib") {
+    multiplier = 1024ULL * 1024;
+  } else if (suffix == "g" || suffix == "gb" || suffix == "gib") {
+    multiplier = 1024ULL * 1024 * 1024;
+  } else if (suffix == "t" || suffix == "tb" || suffix == "tib") {
+    multiplier = 1024ULL * 1024 * 1024 * 1024;
+  } else {
+    return std::nullopt;
+  }
+
+  if (value > std::numeric_limits<std::uint64_t>::max() / multiplier) {
+    return std::nullopt;
+  }
+  return value * multiplier;
 }
 
 } // namespace
@@ -426,6 +492,72 @@ Result<AppConfig, ConfigError> load_config(const std::filesystem::path &path) {
     }
   } else {
     return ConfigError::MissingField;
+  }
+
+  // cache 段可省略；省略时缓存层禁用。写了就逐项校验。
+  const auto cache = root.find("cache");
+  if (cache != root.end()) {
+    if (!cache->is_object()) {
+      return ConfigError::InvalidField;
+    }
+    config.cache.enabled = true;
+
+    const auto enabled = cache->find("enabled");
+    if (enabled != cache->end()) {
+      if (!enabled->is_boolean()) {
+        return ConfigError::InvalidField;
+      }
+      config.cache.enabled = enabled->get<bool>();
+    }
+
+    const auto directory = cache->find("directory");
+    if (directory != cache->end()) {
+      if (!directory->is_string()) {
+        return ConfigError::InvalidField;
+      }
+      const std::string value = directory->get<std::string>();
+      if (value.empty()) {
+        return ConfigError::MissingField;
+      }
+      config.cache.directory = value;
+    }
+
+    const auto max_size = cache->find("maxSize");
+    if (max_size != cache->end()) {
+      if (max_size->is_string()) {
+        const auto parsed =
+            parse_readable_size(max_size->get<std::string>());
+        if (!parsed) {
+          return ConfigError::InvalidField;
+        }
+        config.cache.max_bytes = *parsed;
+      } else if (max_size->is_number_integer()) {
+        const auto value = max_size->get<long long>();
+        if (value < 0) {
+          return ConfigError::InvalidField;
+        }
+        config.cache.max_bytes = static_cast<std::uint64_t>(value);
+      } else {
+        return ConfigError::InvalidField;
+      }
+    }
+
+    const auto reconcile = cache->find("reconcileOnOpen");
+    if (reconcile != cache->end()) {
+      if (!reconcile->is_boolean()) {
+        return ConfigError::InvalidField;
+      }
+      config.cache.reconcile_on_open = reconcile->get<bool>();
+    }
+
+    // 与 AI 路径一致：相对路径按配置文件所在目录解析。
+    if (config.cache.directory.is_relative()) {
+      auto base = path.parent_path();
+      if (base.empty()) {
+        base = std::filesystem::path(".");
+      }
+      config.cache.directory = base / config.cache.directory;
+    }
   }
 
   return config;

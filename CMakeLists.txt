@@ -15,10 +15,20 @@ find_package(cppgraphqlgen CONFIG REQUIRED)
 find_package(Drogon CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(pugixml CONFIG REQUIRED)
-find_package(SOCI 4.1 COMPONENTS PostgreSQL CONFIG REQUIRED)
+# Drogon 的 FindSQLite3.cmake 只创建 SQLite3_lib，而 SOCI 的 SQLite3
+# 组件要求 SQLite::SQLite3。这里先解析并补齐该 target。
+find_package(SQLite3 REQUIRED)
+if(NOT TARGET SQLite::SQLite3)
+    find_library(TAGIMG_SQLITE3_LIBRARY NAMES sqlite3 REQUIRED)
+    add_library(SQLite::SQLite3 UNKNOWN IMPORTED)
+    set_target_properties(SQLite::SQLite3 PROPERTIES
+        IMPORTED_LOCATION "${TAGIMG_SQLITE3_LIBRARY}")
+endif()
+find_package(SOCI 4.1 COMPONENTS PostgreSQL SQLite3 CONFIG REQUIRED)
 find_package(spdlog CONFIG REQUIRED)
 find_package(GTest CONFIG REQUIRED)
 find_package(CURL REQUIRED)
+find_package(OpenSSL REQUIRED)
 find_package(Threads REQUIRED)
 
 # vcpkg 的 libvips 只安装 pkg-config 文件，没有 CMake config。
@@ -87,6 +97,7 @@ target_link_libraries(tagimg_config PUBLIC
 )
 
 add_library(tagimg_common STATIC
+    src/common/image_size.cpp
     src/common/storage.cpp
     src/common/uuid.cpp
     src/common/validation.cpp
@@ -137,8 +148,29 @@ target_include_directories(tagimg_image PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 target_link_libraries(tagimg_image PUBLIC
+    tagimg_common
     PkgConfig::VIPS
     heif
+)
+
+add_library(tagimg_cache STATIC
+    src/cache/image_cache_key.cpp
+    src/cache/image_cache_object.cpp
+    src/cache/image_cache_store.cpp
+)
+target_include_directories(tagimg_cache PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+target_link_libraries(tagimg_cache PUBLIC
+    tagimg_common
+    tagimg_config
+    SOCI::Core
+    SOCI::SQLite3
+    # SOCI 的组件配置在 SQLite::SQLite3 已存在时不会把它追加进
+    # SOCI::SQLite3 的链接接口，这里显式补上。
+    SQLite::SQLite3
+    OpenSSL::Crypto
+    Threads::Threads
 )
 
 add_library(tagimg_job STATIC
@@ -243,6 +275,14 @@ add_executable(tagimg_animated_avif_smoke
 )
 target_link_libraries(tagimg_animated_avif_smoke PRIVATE
     tagimg_image
+)
+
+add_executable(tagimg_cache_smoke
+    tools/cache_smoke.cpp
+)
+target_link_libraries(tagimg_cache_smoke PRIVATE
+    tagimg_cache
+    tagimg_config
 )
 
 message(STATUS "tagimg: C++ dependencies resolved")

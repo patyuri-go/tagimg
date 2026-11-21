@@ -7,23 +7,10 @@
 #include <string_view>
 #include <vector>
 
+#include "common/image_size.hpp"
 #include "common/result.hpp"
 
 namespace tagimg {
-
-// GET /api/v1/image/{imageId}?size=... 支持的输出尺寸。
-enum class ImageSizePreset {
-  Mini,
-  Thumb,
-  Small,
-  Regular,
-  Original,
-};
-
-[[nodiscard]] std::optional<ImageSizePreset>
-parse_image_preset(std::string_view value) noexcept;
-
-[[nodiscard]] std::string_view to_string(ImageSizePreset preset) noexcept;
 
 // AVIF 编码参数。max_concurrency 只限制同时进行的转码任务数，
 // libvips 内部固定为单线程，避免 aom 把整机 CPU 打满。

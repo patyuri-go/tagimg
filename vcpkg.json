@@ -35,12 +35,14 @@
       ]
     },
     "nlohmann-json",
+    "openssl",
     "pugixml",
     {
       "name": "soci",
       "default-features": false,
       "features": [
-        "postgresql"
+        "postgresql",
+        "sqlite3"
       ]
     },
     "spdlog",

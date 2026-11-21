@@ -51,6 +51,17 @@ struct HttpConfig {
   std::uint64_t image_animated_max_total_pixels = 300'000'000;
 };
 
+// 图片缓存层配置。cache 段缺失时 enabled 保持 false。
+struct ImageCacheConfig {
+  bool enabled = false;
+  // 相对路径按配置文件所在目录解析。
+  std::filesystem::path directory = "tmp/images";
+  // 0 表示不限制容量。
+  std::uint64_t max_bytes = 2ULL * 1024 * 1024 * 1024;
+  // open 时是否逐行核对文件并清理孤儿文件。
+  bool reconcile_on_open = true;
+};
+
 // Python 推理服务（sidecar）的启动参数。
 //
 // 相对路径按配置文件所在目录解析。`module` 是 python -m 的模块名。
@@ -96,6 +107,8 @@ struct AppConfig {
   StorageConfig storage;
   // http 段可以省略，省略时使用上面的默认监听地址。
   HttpConfig http;
+  // cache 段可以省略，省略时缓存层禁用。
+  ImageCacheConfig cache;
   // ai 段可以省略，省略时使用上面的默认参数。
   AiConfig ai;
 };
