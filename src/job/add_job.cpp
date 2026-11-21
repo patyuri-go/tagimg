@@ -6,6 +6,7 @@
 #include <utility>
 #include <vector>
 
+#include "job/cache_maintenance.hpp"
 #include "job/scan_job.hpp"
 #include "job/scan_tags.hpp"
 
@@ -88,7 +89,7 @@ StepResult AddJob::step(JobContext &context, const JobRun &run) {
       }
 
       // 已有图片本身就在 images 表中，rescan 时不能按实体查重。
-      auto scan = ScanJob::rescan_entity(context, **entity_id, ai_);
+      auto scan = ScanJob::rescan_entity(context, **entity_id, image_id, ai_);
       if (!scan) {
         failures_.push_back(ScanFailure{**entity_id, scan.error(), image_id});
         continue;
@@ -196,6 +197,9 @@ void AddJob::finish(JobContext &context) {
   result.artwork_id = std::move(saved->artwork_id);
   result.image_ids = std::move(saved->image_ids);
   result.tag_count = best_tags.size();
+  if (image_request_ && image_request_->rescan) {
+    finalize_rescan_cache(context, image_request_->image_ids, result.scans);
+  }
   outcome_ = JobOutcome(std::move(result));
 }
 

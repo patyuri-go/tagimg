@@ -445,16 +445,26 @@ ImageCacheStore::ImageCacheStore(ImageCacheStore &&other) noexcept = default;
 ImageCacheStore &
 ImageCacheStore::operator=(ImageCacheStore &&other) noexcept = default;
 
+bool ImageCacheStore::enabled() const noexcept {
+  return impl_ && impl_->state && impl_->state->enabled;
+}
+
 Result<ImageCacheStore, ImageCacheError>
 ImageCacheStore::open(const ImageCacheConfig &config,
                       const std::filesystem::path &base_dir) {
-  if (!config.enabled) {
-    return ImageCacheError::NotEnabled;
-  }
-
   std::filesystem::path root = config.directory;
   if (root.is_relative()) {
     root = base_dir / root;
+  }
+
+  if (!config.enabled) {
+    auto state = std::make_shared<cache_detail::SharedState>();
+    state->root = root;
+    state->max_bytes = config.max_bytes;
+    state->enabled = false;
+    auto impl = std::make_unique<Impl>();
+    impl->state = std::move(state);
+    return ImageCacheStore(std::move(impl));
   }
 
   std::error_code error;
@@ -470,6 +480,7 @@ ImageCacheStore::open(const ImageCacheConfig &config,
   auto state = std::make_shared<cache_detail::SharedState>();
   state->root = root;
   state->max_bytes = config.max_bytes;
+  state->enabled = true;
 
   try {
     state->sql.open(soci::sqlite3, (root / "index.sqlite3").string());
@@ -511,6 +522,9 @@ ImageCacheStore::find(const ImageCacheKey &key) {
   }
   if (!is_valid_cache_key(key)) {
     return ImageCacheError::InvalidKey;
+  }
+  if (!impl_->state->enabled) {
+    return std::optional<StoredImageCacheObject>{};
   }
 
   const auto state = impl_->state;

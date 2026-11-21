@@ -11,6 +11,7 @@
 #include "ai/health.hpp"
 #include "ai/sidecar_process.hpp"
 #include "ai/tagger.hpp"
+#include "cache/image_cache_store.hpp"
 #include "common/config.hpp"
 #include "db/tagimg_repository.hpp"
 #include "graphql/graphql_service.hpp"
@@ -178,16 +179,35 @@ int main() {
   image_processing.animated_max_total_pixels =
       config->http.image_animated_max_total_pixels;
 
+  // 缓存启用但打不开时直接退出，避免运行期静默失去缓存。
+  std::shared_ptr<tagimg::ImageCacheStore> image_cache;
+  {
+    auto opened = tagimg::ImageCacheStore::open(config->cache, config_dir);
+    if (!opened) {
+      std::cerr << "image cache open failed: "
+                << tagimg::to_string(opened.error()) << std::endl;
+      if (config->cache.enabled) {
+        return 2;
+      }
+    } else {
+      image_cache =
+          std::make_shared<tagimg::ImageCacheStore>(std::move(*opened));
+      if (!image_cache->enabled()) {
+        std::cout << "image cache disabled" << std::endl;
+      }
+    }
+  }
+
   // 图片流管理器要活到 Drogon 停止之后，因此声明在 service 之前。
   auto connection_registry = std::make_shared<tagimg::ConnectionRegistry>();
   auto image_streamer = std::make_shared<tagimg::ImageStreamer>(
       tagimg_repository_shared, config->storage, config->http.image_mode,
-      image_processing, work_dir, connection_registry);
+      image_processing, work_dir, connection_registry, image_cache);
 
   // 扫描任务由 REST 与 GraphQL 共用同一个服务实例。
   auto runtime = std::make_shared<tagimg::ServiceRuntime>(
       config->storage, tagimg_repository_shared, tagger, embedder, work_dir,
-      ai_health);
+      ai_health, image_cache, image_processing);
 
   auto service = std::make_shared<tagimg::ApiService>(runtime);
   auto graphql_service = std::make_shared<tagimg::GraphQLService>(

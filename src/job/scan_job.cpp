@@ -3,10 +3,15 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <filesystem>
+#include <iostream>
 #include <span>
 #include <utility>
 #include <vector>
 
+#include "cache/image_cache_keys.hpp"
+#include "cache/image_cache_object.hpp"
+#include "cache/image_cache_store.hpp"
 #include "common/uuid.hpp"
 #include "image/image_metadata.hpp"
 #include "io/byte_stream.hpp"
@@ -96,6 +101,10 @@ JobError map_metadata_error(ImageMetadataError error) {
 ScanJob::ScanJob(std::string entity_id) : entity_id_(std::move(entity_id)) {
 }
 
+ScanJob::ScanJob(std::string entity_id, std::string image_id)
+    : entity_id_(std::move(entity_id)), image_id_(std::move(image_id)) {
+}
+
 Result<ScanResult, JobError>
 ScanJob::scan_entity(JobContext &context, const std::string &entity_id) {
   AiPreflight ai;
@@ -110,15 +119,16 @@ ScanJob::scan_entity(JobContext &context, const std::string &entity_id,
 }
 
 Result<ScanResult, JobError>
-ScanJob::rescan_entity(JobContext &context, const std::string &entity_id) {
+ScanJob::rescan_entity(JobContext &context, const std::string &entity_id,
+                       const std::string &image_id) {
   AiPreflight ai;
-  return rescan_entity(context, entity_id, ai);
+  return rescan_entity(context, entity_id, image_id, ai);
 }
 
 Result<ScanResult, JobError>
 ScanJob::rescan_entity(JobContext &context, const std::string &entity_id,
-                       AiPreflight &ai) {
-  ScanJob job(entity_id);
+                       const std::string &image_id, AiPreflight &ai) {
+  ScanJob job(entity_id, image_id);
   return job.scan(context, false, ai);
 }
 
@@ -194,9 +204,26 @@ ScanJob::scan_content(JobContext &context) {
     return JobError::ImageTooLarge;
   }
 
-  auto file = TempFile::create(context.work_dir, ".img");
-  if (!file) {
-    return JobError::FileError;
+  // 重扫时优先把下载内容直接写入源缓存；初次扫描没有 image_id，仍用临时文件。
+  std::shared_ptr<StoredImageCacheObject> source_cache;
+  if (image_id_ && context.image_cache && context.image_cache->enabled()) {
+    auto created =
+        context.image_cache->create(make_source_cache_key(*image_id_));
+    if (created) {
+      source_cache = std::make_shared<StoredImageCacheObject>(std::move(*created));
+    } else {
+      std::cerr << "scan job: source cache create failed: "
+                << to_string(created.error()) << '\n';
+    }
+  }
+
+  std::optional<TempFile> file;
+  if (!source_cache) {
+    auto created = TempFile::create(context.work_dir, ".img");
+    if (!created) {
+      return JobError::FileError;
+    }
+    file.emplace(std::move(*created));
   }
 
   // 只缓存前 64KB 用于格式探测；超过后释放，避免整图驻留内存。
@@ -205,6 +232,7 @@ ScanJob::scan_content(JobContext &context) {
   bool probed = false;
 
   std::array<std::byte, kReadBufferSize> buffer{};
+  std::uint64_t bytes = 0;
   while (true) {
     auto chunk = (*stream)->read(buffer);
     if (!chunk) {
@@ -213,11 +241,21 @@ ScanJob::scan_content(JobContext &context) {
     if (*chunk == 0) {
       break;
     }
-    auto written =
-        file->write(std::span<const std::byte>(buffer.data(), *chunk));
-    if (!written) {
-      return JobError::FileError;
+    if (source_cache) {
+      auto &out = source_cache->write();
+      out.write(reinterpret_cast<const char *>(buffer.data()),
+                static_cast<std::streamsize>(*chunk));
+      if (!out.good()) {
+        return JobError::FileError;
+      }
+    } else {
+      auto written =
+          file->write(std::span<const std::byte>(buffer.data(), *chunk));
+      if (!written) {
+        return JobError::FileError;
+      }
     }
+    bytes += *chunk;
 
     if (!probed) {
       const std::size_t remaining = kReadBufferSize - prefix.size();
@@ -248,23 +286,36 @@ ScanJob::scan_content(JobContext &context) {
     }
   }
 
-  auto closed = file->close();
-  if (!closed) {
-    return JobError::FileError;
+  std::filesystem::path read_path;
+  if (source_cache) {
+    const auto flushed = source_cache->flush();
+    if (!flushed) {
+      return JobError::FileError;
+    }
+    read_path = source_cache->temporary_path();
+  } else {
+    auto closed = file->close();
+    if (!closed) {
+      return JobError::FileError;
+    }
+    read_path = file->path();
   }
 
-  auto metadata = read_image_metadata(file->path());
+  auto metadata = read_image_metadata(read_path);
   if (!metadata) {
     return map_metadata_error(metadata.error());
   }
+  if (source_cache && metadata->mime_type) {
+    source_cache->set_content_type(*metadata->mime_type);
+  }
 
-  auto tags = context.tagger.get().tag_file(file->path());
+  auto tags = context.tagger.get().tag_file(read_path);
   if (!tags) {
     return map_tagger_error(tags.error());
   }
 
-  // 复用同一个临时文件生成向量，不重复下载。
-  auto embedding = context.embedder.get().embed_file(file->path());
+  // 复用同一个文件生成向量，不重复下载。
+  auto embedding = context.embedder.get().embed_file(read_path);
   if (!embedding) {
     // CLIP 向量是入库前置条件，缺失直接让整单失败。
     return map_embedder_error(embedding.error());
@@ -272,9 +323,10 @@ ScanJob::scan_content(JobContext &context) {
 
   ScanResult result;
   result.entity_id = entity_id_;
-  result.bytes = file->size();
+  result.bytes = bytes;
   result.tags = std::move(*tags);
   result.metadata = std::move(*metadata);
+  result.source_cache = std::move(source_cache);
   if (embedding) {
     result.embedding = std::move(embedding->values);
   }

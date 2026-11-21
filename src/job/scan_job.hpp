@@ -17,6 +17,9 @@ class ScanJob final : public Job {
 public:
   explicit ScanJob(std::string entity_id);
 
+  // 重扫已有图片：带上 image_id，下载时可直接写入源缓存。
+  ScanJob(std::string entity_id, std::string image_id);
+
   // 扫描实体，并固定检查实体是否已经入库。
   [[nodiscard]] static Result<ScanResult, JobError>
   scan_entity(JobContext &context, const std::string &entity_id);
@@ -28,11 +31,12 @@ public:
 
   // 重新扫描已有图片对应的实体，不检查实体是否已经入库。
   [[nodiscard]] static Result<ScanResult, JobError>
-  rescan_entity(JobContext &context, const std::string &entity_id);
+  rescan_entity(JobContext &context, const std::string &entity_id,
+                const std::string &image_id);
 
   [[nodiscard]] static Result<ScanResult, JobError>
   rescan_entity(JobContext &context, const std::string &entity_id,
-                AiPreflight &ai);
+                const std::string &image_id, AiPreflight &ai);
 
   [[nodiscard]] StepResult step(JobContext &context,
                                 const JobRun &run) override;
@@ -48,6 +52,7 @@ private:
   scan_content(JobContext &context);
 
   std::string entity_id_;
+  std::optional<std::string> image_id_;
   std::optional<Result<ScanResult, JobError>> result_;
 };
 

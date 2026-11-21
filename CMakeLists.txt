@@ -155,6 +155,7 @@ target_link_libraries(tagimg_image PUBLIC
 
 add_library(tagimg_cache STATIC
     src/cache/image_cache_key.cpp
+    src/cache/image_cache_keys.cpp
     src/cache/image_cache_object.cpp
     src/cache/image_cache_store.cpp
 )
@@ -164,6 +165,7 @@ target_include_directories(tagimg_cache PUBLIC
 target_link_libraries(tagimg_cache PUBLIC
     tagimg_common
     tagimg_config
+    tagimg_image
     SOCI::Core
     SOCI::SQLite3
     # SOCI 的组件配置在 SQLite::SQLite3 已存在时不会把它追加进
@@ -176,6 +178,7 @@ target_link_libraries(tagimg_cache PUBLIC
 add_library(tagimg_job STATIC
     src/job/add_job.cpp
     src/job/ai_preflight.cpp
+    src/job/cache_maintenance.cpp
     src/job/job.cpp
     src/job/job_worker.cpp
     src/job/rescan_artwork_job.cpp
@@ -187,6 +190,7 @@ target_include_directories(tagimg_job PUBLIC
 )
 target_link_libraries(tagimg_job PUBLIC
     tagimg_ai
+    tagimg_cache
     tagimg_db
     tagimg_image
     tagimg_io
@@ -218,6 +222,7 @@ target_include_directories(tagimg_http PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 target_link_libraries(tagimg_http PUBLIC
+    tagimg_cache
     tagimg_image
     tagimg_job
     tagimg_request

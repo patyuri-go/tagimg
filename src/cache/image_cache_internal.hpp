@@ -28,6 +28,8 @@ struct EntryRow {
 struct SharedState {
   std::filesystem::path root;
   std::uint64_t max_bytes = 0;
+  // false 时：find 永远 miss，commit 返回 NotEnabled，SQLite 不允许访问。
+  bool enabled = true;
   soci::session sql;
   std::mutex mutex;
   std::unordered_map<std::string, int> readers;

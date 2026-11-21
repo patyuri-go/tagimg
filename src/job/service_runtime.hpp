@@ -9,6 +9,8 @@
 
 namespace tagimg {
 
+class ImageCacheStore;
+
 // 服务运行期持有任务 worker。
 //
 // REST 与 GraphQL 两个入口共用同一个实例，避免重复建线程、重复占用
@@ -21,7 +23,9 @@ public:
                  std::shared_ptr<WdTagger> tagger,
                  std::shared_ptr<ClipEmbedder> embedder,
                  std::filesystem::path work_dir,
-                 const AiHealthClient &ai_health);
+                 const AiHealthClient &ai_health,
+                 std::shared_ptr<ImageCacheStore> image_cache = {},
+                 ImageProcessingConfig image_processing = {});
 
   ~ServiceRuntime();
 

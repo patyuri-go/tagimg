@@ -27,6 +27,9 @@
 #include <trantor/net/EventLoop.h>
 #include <vips/vips.h>
 
+#include "cache/image_cache_keys.hpp"
+#include "cache/image_cache_object.hpp"
+#include "cache/image_cache_store.hpp"
 #include "common/uuid.hpp"
 #include "http/json_helpers.hpp"
 #include "http/request_context.hpp"
@@ -65,7 +68,6 @@ struct VipsSourceDeleter {
 
 using VipsImagePtr = std::shared_ptr<VipsImage>;
 using VipsSourcePtr = std::shared_ptr<VipsSource>;
-using TempFilePtr = std::shared_ptr<TempFile>;
 
 std::string_view extension_for(std::string_view mime_type) {
   if (mime_type == "image/jpeg" || mime_type == "image/jpg") {
@@ -228,9 +230,123 @@ bool image_is_animated(VipsImage *image) {
   return page_height > 0 && vips_image_get_height(image) > page_height;
 }
 
+void log_cache_error(std::string_view action, ImageCacheError error) {
+  std::cerr << "image cache: " << action << ": " << to_string(error) << '\n';
+}
+
+// 源文件下载期间同时写入的缓存对象。写失败只影响缓存，不影响响应。
+class SourceCacheState {
+public:
+  explicit SourceCacheState(std::shared_ptr<StoredImageCacheObject> object)
+      : object_(std::move(object)) {
+  }
+
+  bool write(std::span<const std::byte> data) {
+    std::lock_guard lock(mutex_);
+    if (failed_ || finished_ || !object_) {
+      return false;
+    }
+    auto &out = object_->write();
+    out.write(reinterpret_cast<const char *>(data.data()),
+              static_cast<std::streamsize>(data.size()));
+    if (!out.good()) {
+      failed_ = true;
+      return false;
+    }
+    return true;
+  }
+
+  void mark_complete() {
+    std::lock_guard lock(mutex_);
+    complete_ = true;
+  }
+
+  void set_content_type(std::string_view content_type) {
+    std::lock_guard lock(mutex_);
+    content_type_ = content_type;
+    if (object_) {
+      object_->set_content_type(content_type_);
+    }
+  }
+
+  // 下载完整时 commit 并 pin；返回是否已可作为文件读取。
+  bool finish() {
+    std::lock_guard lock(mutex_);
+    if (finished_) {
+      return stored_;
+    }
+    finished_ = true;
+    if (!object_ || failed_ || !complete_) {
+      object_.reset();
+      return false;
+    }
+    if (!content_type_.empty()) {
+      object_->set_content_type(content_type_);
+    }
+    const auto committed = object_->commit();
+    if (!committed) {
+      log_cache_error("source commit failed", committed.error());
+      object_.reset();
+      return false;
+    }
+    if (*committed != ImageCacheCommit::Committed) {
+      std::cerr << "image cache: source skipped because it exceeds the limit\n";
+      object_.reset();
+      return false;
+    }
+    const auto pinned = object_->pin();
+    if (!pinned) {
+      log_cache_error("source pin failed", pinned.error());
+      object_.reset();
+      return false;
+    }
+    stored_ = true;
+    return true;
+  }
+
+  void discard() {
+    std::lock_guard lock(mutex_);
+    if (finished_) {
+      return;
+    }
+    finished_ = true;
+    object_.reset();
+  }
+
+  [[nodiscard]] bool complete() const {
+    std::lock_guard lock(mutex_);
+    return complete_;
+  }
+
+  [[nodiscard]] bool stored() const {
+    std::lock_guard lock(mutex_);
+    return stored_;
+  }
+
+  [[nodiscard]] std::shared_ptr<StoredImageCacheObject> object() const {
+    std::lock_guard lock(mutex_);
+    return object_;
+  }
+
+  [[nodiscard]] std::filesystem::path file_path() const {
+    std::lock_guard lock(mutex_);
+    return object_ ? object_->file_path() : std::filesystem::path();
+  }
+
+private:
+  mutable std::mutex mutex_;
+  std::shared_ptr<StoredImageCacheObject> object_;
+  std::string content_type_;
+  bool failed_ = false;
+  bool complete_ = false;
+  bool finished_ = false;
+  bool stored_ = false;
+};
+
 struct SourceContext {
   std::shared_ptr<HttpByteStream> stream;
   std::shared_ptr<RequestContext> request;
+  std::shared_ptr<SourceCacheState> cache;
   bool failed = false;
   // 加载前预读的文件头，source_read 先吐这部分再继续读流。
   std::vector<std::byte> prefix;
@@ -270,6 +386,16 @@ gint64 source_read(VipsSourceCustom *, void *buffer, gint64 length,
     context->failed = true;
     return -1;
   }
+  if (*read == 0) {
+    if (context->cache) {
+      context->cache->mark_complete();
+    }
+    return static_cast<gint64>(copied);
+  }
+  if (context->cache) {
+    context->cache->write(
+        std::span<const std::byte>(out + copied, *read));
+  }
   return static_cast<gint64>(copied + *read);
 }
 
@@ -277,6 +403,8 @@ struct TargetContext {
   // 不拥有流；ResponseStream 由 pump_avif 的栈上 unique_ptr 管理。
   drogon::ResponseStream *stream = nullptr;
   RequestContext *request = nullptr;
+  std::shared_ptr<StoredImageCacheObject> cache;
+  bool cache_failed = false;
   bool failed = false;
 };
 
@@ -298,6 +426,14 @@ gint64 target_write(VipsTargetCustom *, const void *data, gint64 length,
     return -1;
   }
   const auto size = static_cast<std::size_t>(length);
+  if (context->cache && !context->cache_failed) {
+    auto &out = context->cache->write();
+    out.write(static_cast<const char *>(data),
+              static_cast<std::streamsize>(size));
+    if (!out.good()) {
+      context->cache_failed = true;
+    }
+  }
   const std::string chunk(static_cast<const char *>(data), size);
   if (!context->stream->send(chunk)) {
     context->failed = true;
@@ -371,6 +507,15 @@ struct ImageStreamer::Impl : std::enable_shared_from_this<ImageStreamer::Impl> {
     std::shared_ptr<HttpByteStream> stream;
     VipsImagePtr image;
     VipsSourcePtr source;
+    // 正在读取的缓存条目；pump 结束前一直持有，防止被淘汰。
+    std::shared_ptr<StoredImageCacheObject> cache_pin;
+    // 当前变体的写缓存对象；成功编码并发送完成后提交。
+    std::shared_ptr<StoredImageCacheObject> variant_cache;
+    // 源文件下载时同步写入的缓存对象。
+    std::shared_ptr<SourceCacheState> source_cache;
+    std::atomic<bool> source_cache_active{false};
+    // 旧的临时文件兜底；缓存不可用/超限时才会设置。
+    std::shared_ptr<TempFile> temp_pin;
     // pump 是否已经开始；用于回收「客户端在响应前断开」的会话。
     std::atomic<bool> started{false};
     // 是否占用了转码并发槽位；在 Impl::mutex 保护下读写，由 finish() 释放。
@@ -394,11 +539,13 @@ struct ImageStreamer::Impl : std::enable_shared_from_this<ImageStreamer::Impl> {
        StorageConfig storage_config, ImageStreamMode stream_mode,
        ImageProcessingConfig processing_config,
        std::filesystem::path work_dir_value,
-       std::shared_ptr<ConnectionRegistry> registry_value)
+       std::shared_ptr<ConnectionRegistry> registry_value,
+       std::shared_ptr<ImageCacheStore> cache_value)
       : images(std::move(image_repository)), storage(std::move(storage_config)),
         mode(stream_mode), processing(processing_config),
         work_dir(std::move(work_dir_value)),
-        registry(std::move(registry_value)) {
+        registry(std::move(registry_value)),
+        image_cache(std::move(cache_value)) {
     const std::uint32_t count =
         processing.max_concurrency == 0 ? 1 : processing.max_concurrency;
     encode_limit = count;
@@ -418,6 +565,7 @@ struct ImageStreamer::Impl : std::enable_shared_from_this<ImageStreamer::Impl> {
   ImageProcessingConfig processing;
   std::filesystem::path work_dir;
   std::shared_ptr<ConnectionRegistry> registry;
+  std::shared_ptr<ImageCacheStore> image_cache;
 
   mutable std::mutex mutex;
   std::condition_variable queue_cv;
@@ -478,17 +626,44 @@ struct ImageStreamer::Impl : std::enable_shared_from_this<ImageStreamer::Impl> {
       Clock::time_point deadline,
       std::function<void(const drogon::HttpResponsePtr &)> callback);
 
+  // 从已落盘的源缓存文件解码；session->cache_pin 负责保活。
+  ProcessResult process_cached_source(
+      const std::shared_ptr<StreamSession> &session,
+      const std::filesystem::path &path, const ImageStreamOptions &options,
+      const std::string &etag, Clock::time_point deadline,
+      std::function<void(const drogon::HttpResponsePtr &)> callback);
+
+  // 创建一个源缓存写对象；失败或禁用时返回空。
+  std::shared_ptr<SourceCacheState>
+  open_source_cache(const std::shared_ptr<StreamSession> &session,
+                    std::string_view mime_type);
+
+  // 创建当前请求的变体缓存写对象；失败或禁用时返回空。
+  void build_variant_cache(const std::shared_ptr<StreamSession> &session,
+                           const ImageStreamOptions &options);
+
+  // 把剩余上游字节读完并提交源缓存；返回是否可作为文件读取。
+  bool drain_source_cache(const std::shared_ptr<StreamSession> &session);
+
   void respond_ok(
       const std::shared_ptr<StreamSession> &session,
       const std::string &mime_type, const ImageStreamOptions &options,
       std::string etag,
       const std::function<void(const drogon::HttpResponsePtr &)> &callback);
 
+  // 命中缓存时直接把文件流给客户端。
+  void respond_cache_hit(
+      const std::shared_ptr<StreamSession> &session,
+      std::shared_ptr<StoredImageCacheObject> object,
+      const std::string &content_type, ImageStreamOptions options,
+      std::string etag,
+      const std::function<void(const drogon::HttpResponsePtr &)> &callback);
+
   // 在 IO 线程构造流式 AVIF 响应，随后在独立 pump 线程里编码。
   void respond_avif_stream(
       const std::shared_ptr<StreamSession> &session, VipsImagePtr image,
-      VipsSourcePtr source, TempFilePtr temp, ImageStreamOptions options,
-      std::string etag, Clock::time_point deadline, bool animated,
+      VipsSourcePtr source, ImageStreamOptions options, std::string etag,
+      Clock::time_point deadline, bool animated,
       const std::function<void(const drogon::HttpResponsePtr &)> &callback);
 
   // 302 模式下把上游内容地址交给客户端直连。
@@ -512,8 +687,13 @@ struct ImageStreamer::Impl : std::enable_shared_from_this<ImageStreamer::Impl> {
   void pump(const std::shared_ptr<StreamSession> &session,
             drogon::ResponseStreamPtr stream);
 
+  void pump_cache_file(
+      const std::shared_ptr<StreamSession> &session,
+      std::shared_ptr<StoredImageCacheObject> object,
+      drogon::ResponseStreamPtr stream);
+
   void pump_avif(const std::shared_ptr<StreamSession> &session,
-                 VipsImagePtr image, VipsSourcePtr source, TempFilePtr temp,
+                 VipsImagePtr image, VipsSourcePtr source,
                  ImageStreamOptions options, Clock::time_point deadline,
                  bool animated, drogon::ResponseStreamPtr stream);
 
@@ -670,26 +850,106 @@ void ImageStreamer::Impl::handle(
   // 直接把刚入队的任务移除。
   std::weak_ptr<Impl> weak_self = weak_from_this();
   std::weak_ptr<StreamSession> weak_session = session;
-  session->context->add_cancel_handler([weak_self, weak_session](CancelReason) {
-    auto impl = weak_self.lock();
-    auto session = weak_session.lock();
-    if (!impl || !session) {
-      return;
+  session->context->add_cancel_handler(
+      [weak_self, weak_session](CancelReason reason) {
+        auto impl = weak_self.lock();
+        auto session = weak_session.lock();
+        if (!impl || !session) {
+          return;
+        }
+        // 客户端关闭但源缓存仍在下载时，保留字节流把源文件收完；其余原因
+        // （超时、关停）都立即中断。
+        if (reason != CancelReason::ClientClosed ||
+            !session->source_cache_active.load(std::memory_order_relaxed)) {
+          if (auto source = impl->session_stream(session)) {
+            source->cancel();
+          }
+        }
+        if (auto image = impl->session_image(session)) {
+          vips_image_set_kill(image.get(), TRUE);
+        }
+        // 可能有任务正在等转码槽位。
+        impl->encode_cv.notify_all();
+        // 还在排队就直接移除并回收；运行中的任务由 worker 的检查点退出。
+        if (impl->remove_queued(session)) {
+          impl->finish(session);
+        }
+      });
+}
+
+std::shared_ptr<SourceCacheState> ImageStreamer::Impl::open_source_cache(
+    const std::shared_ptr<StreamSession> &session, std::string_view mime_type) {
+  if (!image_cache || !image_cache->enabled()) {
+    return {};
+  }
+  auto created =
+      image_cache->create(make_source_cache_key(session->image_id, mime_type));
+  if (!created) {
+    log_cache_error("source create failed", created.error());
+    return {};
+  }
+  auto state = std::make_shared<SourceCacheState>(
+      std::make_shared<StoredImageCacheObject>(std::move(*created)));
+  if (!mime_type.empty()) {
+    state->set_content_type(mime_type);
+  }
+  session->source_cache = state;
+  session->source_cache_active.store(true, std::memory_order_relaxed);
+  return state;
+}
+
+void ImageStreamer::Impl::build_variant_cache(
+    const std::shared_ptr<StreamSession> &session,
+    const ImageStreamOptions &options) {
+  if (!image_cache || !image_cache->enabled() ||
+      options.preset == ImageSizePreset::Original) {
+    return;
+  }
+  auto created = image_cache->create(
+      make_variant_cache_key(session->image_id, options.preset, processing));
+  if (!created) {
+    log_cache_error("variant create failed", created.error());
+    return;
+  }
+  session->variant_cache = std::make_shared<StoredImageCacheObject>(
+      std::move(*created));
+}
+
+bool ImageStreamer::Impl::drain_source_cache(
+    const std::shared_ptr<StreamSession> &session) {
+  auto state = session->source_cache;
+  if (!state) {
+    return false;
+  }
+  if (!state->complete()) {
+    auto stream = session_stream(session);
+    if (stream) {
+      std::array<std::byte, kChunkBytes> buffer{};
+      for (;;) {
+        const auto read = stream->read(buffer);
+        if (!read) {
+          break;
+        }
+        if (*read == 0) {
+          state->mark_complete();
+          break;
+        }
+        state->write(std::span<const std::byte>(buffer.data(), *read));
+      }
     }
-    // 唤醒阻塞在 read()/wait_started() 的线程，并打断 vips 编码。
-    if (auto source = impl->session_stream(session)) {
-      source->cancel();
-    }
-    if (auto image = impl->session_image(session)) {
-      vips_image_set_kill(image.get(), TRUE);
-    }
-    // 可能有任务正在等转码槽位。
-    impl->encode_cv.notify_all();
-    // 还在排队就直接移除并回收；运行中的任务由 worker 的检查点退出。
-    if (impl->remove_queued(session)) {
-      impl->finish(session);
-    }
-  });
+  }
+  const bool stored = state->finish();
+  session->source_cache_active.store(false, std::memory_order_relaxed);
+  if (stored) {
+    session->cache_pin = state->object();
+  } else {
+    session->cache_pin.reset();
+  }
+  {
+    std::lock_guard lock(mutex);
+    session->stream.reset();
+  }
+  return stored;
 }
 
 void ImageStreamer::Impl::resolve(
@@ -774,6 +1034,79 @@ void ImageStreamer::Impl::resolve(
     return;
   }
 
+  const bool cache_enabled = image_cache && image_cache->enabled();
+
+  // 变体缓存优先；命中后不再查源文件或访问存储。
+  if (cache_enabled && !original) {
+    auto found = image_cache->find(
+        make_variant_cache_key(session->image_id, options.preset, processing));
+    if (!found) {
+      log_cache_error("variant find failed", found.error());
+    } else if (*found) {
+      auto object = std::make_shared<StoredImageCacheObject>(
+          std::move(**found));
+      session->cache_pin = object;
+      if (stop_if_cancelled()) {
+        return;
+      }
+      const std::string content_type =
+          object->content_type().empty() ? "image/avif"
+                                         : object->content_type();
+      auto self = shared_from_this();
+      post([self, session, object, content_type, options = options, etag,
+            callback = std::move(callback)]() mutable {
+        self->respond_cache_hit(session, object, content_type, options, etag,
+                                callback);
+      });
+      return;
+    }
+  }
+
+  // 变体未命中时，优先从源缓存转码，避免访问存储。
+  if (cache_enabled) {
+    auto found =
+        image_cache->find(make_source_cache_key(session->image_id));
+    if (!found) {
+      log_cache_error("source find failed", found.error());
+    } else if (*found) {
+      auto object = std::make_shared<StoredImageCacheObject>(
+          std::move(**found));
+      session->cache_pin = object;
+      if (stop_if_cancelled()) {
+        return;
+      }
+      if (original) {
+        const std::string content_type =
+            object->content_type().empty() ? "application/octet-stream"
+                                           : object->content_type();
+        auto self = shared_from_this();
+        post([self, session, object, content_type, options = options, etag,
+              callback = std::move(callback)]() mutable {
+          self->respond_cache_hit(session, object, content_type, options, etag,
+                                  callback);
+        });
+        return;
+      }
+
+      build_variant_cache(session, options);
+      auto result = process_cached_source(session, object->file_path(),
+                                          options, etag, deadline, callback);
+      if (result != ProcessResult::Fallback) {
+        if (result == ProcessResult::TimedOut) {
+          stop_session(session, options, callback);
+        }
+        return;
+      }
+      // 缓存文件损坏或无法解码：删掉该条目，继续走上游。
+      object->remove();
+      session->cache_pin.reset();
+      session->variant_cache.reset();
+      if (stop_if_cancelled()) {
+        return;
+      }
+    }
+  }
+
   auto opened = HttpByteStream::open(url);
   if (stop_if_cancelled()) {
     return;
@@ -835,6 +1168,11 @@ void ImageStreamer::Impl::resolve(
     return;
   }
 
+  if (cache_enabled) {
+    build_variant_cache(session, options);
+    open_source_cache(session, mime_type);
+  }
+
   if (original) {
     auto self = shared_from_this();
     post([self, session, mime_type, options, etag,
@@ -847,7 +1185,16 @@ void ImageStreamer::Impl::resolve(
   auto result = process_streaming(session, url, options, etag, deadline,
                                   callback);
   if (result == ProcessResult::Fallback) {
-    result = process_temp(session, url, options, etag, deadline, callback);
+    // 流式解码失败：先把剩余上游字节收完并提交源缓存，再从缓存文件重试，
+    // 避免第二次下载。
+    if (drain_source_cache(session)) {
+      result = process_cached_source(
+          session, session->cache_pin->file_path(), options, etag, deadline,
+          callback);
+    }
+    if (result == ProcessResult::Fallback) {
+      result = process_temp(session, url, options, etag, deadline, callback);
+    }
   }
   if (result == ProcessResult::Retry) {
     if (stop_if_cancelled()) {
@@ -859,6 +1206,8 @@ void ImageStreamer::Impl::resolve(
     return;
   }
   if (result == ProcessResult::TimedOut) {
+    // 客户端关闭时继续把源文件收完；超时/关停会因字节流被取消而放弃。
+    drain_source_cache(session);
     stop_session(session, options, callback);
   }
 }
@@ -883,6 +1232,7 @@ ImageStreamer::Impl::ProcessResult ImageStreamer::Impl::process_streaming(
   auto *context = new SourceContext();
   context->stream = session_stream(session);
   context->request = session->context;
+  context->cache = session->source_cache;
   if (context->stream == nullptr) {
     delete context;
     g_object_unref(raw_source);
@@ -909,6 +1259,14 @@ ImageStreamer::Impl::ProcessResult ImageStreamer::Impl::process_streaming(
   }
   const std::string load_mime = sniff_image_mime(
       reinterpret_cast<const std::uint8_t *>(probe.data()), probed);
+  if (auto cache = session->source_cache) {
+    if (probed > 0) {
+      cache->write(std::span<const std::byte>(probe.data(), probed));
+    }
+    const std::string upstream_mime =
+        media_type(context->stream->content_type());
+    cache->set_content_type(load_mime.empty() ? upstream_mime : load_mime);
+  }
 
   // GIF / WebP 可能有多帧；按多页加载，动图直接复用这次下载。
   VipsImage *raw_image = nullptr;
@@ -969,11 +1327,10 @@ ImageStreamer::Impl::ProcessResult ImageStreamer::Impl::process_streaming(
     }
 
     auto self = shared_from_this();
-    post([self, session, image, source, temp = TempFilePtr(),
-          options = options, etag = etag, deadline,
-          callback = std::move(callback)]() mutable {
-      self->respond_avif_stream(session, image, source, temp, options, etag,
-                                deadline, true, callback);
+    post([self, session, image, source, options = options, etag = etag,
+          deadline, callback = std::move(callback)]() mutable {
+      self->respond_avif_stream(session, image, source, options, etag, deadline,
+                                true, callback);
     });
     return ProcessResult::Done;
   }
@@ -1003,11 +1360,10 @@ ImageStreamer::Impl::ProcessResult ImageStreamer::Impl::process_streaming(
   }
 
   auto self = shared_from_this();
-  post([self, session, image, source, temp = TempFilePtr(),
-        options = options, etag = etag, deadline,
+  post([self, session, image, source, options = options, etag = etag, deadline,
         callback = std::move(callback)]() mutable {
-    self->respond_avif_stream(session, image, source, temp, options, etag,
-                              deadline, false, callback);
+    self->respond_avif_stream(session, image, source, options, etag, deadline,
+                              false, callback);
   });
   return ProcessResult::Done;
 }
@@ -1136,6 +1492,7 @@ ImageStreamer::Impl::ProcessResult ImageStreamer::Impl::process_temp(
     session->stream.reset();
   }
   source.reset();
+  session->temp_pin = temp;
 
   std::string load_mime;
   {
@@ -1212,10 +1569,10 @@ ImageStreamer::Impl::ProcessResult ImageStreamer::Impl::process_temp(
     }
 
     auto self = shared_from_this();
-    post([self, session, image, temp, options = options, etag = etag, deadline,
+    post([self, session, image, options = options, etag = etag, deadline,
           callback = std::move(callback)]() mutable {
-      self->respond_avif_stream(session, image, VipsSourcePtr(), temp, options,
-                                etag, deadline, true, callback);
+      self->respond_avif_stream(session, image, VipsSourcePtr(), options, etag,
+                                deadline, true, callback);
     });
     return ProcessResult::Done;
   }
@@ -1245,10 +1602,139 @@ ImageStreamer::Impl::ProcessResult ImageStreamer::Impl::process_temp(
   }
 
   auto self = shared_from_this();
-  post([self, session, image, temp, options = options, etag = etag, deadline,
+  post([self, session, image, options = options, etag = etag, deadline,
         callback = std::move(callback)]() mutable {
-    self->respond_avif_stream(session, image, VipsSourcePtr(), temp, options,
-                              etag, deadline, false, callback);
+    self->respond_avif_stream(session, image, VipsSourcePtr(), options, etag,
+                              deadline, false, callback);
+  });
+  return ProcessResult::Done;
+}
+
+ImageStreamer::Impl::ProcessResult ImageStreamer::Impl::process_cached_source(
+    const std::shared_ptr<StreamSession> &session,
+    const std::filesystem::path &path, const ImageStreamOptions &options,
+    const std::string &etag, Clock::time_point deadline,
+    std::function<void(const drogon::HttpResponsePtr &)> callback) {
+  if (session->context->cancelled()) {
+    return ProcessResult::TimedOut;
+  }
+  if (Clock::now() >= deadline) {
+    session->context->cancel(CancelReason::Timeout);
+    return ProcessResult::TimedOut;
+  }
+
+  reset_session_image(session);
+  {
+    std::lock_guard lock(mutex);
+    session->stream.reset();
+  }
+
+  std::string load_mime;
+  {
+    std::ifstream probe(path, std::ios::binary);
+    if (probe) {
+      std::array<char, kSniffBytes> head{};
+      probe.read(head.data(), static_cast<std::streamsize>(head.size()));
+      const auto got = static_cast<std::size_t>(probe.gcount());
+      load_mime = sniff_image_mime(
+          reinterpret_cast<const std::uint8_t *>(head.data()), got);
+    }
+  }
+
+  VipsImage *raw_image = nullptr;
+  if (mime_supports_multipage_load(load_mime)) {
+    raw_image = vips_image_new_from_file(path.c_str(), "access",
+                                         VIPS_ACCESS_SEQUENTIAL, "n", -1,
+                                         nullptr);
+  } else {
+    raw_image = vips_image_new_from_file(
+        path.c_str(), "access", VIPS_ACCESS_SEQUENTIAL, nullptr);
+  }
+  if (raw_image == nullptr) {
+    log_vips_error("cached source decode failed");
+    return ProcessResult::Fallback;
+  }
+  VipsImagePtr image(raw_image, VipsImageDeleter{});
+
+  const int width = vips_image_get_width(image.get());
+  const int height = vips_image_get_height(image.get());
+  if (width <= 0 || height <= 0) {
+    return ProcessResult::Fallback;
+  }
+
+  if (session->context->cancelled()) {
+    stop_session(session, options, callback);
+    return ProcessResult::Done;
+  }
+
+  if (image_is_animated(image.get())) {
+    const int pages = vips_image_get_n_pages(image.get());
+    const int page_height = vips_image_get_page_height(image.get());
+    const auto total_pixels = static_cast<std::uint64_t>(width) *
+                              static_cast<std::uint64_t>(page_height) *
+                              static_cast<std::uint64_t>(pages);
+    if (pages <= 0 || page_height <= 0 ||
+        static_cast<std::uint64_t>(pages) > processing.animated_max_frames ||
+        total_pixels > processing.animated_max_total_pixels) {
+      fail(session, options, drogon::k413RequestEntityTooLarge,
+           "IMAGE_TOO_LARGE", "animated image exceeds the size limit", false,
+           callback);
+      return ProcessResult::Done;
+    }
+
+    {
+      std::lock_guard lock(mutex);
+      session->image = image;
+      session->source.reset();
+    }
+
+    if (!acquire_encode_slot(session, deadline)) {
+      stop_session(session, options, callback);
+      return ProcessResult::Done;
+    }
+    if (session->context->cancelled()) {
+      stop_session(session, options, callback);
+      return ProcessResult::Done;
+    }
+
+    auto self = shared_from_this();
+    post([self, session, image, options = options, etag = etag, deadline,
+          callback = std::move(callback)]() mutable {
+      self->respond_avif_stream(session, image, VipsSourcePtr(), options, etag,
+                                deadline, true, callback);
+    });
+    return ProcessResult::Done;
+  }
+
+  const std::uint64_t pixels = static_cast<std::uint64_t>(width) *
+                               static_cast<std::uint64_t>(height);
+  if (pixels > processing.max_pixels) {
+    fail(session, options, drogon::k413RequestEntityTooLarge, "IMAGE_TOO_LARGE",
+         "image exceeds the pixel limit", false, callback);
+    return ProcessResult::Done;
+  }
+
+  {
+    std::lock_guard lock(mutex);
+    session->image = image;
+    session->source.reset();
+  }
+
+  if (!acquire_encode_slot(session, deadline)) {
+    stop_session(session, options, callback);
+    return ProcessResult::Done;
+  }
+
+  if (session->context->cancelled()) {
+    stop_session(session, options, callback);
+    return ProcessResult::Done;
+  }
+
+  auto self = shared_from_this();
+  post([self, session, image, options = options, etag = etag, deadline,
+        callback = std::move(callback)]() mutable {
+    self->respond_avif_stream(session, image, VipsSourcePtr(), options, etag,
+                              deadline, false, callback);
   });
   return ProcessResult::Done;
 }
@@ -1292,10 +1778,11 @@ void ImageStreamer::Impl::respond_ok(
   callback(response);
 }
 
-void ImageStreamer::Impl::respond_avif_stream(
-    const std::shared_ptr<StreamSession> &session, VipsImagePtr image,
-    VipsSourcePtr source, TempFilePtr temp, ImageStreamOptions options,
-    std::string etag, Clock::time_point deadline, bool animated,
+void ImageStreamer::Impl::respond_cache_hit(
+    const std::shared_ptr<StreamSession> &session,
+    std::shared_ptr<StoredImageCacheObject> object,
+    const std::string &content_type, ImageStreamOptions options,
+    std::string etag,
     const std::function<void(const drogon::HttpResponsePtr &)> &callback) {
   if (session->context->cancelled()) {
     stop_session(session, options, callback);
@@ -1303,10 +1790,45 @@ void ImageStreamer::Impl::respond_avif_stream(
   }
   auto self = shared_from_this();
   auto response = drogon::HttpResponse::newAsyncStreamResponse(
-      [self, session, image, source, temp, options, deadline, animated](
+      [self, session, object](drogon::ResponseStreamPtr stream) {
+        self->pump_cache_file(session, object, std::move(stream));
+      });
+  response->setStatusCode(drogon::k200OK);
+  response->setContentTypeString(content_type);
+  response->addHeader(
+      "Content-Disposition",
+      content_disposition(session->image_id, content_type, options.download));
+  response->addHeader("ETag", etag);
+  response->addHeader("Cache-Control", "private, max-age=3600");
+  response->addHeader("X-Content-Type-Options", "nosniff");
+
+  drogon::app().getLoop()->runAfter(kStartTimeoutSeconds, [self, session] {
+    bool expected = false;
+    if (!session->started.compare_exchange_strong(expected, true)) {
+      return;
+    }
+    session->context->cancel(CancelReason::ClientClosed);
+    self->finish(session);
+  });
+
+  callback(response);
+}
+
+void ImageStreamer::Impl::respond_avif_stream(
+    const std::shared_ptr<StreamSession> &session, VipsImagePtr image,
+    VipsSourcePtr source, ImageStreamOptions options, std::string etag,
+    Clock::time_point deadline, bool animated,
+    const std::function<void(const drogon::HttpResponsePtr &)> &callback) {
+  if (session->context->cancelled()) {
+    stop_session(session, options, callback);
+    return;
+  }
+  auto self = shared_from_this();
+  auto response = drogon::HttpResponse::newAsyncStreamResponse(
+      [self, session, image, source, options, deadline, animated](
           drogon::ResponseStreamPtr stream) mutable {
-        self->pump_avif(session, image, source, temp, options, deadline,
-                        animated, std::move(stream));
+        self->pump_avif(session, image, source, options, deadline, animated,
+                        std::move(stream));
       });
   response->setStatusCode(drogon::k200OK);
   response->setContentTypeString("image/avif");
@@ -1384,23 +1906,54 @@ void ImageStreamer::Impl::pump(const std::shared_ptr<StreamSession> &session,
   session->started.store(true, std::memory_order_relaxed);
 
   auto source = session_stream(session);
+  auto cache = session->source_cache;
 
   auto self = shared_from_this();
   std::thread([self, session, source = std::move(source),
-               stream = std::move(stream)]() mutable {
+               cache = std::move(cache), stream = std::move(stream)]() mutable {
     std::vector<std::byte> buffer(kChunkBytes);
-    while (source != nullptr &&
-           !session->context->cancelled()) {
-      const auto read = source->read(buffer);
-      if (!read || *read == 0) {
+    bool send_failed = false;
+    while (source != nullptr) {
+      // 客户端断开但源缓存仍在写入时，继续读完字节流；其余取消原因直接退出。
+      if (session->context->cancelled() && !cache) {
         break;
       }
-      const std::string chunk(reinterpret_cast<const char *>(buffer.data()),
-                              *read);
-      if (!stream->send(chunk)) {
-        // 客户端已断开。
-        session->context->cancel(CancelReason::ClientClosed);
+      if (session->context->cancelled()) {
+        send_failed = true;
+      }
+      const auto read = source->read(buffer);
+      if (!read) {
         break;
+      }
+      if (*read == 0) {
+        if (cache) {
+          cache->mark_complete();
+        }
+        break;
+      }
+      if (cache) {
+        cache->write(std::span<const std::byte>(buffer.data(), *read));
+      }
+      if (!send_failed) {
+        const std::string chunk(reinterpret_cast<const char *>(buffer.data()),
+                                *read);
+        if (!stream->send(chunk)) {
+          // 客户端已断开；源缓存还在写时继续把剩余字节收完。
+          session->context->cancel(CancelReason::ClientClosed);
+          send_failed = true;
+          if (!cache) {
+            break;
+          }
+        }
+      }
+    }
+    if (cache) {
+      const bool stored = cache->finish();
+      session->source_cache_active.store(false, std::memory_order_relaxed);
+      if (stored) {
+        session->cache_pin = cache->object();
+      } else {
+        session->cache_pin.reset();
       }
     }
     stream->close();
@@ -1411,28 +1964,61 @@ void ImageStreamer::Impl::pump(const std::shared_ptr<StreamSession> &session,
   }).detach();
 }
 
+void ImageStreamer::Impl::pump_cache_file(
+    const std::shared_ptr<StreamSession> &session,
+    std::shared_ptr<StoredImageCacheObject> object,
+    drogon::ResponseStreamPtr stream) {
+  session->started.store(true, std::memory_order_relaxed);
+
+  auto self = shared_from_this();
+  std::thread([self, session, object = std::move(object),
+               stream = std::move(stream)]() mutable {
+    std::vector<char> buffer(kChunkBytes);
+    while (!session->context->cancelled()) {
+      auto &input = object->read();
+      input.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
+      const auto got = input.gcount();
+      if (got <= 0) {
+        break;
+      }
+      if (!stream->send(std::string(buffer.data(),
+                                   static_cast<std::size_t>(got)))) {
+        session->context->cancel(CancelReason::ClientClosed);
+        break;
+      }
+    }
+    stream->close();
+    stream.reset();
+    object.reset();
+    self->finish(session);
+  }).detach();
+}
+
 void ImageStreamer::Impl::pump_avif(
     const std::shared_ptr<StreamSession> &session, VipsImagePtr image,
-    VipsSourcePtr source, TempFilePtr temp, ImageStreamOptions options,
-    Clock::time_point deadline, bool animated,
-    drogon::ResponseStreamPtr stream) {
+    VipsSourcePtr source, ImageStreamOptions options, Clock::time_point deadline,
+    bool animated, drogon::ResponseStreamPtr stream) {
   session->started.store(true, std::memory_order_relaxed);
 
   const std::string suffix = avif_save_options(processing);
   auto self = shared_from_this();
   if (session->context->cancelled()) {
     stream->close();
+    source.reset();
+    self->drain_source_cache(session);
     self->finish(session);
     return;
   }
   std::thread([self, session, image = std::move(image),
-               source = std::move(source), temp = std::move(temp),
-               options = std::move(options), deadline, animated, suffix,
+               source = std::move(source), options = std::move(options),
+               deadline, animated, suffix,
                stream = std::move(stream)]() mutable {
     const auto now = Clock::now();
     if (now >= deadline) {
       session->context->cancel(CancelReason::Timeout);
       stream->close();
+      source.reset();
+      self->drain_source_cache(session);
       self->finish(session);
       return;
     }
@@ -1440,6 +2026,29 @@ void ImageStreamer::Impl::pump_avif(
     TimeoutGuard guard(deadline - now, [session] {
       session->context->cancel(CancelReason::Timeout);
     });
+
+    // 关闭响应并提交源缓存；variant_commit 为 true 时再提交变体缓存。
+    const auto finalize = [&](bool variant_commit) {
+      stream->close();
+      stream.reset();
+      // 先销毁 vips source，再读取/提交源缓存写对象。
+      source.reset();
+      self->drain_source_cache(session);
+      if (variant_commit) {
+        auto variant = session->variant_cache;
+        if (variant) {
+          const auto committed = variant->commit();
+          if (!committed) {
+            log_cache_error("variant commit failed", committed.error());
+          } else if (*committed != ImageCacheCommit::Committed) {
+            std::cerr
+                << "image cache: variant skipped because it exceeds the limit\n";
+          }
+        }
+      }
+      session->variant_cache.reset();
+      self->finish(session);
+    };
 
     // 动图走 libheif 序列编码：保留每帧时长和循环次数，逐块写出。
     if (animated) {
@@ -1454,10 +2063,21 @@ void ImageStreamer::Impl::pump_avif(
       config.max_output_bytes = self->processing.animated_max_output_bytes;
 
       auto *stream_ptr = stream.get();
+      auto variant = session->variant_cache;
+      auto cache_failed = std::make_shared<std::atomic<bool>>(false);
       const auto result = encode_animated_avif(
           image.get(), config,
           [session] { return session->context->cancelled(); },
-          [stream_ptr](const void *data, std::size_t size) {
+          [stream_ptr, variant, cache_failed](const void *data,
+                                              std::size_t size) {
+            if (variant && !cache_failed->load(std::memory_order_relaxed)) {
+              auto &out = variant->write();
+              out.write(static_cast<const char *>(data),
+                        static_cast<std::streamsize>(size));
+              if (!out.good()) {
+                cache_failed->store(true, std::memory_order_relaxed);
+              }
+            }
             return stream_ptr->send(
                 std::string(static_cast<const char *>(data), size));
           });
@@ -1468,9 +2088,8 @@ void ImageStreamer::Impl::pump_avif(
           session->context->cancel(CancelReason::ClientClosed);
         }
       }
-      stream->close();
-      stream.reset();
-      self->finish(session);
+      finalize(result == AnimatedAvifError::None &&
+               !cache_failed->load(std::memory_order_relaxed));
       return;
     }
 
@@ -1481,8 +2100,7 @@ void ImageStreamer::Impl::pump_avif(
                              dimension, "size", VIPS_SIZE_DOWN, "auto_rotate",
                              TRUE, nullptr) != 0) {
       log_vips_error("thumbnail failed");
-      stream->close();
-      self->finish(session);
+      finalize(false);
       return;
     }
     VipsImagePtr thumbnail(thumbnail_raw, VipsImageDeleter{});
@@ -1490,19 +2108,20 @@ void ImageStreamer::Impl::pump_avif(
     VipsTarget *target = VIPS_TARGET(vips_target_custom_new());
     if (target == nullptr) {
       log_vips_error("target creation failed");
-      stream->close();
-      self->finish(session);
+      finalize(false);
       return;
     }
     auto *context = new TargetContext();
     context->stream = stream.get();
     context->request = session->context.get();
+    context->cache = session->variant_cache;
     g_signal_connect_data(target, "write", G_CALLBACK(target_write), context,
                           destroy_target_context, G_CONNECT_DEFAULT);
 
     const int result = vips_image_write_to_target(
         thumbnail.get(), suffix.c_str(), target, nullptr);
     const bool send_failed = context->failed;
+    const bool cache_failed = context->cache_failed;
     if (result != 0) {
       log_vips_error("avif encoding failed");
     }
@@ -1510,9 +2129,7 @@ void ImageStreamer::Impl::pump_avif(
     if (send_failed) {
       session->context->cancel(CancelReason::ClientClosed);
     }
-    stream->close();
-    stream.reset();
-    self->finish(session);
+    finalize(result == 0 && !send_failed && !cache_failed);
   }).detach();
 }
 
@@ -1584,10 +2201,12 @@ ImageStreamer::ImageStreamer(std::shared_ptr<const TagimgRepository> images,
                              StorageConfig storage, ImageStreamMode mode,
                              ImageProcessingConfig processing,
                              std::filesystem::path work_dir,
-                             std::shared_ptr<ConnectionRegistry> registry)
+                             std::shared_ptr<ConnectionRegistry> registry,
+                             std::shared_ptr<ImageCacheStore> image_cache)
     : impl_(std::make_shared<Impl>(std::move(images), std::move(storage), mode,
                                    processing, std::move(work_dir),
-                                   std::move(registry))) {
+                                   std::move(registry),
+                                   std::move(image_cache))) {
 }
 
 ImageStreamer::~ImageStreamer() {

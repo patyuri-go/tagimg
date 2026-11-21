@@ -16,6 +16,7 @@
 namespace tagimg {
 
 class ConnectionRegistry;
+class ImageCacheStore;
 class RequestContext;
 
 // GET /api/v1/image/{imageId} 的请求参数。
@@ -36,8 +37,8 @@ struct ImageStreamOptions {
 //
 // size=original 时用 Drogon 的异步流逐块转发原始字节；其他预设会通过
 // VipsSource 流式读取源图，再用 VipsTarget 把 AVIF 直接写入响应流。
-// 数据库查询和转码都在固定 worker 线程完成，不占用 IO 线程，也不做
-// 服务端转码缓存。
+// 数据库查询和转码都在固定 worker 线程完成，不占用 IO 线程。源图和
+// AVIF 变体都会写入服务端缓存；缓存失败只影响命中率，不影响响应。
 //
 // 失败时返回真实 HTTP 状态码加 JSON 错误体；一旦响应头发出，中途出错
 // 只能断开连接（chunked 响应的固有限制）。
@@ -48,7 +49,8 @@ public:
                 ImageStreamMode mode = ImageStreamMode::Proxy,
                 ImageProcessingConfig processing = {},
                 std::filesystem::path work_dir = {},
-                std::shared_ptr<ConnectionRegistry> registry = {});
+                std::shared_ptr<ConnectionRegistry> registry = {},
+                std::shared_ptr<ImageCacheStore> image_cache = {});
 
   ~ImageStreamer();
 

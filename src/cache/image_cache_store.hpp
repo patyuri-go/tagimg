@@ -25,6 +25,8 @@ public:
   ImageCacheStore(ImageCacheStore &&other) noexcept;
   ImageCacheStore &operator=(ImageCacheStore &&other) noexcept;
 
+  [[nodiscard]] bool enabled() const noexcept;
+
   // 未命中返回空 optional；命中时已经刷新 last_hit 并持有读引用。
   [[nodiscard]] Result<std::optional<StoredImageCacheObject>, ImageCacheError>
   find(const ImageCacheKey &key);

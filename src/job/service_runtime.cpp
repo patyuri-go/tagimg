@@ -4,6 +4,7 @@
 #include <stdexcept>
 #include <utility>
 
+#include "cache/image_cache_store.hpp"
 #include "job/add_job.hpp"
 #include "job/rescan_artwork_job.hpp"
 
@@ -15,14 +16,19 @@ struct ServiceRuntime::Impl {
        std::shared_ptr<WdTagger> tagger_ref,
        std::shared_ptr<ClipEmbedder> embedder_ref,
        std::filesystem::path work_dir_ref,
-       const AiHealthClient &ai_health_ref)
+       const AiHealthClient &ai_health_ref,
+       std::shared_ptr<ImageCacheStore> image_cache_ref,
+       ImageProcessingConfig image_processing_ref)
       : storage(std::move(storage_config)),
         tagimg_repository(std::move(tagimg_repository_ref)),
         tagger(std::move(tagger_ref)), embedder(std::move(embedder_ref)),
-        ai_health(&ai_health_ref), work_dir(std::move(work_dir_ref)) {
+        ai_health(&ai_health_ref), work_dir(std::move(work_dir_ref)),
+        image_cache(std::move(image_cache_ref)),
+        image_processing(image_processing_ref) {
     JobContext context{storage, std::cref(*tagimg_repository),
                        std::ref(*tagger), std::ref(*embedder),
-                       std::cref(*ai_health), work_dir};
+                       std::cref(*ai_health), work_dir, image_cache,
+                       image_processing};
     worker = std::make_unique<JobWorker>(context);
   }
 
@@ -33,6 +39,8 @@ struct ServiceRuntime::Impl {
   std::shared_ptr<ClipEmbedder> embedder;
   const AiHealthClient *ai_health = nullptr;
   std::filesystem::path work_dir;
+  std::shared_ptr<ImageCacheStore> image_cache;
+  ImageProcessingConfig image_processing;
   std::unique_ptr<JobWorker> worker;
 
   mutable std::mutex mutex;
@@ -44,14 +52,18 @@ ServiceRuntime::ServiceRuntime(
     std::shared_ptr<const TagimgRepository> tagimg_repository,
     std::shared_ptr<WdTagger> tagger,
     std::shared_ptr<ClipEmbedder> embedder,
-    std::filesystem::path work_dir, const AiHealthClient &ai_health) {
+    std::filesystem::path work_dir, const AiHealthClient &ai_health,
+    std::shared_ptr<ImageCacheStore> image_cache,
+    ImageProcessingConfig image_processing) {
   if (!tagimg_repository || !tagger || !embedder) {
     throw std::invalid_argument("ServiceRuntime dependencies must not be null");
   }
   impl_ = std::make_shared<Impl>(std::move(storage),
                                  std::move(tagimg_repository),
                                  std::move(tagger), std::move(embedder),
-                                 std::move(work_dir), ai_health);
+                                 std::move(work_dir), ai_health,
+                                 std::move(image_cache),
+                                 image_processing);
 }
 
 ServiceRuntime::~ServiceRuntime() {

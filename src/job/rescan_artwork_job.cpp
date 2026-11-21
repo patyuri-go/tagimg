@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "common/uuid.hpp"
+#include "job/cache_maintenance.hpp"
 #include "job/scan_job.hpp"
 #include "job/scan_tags.hpp"
 
@@ -93,7 +94,7 @@ StepResult RescanArtworkJob::step(JobContext &context, const JobRun &run) {
       break;
     }
 
-    auto scan = ScanJob::rescan_entity(context, **entity_id, ai_);
+    auto scan = ScanJob::rescan_entity(context, **entity_id, image_id, ai_);
     if (!scan) {
       result.failures.push_back(
           ScanFailure{**entity_id, scan.error(), image_id});
@@ -181,6 +182,7 @@ StepResult RescanArtworkJob::step(JobContext &context, const JobRun &run) {
   result.scans = std::move(scans);
   result.artwork_id = request_.artwork_id;
   result.image_ids = image_ids;
+  finalize_rescan_cache(context, image_ids, result.scans);
   result.tag_count = added_tag_count;
   outcome_ = JobOutcome(std::move(result));
   return StepResult::Done;

@@ -1,7 +1,8 @@
 // 图片缓存层 smoke：不依赖数据库、sidecar 或网络。
 //
 // 覆盖：未命中、写入/提交/读取、未提交清理、优先级淘汰、LRU 刷新、
-// 占用中跳过、超上限放弃、自愈、启动对账、并发写同一 key。
+// 占用中跳过、超上限放弃、自愈、启动对账、并发写同一 key、禁用仓库、
+// flush/pin/remove、源/变体 key 构造。
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
@@ -14,8 +15,10 @@
 
 #include <unistd.h>
 
+#include "cache/image_cache_keys.hpp"
 #include "cache/image_cache_store.hpp"
 #include "common/image_size.hpp"
+#include "image/image_processor.hpp"
 
 namespace {
 
@@ -433,6 +436,102 @@ bool test_concurrent_same_key() {
   return true;
 }
 
+bool test_disabled_store() {
+  const auto root = make_root("disabled");
+  {
+    auto config = make_config(root, 0);
+    config.enabled = false;
+    auto opened = ImageCacheStore::open(config, root.parent_path());
+    CHECK(opened.has_value());
+    auto store = std::move(opened.value());
+    CHECK(!store.enabled());
+
+    const auto key = make_key("img-disabled", ImageSizePreset::Thumb);
+    auto found = store.find(key);
+    CHECK(found.has_value());
+    CHECK(!found->has_value());
+
+    auto created = store.create(key);
+    CHECK(created.has_value());
+    auto object = std::move(created.value());
+    object.write().write("partial", 7);
+    CHECK(object.flush().has_value());
+    const auto temporary = object.temporary_path();
+    CHECK(std::filesystem::exists(temporary));
+
+    auto committed = object.commit();
+    CHECK(committed.has_error());
+    CHECK(committed.error() == tagimg::ImageCacheError::NotEnabled);
+    CHECK(!std::filesystem::exists(temporary));
+    CHECK(!std::filesystem::exists(object.file_path()));
+  }
+  CHECK(count_part_files(root) == 0);
+  std::filesystem::remove_all(root);
+  return true;
+}
+
+bool test_flush_pin_remove() {
+  const auto root = make_root("flush");
+  {
+    auto opened =
+        ImageCacheStore::open(make_config(root, 0), root.parent_path());
+    CHECK(opened.has_value());
+    auto store = std::move(opened.value());
+    const auto key = make_key("img-flush", ImageSizePreset::Regular);
+    const std::string payload = "flush-payload";
+
+    auto created = store.create(key);
+    CHECK(created.has_value());
+    auto object = std::move(created.value());
+    object.write().write(payload.data(),
+                         static_cast<std::streamsize>(payload.size()));
+    CHECK(object.flush().has_value());
+    {
+      std::ifstream input(object.temporary_path(), std::ios::binary);
+      CHECK(input.good());
+      std::string temp_content((std::istreambuf_iterator<char>(input)),
+                               std::istreambuf_iterator<char>());
+      CHECK(temp_content == payload);
+    }
+
+    auto committed = object.commit();
+    CHECK(committed.has_value());
+    CHECK(*committed == ImageCacheCommit::Committed);
+    CHECK(object.pin().has_value());
+    CHECK(object.readable());
+    CHECK(std::filesystem::exists(object.file_path()));
+
+    CHECK(object.remove());
+    CHECK(!std::filesystem::exists(object.file_path()));
+    CHECK(!exists(store, key));
+  }
+  std::filesystem::remove_all(root);
+  return true;
+}
+
+bool test_key_helpers() {
+  const auto source = tagimg::make_source_cache_key("img-key", "image/jpeg");
+  CHECK(source.params.preset == ImageSizePreset::Original);
+  CHECK(source.params.extension == "bin");
+  CHECK(source.params.content_type == "image/jpeg");
+
+  tagimg::ImageProcessingConfig processing;
+  processing.quality = 70;
+  processing.speed = 4;
+  processing.animated_quality = 30;
+  processing.animated_speed = 8;
+  const auto variant = tagimg::make_variant_cache_key(
+      "img-key", ImageSizePreset::Thumb, processing);
+  CHECK(variant.params.preset == ImageSizePreset::Thumb);
+  CHECK(variant.params.extension == "avif");
+  CHECK(variant.params.content_type == "image/avif");
+  CHECK(variant.params.quality == 70);
+  CHECK(variant.params.speed == 4);
+  CHECK(tagimg::canonical_cache_key(source) !=
+        tagimg::canonical_cache_key(variant));
+  return true;
+}
+
 } // namespace
 
 int main() {
@@ -440,7 +539,9 @@ int main() {
                   test_abort_cleanup() && test_eviction_priority() &&
                   test_last_hit_lru() && test_skip_in_use() &&
                   test_oversize_skip() && test_self_heal() &&
-                  test_reconcile() && test_concurrent_same_key();
+                  test_reconcile() && test_concurrent_same_key() &&
+                  test_disabled_store() && test_flush_pin_remove() &&
+                  test_key_helpers();
   if (!ok || g_failures != 0) {
     std::cerr << "cache smoke failed: " << g_failures << " failure(s)\n";
     return 1;

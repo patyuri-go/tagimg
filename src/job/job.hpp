@@ -18,8 +18,12 @@
 #include "common/storage.hpp"
 #include "db/tagimg_repository.hpp"
 #include "image/image_metadata.hpp"
+#include "image/image_processor.hpp"
 
 namespace tagimg {
+
+class ImageCacheStore;
+class StoredImageCacheObject;
 
 enum class JobError {
   InvalidArgument,
@@ -57,6 +61,9 @@ struct ScanResult {
   std::vector<float> embedding;
   // 从图片本身读出的尺寸、帧数、真实格式与拍摄时间。
   ImageMetadata metadata;
+  // 重扫时下载的源文件缓存写对象；事务成功后由调用方 commit。
+  // 初次扫描没有 image_id，因此为空。
+  std::shared_ptr<StoredImageCacheObject> source_cache;
 };
 
 // AddJob 的完整输入；entity_ids 与 title 必填。
@@ -147,6 +154,10 @@ struct JobContext {
   std::reference_wrapper<ClipEmbedder> embedder;
   std::reference_wrapper<const AiHealthClient> ai_health;
   std::filesystem::path work_dir;
+  // 可为空；为空表示缓存未启用。
+  std::shared_ptr<ImageCacheStore> image_cache;
+  // 重扫后按当前配置构造变体 key，用于清理旧变体。
+  ImageProcessingConfig image_processing;
 };
 
 // 一次可执行的工作。
