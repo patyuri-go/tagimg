@@ -697,6 +697,8 @@ struct ImageStreamer::Impl : std::enable_shared_from_this<ImageStreamer::Impl> {
                  ImageStreamOptions options, Clock::time_point deadline,
                  bool animated, drogon::ResponseStreamPtr stream);
 
+  void arm_start_timeout(const std::shared_ptr<StreamSession> &session);
+
   void finish(const std::shared_ptr<StreamSession> &session);
 
   void shutdown();
@@ -1739,6 +1741,30 @@ ImageStreamer::Impl::ProcessResult ImageStreamer::Impl::process_cached_source(
   return ProcessResult::Done;
 }
 
+void ImageStreamer::Impl::arm_start_timeout(
+    const std::shared_ptr<StreamSession> &session) {
+  // active 持有 session 直到 finish()，所以定时器只需要弱引用；即使响应
+  // 回调永远不执行，也能在超时后回收会话。
+  std::weak_ptr<Impl> weak_self = weak_from_this();
+  std::weak_ptr<StreamSession> weak_session = session;
+  drogon::app().getLoop()->runAfter(
+      kStartTimeoutSeconds,
+      [weak_self = std::move(weak_self),
+       weak_session = std::move(weak_session)] {
+        auto self = weak_self.lock();
+        auto session = weak_session.lock();
+        if (!self || !session) {
+          return;
+        }
+        bool expected = false;
+        if (!session->started.compare_exchange_strong(expected, true)) {
+          return;
+        }
+        session->context->cancel(CancelReason::ClientClosed);
+        self->finish(session);
+      });
+}
+
 void ImageStreamer::Impl::respond_ok(
     const std::shared_ptr<StreamSession> &session,
     const std::string &mime_type, const ImageStreamOptions &options,
@@ -1766,14 +1792,7 @@ void ImageStreamer::Impl::respond_ok(
   response->addHeader("X-Content-Type-Options", "nosniff");
 
   // 客户端在响应发出前就断开时，异步回调不会被执行，用定时器兜底回收。
-  drogon::app().getLoop()->runAfter(kStartTimeoutSeconds, [self, session] {
-    bool expected = false;
-    if (!session->started.compare_exchange_strong(expected, true)) {
-      return;
-    }
-    session->context->cancel(CancelReason::ClientClosed);
-    self->finish(session);
-  });
+  arm_start_timeout(session);
 
   callback(response);
 }
@@ -1802,14 +1821,7 @@ void ImageStreamer::Impl::respond_cache_hit(
   response->addHeader("Cache-Control", "private, max-age=3600");
   response->addHeader("X-Content-Type-Options", "nosniff");
 
-  drogon::app().getLoop()->runAfter(kStartTimeoutSeconds, [self, session] {
-    bool expected = false;
-    if (!session->started.compare_exchange_strong(expected, true)) {
-      return;
-    }
-    session->context->cancel(CancelReason::ClientClosed);
-    self->finish(session);
-  });
+  arm_start_timeout(session);
 
   callback(response);
 }
@@ -1839,14 +1851,7 @@ void ImageStreamer::Impl::respond_avif_stream(
   response->addHeader("Cache-Control", "private, max-age=3600");
   response->addHeader("X-Content-Type-Options", "nosniff");
 
-  drogon::app().getLoop()->runAfter(kStartTimeoutSeconds, [self, session] {
-    bool expected = false;
-    if (!session->started.compare_exchange_strong(expected, true)) {
-      return;
-    }
-    session->context->cancel(CancelReason::ClientClosed);
-    self->finish(session);
-  });
+  arm_start_timeout(session);
 
   callback(response);
 }
@@ -2137,6 +2142,10 @@ void ImageStreamer::Impl::finish(
     const std::shared_ptr<StreamSession> &session) {
   bool removed = false;
   bool slot_released = false;
+  // 在锁内只做指针搬移，锁外再析构，避免持队列锁执行文件关闭/vips 回收。
+  VipsImagePtr image;
+  VipsSourcePtr source;
+  std::shared_ptr<HttpByteStream> stream;
   {
     std::lock_guard lock(mutex);
     if (session->encode_slot) {
@@ -2147,7 +2156,17 @@ void ImageStreamer::Impl::finish(
       slot_released = true;
     }
     removed = active.erase(session) > 0;
+    // 会话已经结束，及时释放解码后的像素和字节流；否则 30 秒兜底定时器
+    // 或响应对象可能继续持有它们。cache_pin/source_cache/variant_cache 只占
+    // 文件句柄，留给 session 析构回收即可。
+    image = std::move(session->image);
+    source = std::move(session->source);
+    stream = std::move(session->stream);
   }
+  // 图像可能依赖 source 的读取器，先释放图像再释放 source。
+  image.reset();
+  source.reset();
+  stream.reset();
   if (registry && session->context) {
     registry->unregister_context(session->context);
   }
