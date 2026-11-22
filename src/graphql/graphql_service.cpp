@@ -1043,6 +1043,7 @@ public:
         return values;
       };
       query.entity_ids = read_ids(filter->entityIds, "entityIds");
+      query.image_ids = read_ids(filter->imageIds, "imageIds");
       query.artist_ids = read_ids(filter->artistIds, "artistIds");
       query.include_tag_ids = read_ids(filter->includeTagIds, "includeTagIds");
       query.exclude_tag_ids = read_ids(filter->excludeTagIds, "excludeTagIds");

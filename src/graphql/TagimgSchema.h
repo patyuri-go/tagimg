@@ -172,6 +172,7 @@ struct [[nodiscard("unnecessary construction")]] ImageFilter
 	explicit ImageFilter() noexcept;
 	explicit ImageFilter(
 		std::optional<std::vector<response::IdType>> entityIdsArg,
+		std::optional<std::vector<response::IdType>> imageIdsArg,
 		std::optional<std::vector<response::IdType>> artistIdsArg,
 		std::optional<std::vector<response::IdType>> includeTagIdsArg,
 		std::optional<TagMatchMode> includeModeArg,
@@ -186,6 +187,7 @@ struct [[nodiscard("unnecessary construction")]] ImageFilter
 	ImageFilter& operator=(ImageFilter&& other) noexcept;
 
 	std::optional<std::vector<response::IdType>> entityIds;
+	std::optional<std::vector<response::IdType>> imageIds;
 	std::optional<std::vector<response::IdType>> artistIds;
 	std::optional<std::vector<response::IdType>> includeTagIds;
 	std::optional<TagMatchMode> includeMode;

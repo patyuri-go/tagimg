@@ -25,6 +25,27 @@
     }
   `;
 
+  // 灯箱侧栏需要逐图 metadata；按作品里的图片 ID 批量取回。
+  const IMAGES_BY_IDS_QUERY = `
+    query ArtworkImages($filter: ImageFilter!, $limit: Int!, $offset: Int!) {
+      images(filter: $filter, limit: $limit, offset: $offset) {
+        items {
+          id
+          width
+          height
+          frameCount
+          createdAt
+          scanAt
+          publishedAt
+          tagPaths { id path }
+          tags { id name category aliases }
+          artworks { id title publishedAt }
+        }
+        hasMore
+      }
+    }
+  `;
+
   const DELETE_MUTATION = `
     mutation DeleteArtwork($id: ID!) {
       deleteArtwork(id: $id) {
@@ -79,6 +100,10 @@
   const lightboxClose = document.getElementById("lightbox-close");
   const lightboxStage = document.getElementById("lightbox-stage");
   const lightboxError = document.getElementById("lightbox-error");
+  const lightboxSimilar = document.getElementById("lightbox-similar");
+  const lightboxArtworks = document.getElementById("lightbox-artworks");
+  const lightboxTags = document.getElementById("lightbox-tags");
+  const lightboxMeta = document.getElementById("lightbox-meta");
 
   let currentArtworkId = "";
   let currentArtwork = null;
@@ -106,6 +131,23 @@
   const lightboxRegularImages = new Map();
   let lightboxToken = 0;
   let lightboxPlaceholderSrc = "";
+  // 当前作品的逐图 metadata，键为图片 ID；加载完成前侧栏回退到作品级资料。
+  let imageDetailsById = new Map();
+  let imageDetailsToken = 0;
+
+  const ZOOM_MIN = 1;
+  const ZOOM_MAX = 8;
+  const lightboxZoom = {
+    scale: 1,
+    x: 0,
+    y: 0,
+    dragging: false,
+    pointerId: null,
+    startX: 0,
+    startY: 0,
+    originX: 0,
+    originY: 0,
+  };
 
   const tagSuggestWidget = TagSearch.create({
     input: editTagInput,
@@ -126,6 +168,116 @@
     }
     // 服务端返回 UTC 秒级 RFC3339，只做展示，不转换时区。
     return value.replace("T", " ").replace("Z", "").slice(0, 16);
+  }
+
+  function tagTooltip(tag, path) {
+    const lines = [];
+    const aliases = Array.isArray(tag.aliases) ? tag.aliases : [];
+    if (aliases.length > 0) {
+      lines.push(`别名：${aliases[0]}`);
+    }
+    if (path) {
+      lines.push(`路径：${path}`);
+    }
+    if (tag.category) {
+      lines.push(`分类：${tag.category}`);
+    }
+    return lines.join("\n");
+  }
+
+  function pathMapOf(item) {
+    const map = new Map();
+    for (const entry of item.tagPaths || []) {
+      map.set(entry.id, entry.path);
+    }
+    return map;
+  }
+
+  function buildSimilarUrl(imageId) {
+    return `/images.html?similar=${encodeURIComponent(imageId)}`;
+  }
+
+  // 逐图 metadata 到达前，用作品级资料填充侧栏，避免出现空面板。
+  function fallbackLightboxItem(imageId) {
+    const artwork = currentArtwork;
+    return {
+      id: imageId,
+      width: null,
+      height: null,
+      frameCount: null,
+      createdAt: artwork ? artwork.createdAt : "",
+      scanAt: null,
+      publishedAt: artwork ? artwork.publishedAt : null,
+      tagPaths: artwork && Array.isArray(artwork.tagPaths)
+        ? artwork.tagPaths
+        : [],
+      tags: artwork && Array.isArray(artwork.tags) ? artwork.tags : [],
+      artworks: artwork
+        ? [
+            {
+              id: artwork.id,
+              title: artwork.title,
+              publishedAt: artwork.publishedAt,
+            },
+          ]
+        : [],
+    };
+  }
+
+  function lightboxItem(imageId) {
+    return imageDetailsById.get(imageId) || fallbackLightboxItem(imageId);
+  }
+
+  async function loadImageDetails(imageIds) {
+    const token = (imageDetailsToken += 1);
+    const details = new Map();
+    const ids = Array.isArray(imageIds) ? imageIds.filter(Boolean) : [];
+    if (ids.length === 0) {
+      return details;
+    }
+
+    let offset = 0;
+    for (;;) {
+      const response = await fetch("/graphql", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          query: IMAGES_BY_IDS_QUERY,
+          variables: {
+            filter: { imageIds: ids },
+            limit: 100,
+            offset,
+          },
+        }),
+      });
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      const payload = await response.json();
+      if (Array.isArray(payload.errors) && payload.errors.length > 0) {
+        throw new Error(payload.errors[0].message || "查询图片失败");
+      }
+      const connection = payload.data && payload.data.images;
+      if (!connection) {
+        break;
+      }
+      for (const item of connection.items || []) {
+        details.set(item.id, item);
+      }
+      if (
+        !connection.hasMore ||
+        !connection.items ||
+        connection.items.length === 0
+      ) {
+        break;
+      }
+      offset += connection.items.length;
+    }
+
+    if (token !== imageDetailsToken) {
+      return imageDetailsById;
+    }
+    return details;
   }
 
   // RFC3339（UTC）转成 datetime-local 需要的字面值。
@@ -264,6 +416,160 @@
     return lightboxEntries[lightboxIndex] || "";
   }
 
+  function appendMeta(term, value) {
+    const dt = document.createElement("dt");
+    dt.textContent = term;
+    const dd = document.createElement("dd");
+    dd.textContent = value;
+    lightboxMeta.appendChild(dt);
+    lightboxMeta.appendChild(dd);
+  }
+
+  function renderLightboxSidebar() {
+    const imageId = lightboxImageId();
+    if (!imageId) {
+      return;
+    }
+    const item = lightboxItem(imageId);
+    lightboxSimilar.href = buildSimilarUrl(imageId);
+
+    lightboxArtworks.replaceChildren();
+    const artworks = Array.isArray(item.artworks) ? item.artworks : [];
+    if (artworks.length === 0) {
+      const link = document.createElement("a");
+      link.className = "image-artwork-link";
+      link.href = "/orphans.html";
+      link.textContent = "游离图片";
+      lightboxArtworks.appendChild(link);
+    } else {
+      for (const artwork of artworks) {
+        const row = document.createElement("div");
+        row.className = "image-lightbox-artwork";
+
+        const link = document.createElement("a");
+        link.className = "image-artwork-link";
+        link.href = `/artwork.html?id=${encodeURIComponent(artwork.id)}`;
+        link.textContent = artwork.title || "（无标题）";
+
+        const meta = document.createElement("span");
+        meta.className = "image-artwork-date";
+        meta.textContent = artwork.publishedAt
+          ? `发布 ${formatDate(artwork.publishedAt)}`
+          : "未设置发布时间";
+
+        row.appendChild(link);
+        row.appendChild(meta);
+        lightboxArtworks.appendChild(row);
+      }
+    }
+
+    lightboxTags.replaceChildren();
+    const tags = Array.isArray(item.tags) ? item.tags : [];
+    if (tags.length === 0) {
+      const empty = document.createElement("span");
+      empty.className = "image-tag-empty";
+      empty.textContent = "无标签";
+      lightboxTags.appendChild(empty);
+    } else {
+      const paths = pathMapOf(item);
+      for (const tag of tags) {
+        const chip = document.createElement("span");
+        chip.className = "chip";
+        chip.textContent = tag.name;
+        chip.title = tagTooltip(tag, paths.get(tag.id));
+        lightboxTags.appendChild(chip);
+      }
+    }
+
+    lightboxMeta.replaceChildren();
+    const width = Number(item.width);
+    const height = Number(item.height);
+    appendMeta(
+      "尺寸",
+      width > 0 && height > 0 ? `${width} × ${height}` : "未知",
+    );
+    if (item.frameCount !== null && item.frameCount !== undefined) {
+      appendMeta("帧数", String(item.frameCount));
+    }
+    appendMeta("创建时间", formatDate(item.createdAt) || "未知");
+    appendMeta("扫描时间", item.scanAt ? formatDate(item.scanAt) : "从未扫描");
+    appendMeta(
+      "发布时间",
+      item.publishedAt ? formatDate(item.publishedAt) : "未设置",
+    );
+    appendMeta("图片 ID", item.id);
+  }
+
+  function lightboxViewportSize() {
+    const style = window.getComputedStyle(lightboxStage);
+    const paddingX =
+      (parseFloat(style.paddingLeft) || 0) +
+      (parseFloat(style.paddingRight) || 0);
+    const paddingY =
+      (parseFloat(style.paddingTop) || 0) +
+      (parseFloat(style.paddingBottom) || 0);
+    return {
+      width: Math.max(0, lightboxStage.clientWidth - paddingX),
+      height: Math.max(0, lightboxStage.clientHeight - paddingY),
+    };
+  }
+
+  function clampLightboxZoom() {
+    const viewport = lightboxViewportSize();
+    const imageWidth = lightboxImage.offsetWidth * lightboxZoom.scale;
+    const imageHeight = lightboxImage.offsetHeight * lightboxZoom.scale;
+    const maxX = Math.max(0, (imageWidth - viewport.width) / 2);
+    const maxY = Math.max(0, (imageHeight - viewport.height) / 2);
+    lightboxZoom.x = Math.min(maxX, Math.max(-maxX, lightboxZoom.x));
+    lightboxZoom.y = Math.min(maxY, Math.max(-maxY, lightboxZoom.y));
+  }
+
+  function applyLightboxZoom() {
+    lightboxImage.style.transform =
+      `translate(${lightboxZoom.x}px, ${lightboxZoom.y}px) ` +
+      `scale(${lightboxZoom.scale})`;
+    lightboxStage.classList.toggle(
+      "is-zoomed",
+      lightboxZoom.scale > ZOOM_MIN + 0.001,
+    );
+  }
+
+  function resetLightboxZoom() {
+    lightboxZoom.scale = ZOOM_MIN;
+    lightboxZoom.x = 0;
+    lightboxZoom.y = 0;
+    lightboxZoom.dragging = false;
+    lightboxZoom.pointerId = null;
+    lightboxImage.style.transform = "";
+    lightboxStage.classList.remove("is-zoomed", "is-dragging");
+  }
+
+  function zoomLightboxAt(clientX, clientY, factor) {
+    if (lightboxImage.hidden || lightboxImage.offsetWidth === 0) {
+      return;
+    }
+    const nextScale = Math.min(
+      ZOOM_MAX,
+      Math.max(ZOOM_MIN, lightboxZoom.scale * factor),
+    );
+    if (Math.abs(nextScale - lightboxZoom.scale) < 0.0001) {
+      return;
+    }
+    const rect = lightboxStage.getBoundingClientRect();
+    const offsetX = clientX - (rect.left + rect.width / 2);
+    const offsetY = clientY - (rect.top + rect.height / 2);
+    const ratio = nextScale / lightboxZoom.scale;
+    lightboxZoom.x = offsetX - (offsetX - lightboxZoom.x) * ratio;
+    lightboxZoom.y = offsetY - (offsetY - lightboxZoom.y) * ratio;
+    lightboxZoom.scale = nextScale;
+    if (nextScale <= ZOOM_MIN + 0.001) {
+      lightboxZoom.x = 0;
+      lightboxZoom.y = 0;
+    }
+    clampLightboxZoom();
+    applyLightboxZoom();
+  }
+
   function renderLightbox() {
     const imageId = lightboxImageId();
     if (!imageId) {
@@ -271,6 +577,7 @@
       return;
     }
     const token = (lightboxToken += 1);
+    resetLightboxZoom();
 
     const title = currentArtwork ? currentArtwork.title : "";
     lightboxError.hidden = true;
@@ -304,6 +611,8 @@
     const multiple = lightboxEntries.length > 1;
     lightboxPrev.hidden = !multiple;
     lightboxNext.hidden = !multiple;
+
+    renderLightboxSidebar();
   }
 
   function openLightbox(imageId) {
@@ -1114,6 +1423,20 @@
     render(artwork);
     currentArtworkId = artwork.id;
     editButton.hidden = false;
+
+    // 画廊先渲染，逐图资料随后补齐；灯箱在资料到达前先用作品级数据兜底。
+    imageDetailsById = new Map();
+    const imageIds = Array.isArray(artwork.imageIds) ? artwork.imageIds : [];
+    loadImageDetails(imageIds)
+      .then((details) => {
+        imageDetailsById = details;
+        if (lightboxEl.open) {
+          renderLightboxSidebar();
+        }
+      })
+      .catch(() => {
+        // 详情加载失败不影响浏览，侧栏继续使用作品级资料。
+      });
     return true;
   }
 
@@ -1135,6 +1458,79 @@
       closeLightbox();
     }
   });
+
+  lightboxStage.addEventListener(
+    "wheel",
+    (event) => {
+      if (!lightboxEl.open || event.deltaY === 0) {
+        return;
+      }
+      event.preventDefault();
+      const factor = Math.exp(-event.deltaY * 0.0015);
+      zoomLightboxAt(event.clientX, event.clientY, factor);
+    },
+    { passive: false },
+  );
+
+  lightboxImage.addEventListener("dragstart", (event) => {
+    event.preventDefault();
+  });
+
+  lightboxImage.addEventListener("pointerdown", (event) => {
+    if (
+      !lightboxEl.open ||
+      event.button !== 0 ||
+      lightboxZoom.scale <= ZOOM_MIN + 0.001
+    ) {
+      return;
+    }
+    event.preventDefault();
+    lightboxZoom.dragging = true;
+    lightboxZoom.pointerId = event.pointerId;
+    lightboxZoom.startX = event.clientX;
+    lightboxZoom.startY = event.clientY;
+    lightboxZoom.originX = lightboxZoom.x;
+    lightboxZoom.originY = lightboxZoom.y;
+    lightboxStage.classList.add("is-dragging");
+    try {
+      lightboxImage.setPointerCapture(event.pointerId);
+    } catch {
+      // 某些浏览器在 pointerdown 里不能立即捕获，忽略即可。
+    }
+  });
+
+  lightboxImage.addEventListener("pointermove", (event) => {
+    if (
+      !lightboxZoom.dragging ||
+      event.pointerId !== lightboxZoom.pointerId
+    ) {
+      return;
+    }
+    event.preventDefault();
+    lightboxZoom.x =
+      lightboxZoom.originX + (event.clientX - lightboxZoom.startX);
+    lightboxZoom.y =
+      lightboxZoom.originY + (event.clientY - lightboxZoom.startY);
+    clampLightboxZoom();
+    applyLightboxZoom();
+  });
+
+  function endLightboxDrag(event) {
+    if (
+      !lightboxZoom.dragging ||
+      (event && event.pointerId !== lightboxZoom.pointerId)
+    ) {
+      return;
+    }
+    lightboxZoom.dragging = false;
+    lightboxZoom.pointerId = null;
+    lightboxStage.classList.remove("is-dragging");
+  }
+
+  lightboxImage.addEventListener("pointerup", endLightboxDrag);
+  lightboxImage.addEventListener("pointercancel", endLightboxDrag);
+  lightboxImage.addEventListener("lostpointercapture", endLightboxDrag);
+
   lightboxEl.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {
       event.preventDefault();
@@ -1153,15 +1549,23 @@
     lightboxPlaceholderSrc = "";
     lightboxEntries = [];
     lightboxIndex = 0;
+    resetLightboxZoom();
     lightboxImage.removeAttribute("src");
     lightboxImage.removeAttribute("data-image-id");
     lightboxImage.alt = "";
     lightboxImage.hidden = false;
     lightboxError.hidden = true;
+    lightboxArtworks.replaceChildren();
+    lightboxTags.replaceChildren();
+    lightboxMeta.replaceChildren();
   });
   lightboxImage.addEventListener("load", () => {
     lightboxImage.hidden = false;
     lightboxError.hidden = true;
+    if (lightboxZoom.scale > ZOOM_MIN + 0.001) {
+      clampLightboxZoom();
+      applyLightboxZoom();
+    }
   });
   lightboxImage.addEventListener("error", () => {
     const src = lightboxImage.getAttribute("src");

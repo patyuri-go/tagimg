@@ -119,10 +119,10 @@
 
     <dialog
       id="image-lightbox"
-      class="dialog lightbox"
+      class="dialog image-lightbox"
       aria-labelledby="lightbox-caption"
     >
-      <header class="dialog-head lightbox-head">
+      <header class="dialog-head image-lightbox-head">
         <h2 id="lightbox-caption" class="lightbox-caption"></h2>
         <button
           id="lightbox-close"
@@ -133,27 +133,52 @@
           ×
         </button>
       </header>
-      <div id="lightbox-stage" class="dialog-body lightbox-stage">
-        <img id="lightbox-image" class="lightbox-image" alt="" />
-        <p id="lightbox-error" class="lightbox-error" hidden>图片无法加载</p>
-        <button
-          id="lightbox-prev"
-          class="lightbox-nav lightbox-prev"
-          type="button"
-          aria-label="上一张图片"
-          title="上一张（←）"
-        >
-          ‹
-        </button>
-        <button
-          id="lightbox-next"
-          class="lightbox-nav lightbox-next"
-          type="button"
-          aria-label="下一张图片"
-          title="下一张（→）"
-        >
-          ›
-        </button>
+      <div class="image-lightbox-body">
+        <div id="lightbox-stage" class="image-lightbox-stage">
+          <img id="lightbox-image" class="lightbox-image" alt="" />
+          <p id="lightbox-error" class="lightbox-error" hidden>
+            图片无法加载
+          </p>
+          <button
+            id="lightbox-prev"
+            class="lightbox-nav lightbox-prev"
+            type="button"
+            aria-label="上一张图片"
+            title="上一张（←）"
+          >
+            ‹
+          </button>
+          <button
+            id="lightbox-next"
+            class="lightbox-nav lightbox-next"
+            type="button"
+            aria-label="下一张图片"
+            title="下一张（→）"
+          >
+            ›
+          </button>
+        </div>
+        <aside class="image-lightbox-side">
+          <a
+            id="lightbox-similar"
+            class="lightbox-similar-link"
+            href="/images.html"
+          >
+            查找相似图片
+          </a>
+          <section class="image-info-section">
+            <h3 class="image-info-title">所属作品</h3>
+            <div id="lightbox-artworks" class="image-lightbox-artworks"></div>
+          </section>
+          <section class="image-info-section">
+            <h3 class="image-info-title">标签</h3>
+            <div id="lightbox-tags" class="image-lightbox-tags"></div>
+          </section>
+          <section class="image-info-section">
+            <h3 class="image-info-title">详情</h3>
+            <dl id="lightbox-meta" class="image-meta"></dl>
+          </section>
+        </aside>
       </div>
     </dialog>
 

@@ -775,6 +775,7 @@ WHERE (p.title IS NULL OR a.title ILIKE p.title ESCAPE '\')
 constexpr const char *kImageSearchWithSql = R"sql(
 WITH RECURSIVE params AS (
   SELECT CAST(:entity_ids AS uuid[]) AS entity_ids,
+         CAST(:image_ids AS uuid[]) AS image_ids,
          CAST(:artist_ids AS uuid[]) AS artist_ids,
          CAST(:include_tags AS uuid[]) AS include_tags,
          CAST(:exclude_tags AS uuid[]) AS exclude_tags,
@@ -810,6 +811,7 @@ constexpr const char *kImageSearchFromSql = R"sql(
 FROM images i
 CROSS JOIN params p
 WHERE (p.entity_ids IS NULL OR i.entity_id = ANY(p.entity_ids))
+  AND (p.image_ids IS NULL OR i.id = ANY(p.image_ids))
   AND (p.artist_ids IS NULL OR EXISTS (
         SELECT 1
         FROM artwork_images ai
@@ -1629,8 +1631,9 @@ TagimgRepository::search_images(const ImageSearchQuery &query) const {
   } else if (!query.sort_embedding.empty() || query.reference_image_id) {
     return TagimgRepositoryError::InvalidArgument;
   }
-  for (const auto *ids : {&query.entity_ids, &query.artist_ids,
-                          &query.include_tag_ids, &query.exclude_tag_ids}) {
+  for (const auto *ids : {&query.entity_ids, &query.image_ids,
+                          &query.artist_ids, &query.include_tag_ids,
+                          &query.exclude_tag_ids}) {
     for (const std::string &id : *ids) {
       if (!is_uuid(id)) {
         return TagimgRepositoryError::InvalidArgument;
@@ -1651,6 +1654,12 @@ TagimgRepository::search_images(const ImageSearchQuery &query) const {
   if (!query.entity_ids.empty()) {
     entity_value = uuid_array_literal(query.entity_ids);
     entity_indicator = soci::i_ok;
+  }
+  std::string image_value;
+  soci::indicator image_indicator = soci::i_null;
+  if (!query.image_ids.empty()) {
+    image_value = uuid_array_literal(query.image_ids);
+    image_indicator = soci::i_ok;
   }
   std::string artist_value;
   soci::indicator artist_indicator = soci::i_null;
@@ -1732,6 +1741,7 @@ TagimgRepository::search_images(const ImageSearchQuery &query) const {
       const std::string embedding_value = pgvector_literal(query.sort_embedding);
       soci::rowset<soci::row> rows =
           (sql.prepare << page_sql, soci::use(entity_value, entity_indicator),
+           soci::use(image_value, image_indicator),
            soci::use(artist_value, artist_indicator),
            soci::use(include_value, include_indicator),
            soci::use(exclude_value, exclude_indicator),
@@ -1751,6 +1761,7 @@ TagimgRepository::search_images(const ImageSearchQuery &query) const {
     } else {
       soci::rowset<soci::row> rows =
           (sql.prepare << page_sql, soci::use(entity_value, entity_indicator),
+           soci::use(image_value, image_indicator),
            soci::use(artist_value, artist_indicator),
            soci::use(include_value, include_indicator),
            soci::use(exclude_value, exclude_indicator),
@@ -1771,6 +1782,7 @@ TagimgRepository::search_images(const ImageSearchQuery &query) const {
     if (query.include_total) {
       long long total = 0;
       sql << count_sql, soci::use(entity_value, entity_indicator),
+          soci::use(image_value, image_indicator),
           soci::use(artist_value, artist_indicator),
           soci::use(include_value, include_indicator),
           soci::use(exclude_value, exclude_indicator), soci::use(include_count),

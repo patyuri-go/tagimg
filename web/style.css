@@ -1318,6 +1318,23 @@ body.lightbox-open {
   box-shadow: 0 8px 28px rgb(16 24 40 / 18%);
 }
 
+/* 灯箱内滚轮缩放与拖动平移。 */
+.image-lightbox-stage .lightbox-image {
+  transform-origin: center center;
+  will-change: transform;
+  user-select: none;
+  -webkit-user-drag: none;
+  touch-action: none;
+}
+
+.image-lightbox-stage.is-zoomed .lightbox-image {
+  cursor: grab;
+}
+
+.image-lightbox-stage.is-dragging .lightbox-image {
+  cursor: grabbing;
+}
+
 .lightbox-error {
   margin: 0;
   color: var(--muted);
@@ -1720,24 +1737,20 @@ body.lightbox-open {
   font-size: 13px;
 }
 
-/* 卡片信息常显，不再作为悬停渐变浮层。 */
-.image-card .card-body {
-  position: static;
-  z-index: auto;
-  gap: 8px;
-  padding: 10px 12px 12px;
-  background: var(--surface);
-  color: var(--text);
-  opacity: 1;
-  pointer-events: auto;
-  transform: none;
+/* 图片页沿用作品页的悬停渐变浮层，卡片只显示图片。 */
+.images-page .layout-tools {
+  top: 84px;
 }
 
-.image-artworks {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 2px 10px;
-  min-width: 0;
+.image-card:focus-within .card-body {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+@media (hover: none) {
+  .image-card .card-body {
+    display: none;
+  }
 }
 
 .image-artwork-link {
@@ -1752,26 +1765,6 @@ body.lightbox-open {
 
 .image-artwork-link:hover {
   text-decoration: underline;
-}
-
-.image-orphan {
-  color: var(--muted);
-  font-size: 13px;
-}
-
-.image-card .tags {
-  margin-top: 0;
-}
-
-.image-card .tags .chip {
-  background: var(--chip-bg);
-  color: var(--chip-text);
-}
-
-.image-card .tags .chip-more {
-  border: 1px dashed var(--border);
-  background: transparent;
-  color: var(--muted);
 }
 
 /* 图片灯箱：左侧大图 + 右侧资料栏，窄屏时资料栏改成底部抽屉。 */

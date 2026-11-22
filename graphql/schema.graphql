@@ -137,6 +137,8 @@ input ArtworkFilter {
 input ImageFilter {
   "图片包含其中任一实体即命中。"
   entityIds: [ID!]
+  "图片 ID 命中其中任一即返回，用于按 ID 批量取图片。"
+  imageIds: [ID!]
   "图片所属作品包含其中任一艺术家即命中。"
   artistIds: [ID!]
 

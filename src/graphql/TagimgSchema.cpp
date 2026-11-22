@@ -345,6 +345,7 @@ tagimg::ImageFilter Argument<tagimg::ImageFilter>::convert(const response::Value
 	}();
 
 	auto valueEntityIds = service::ModifiedArgument<response::IdType>::require<service::TypeModifier::Nullable, service::TypeModifier::List>("entityIds", value);
+	auto valueImageIds = service::ModifiedArgument<response::IdType>::require<service::TypeModifier::Nullable, service::TypeModifier::List>("imageIds", value);
 	auto valueArtistIds = service::ModifiedArgument<response::IdType>::require<service::TypeModifier::Nullable, service::TypeModifier::List>("artistIds", value);
 	auto valueIncludeTagIds = service::ModifiedArgument<response::IdType>::require<service::TypeModifier::Nullable, service::TypeModifier::List>("includeTagIds", value);
 	auto pairIncludeMode = service::ModifiedArgument<tagimg::TagMatchMode>::find<service::TypeModifier::Nullable>("includeMode", value);
@@ -363,6 +364,7 @@ tagimg::ImageFilter Argument<tagimg::ImageFilter>::convert(const response::Value
 
 	return tagimg::ImageFilter {
 		std::move(valueEntityIds),
+		std::move(valueImageIds),
 		std::move(valueArtistIds),
 		std::move(valueIncludeTagIds),
 		valueIncludeMode,
@@ -579,6 +581,7 @@ ArtworkFilter& ArtworkFilter::operator=(ArtworkFilter&& other) noexcept
 
 ImageFilter::ImageFilter() noexcept
 	: entityIds {}
+	, imageIds {}
 	, artistIds {}
 	, includeTagIds {}
 	, includeMode {}
@@ -591,6 +594,7 @@ ImageFilter::ImageFilter() noexcept
 
 ImageFilter::ImageFilter(
 		std::optional<std::vector<response::IdType>> entityIdsArg,
+		std::optional<std::vector<response::IdType>> imageIdsArg,
 		std::optional<std::vector<response::IdType>> artistIdsArg,
 		std::optional<std::vector<response::IdType>> includeTagIdsArg,
 		std::optional<TagMatchMode> includeModeArg,
@@ -598,6 +602,7 @@ ImageFilter::ImageFilter(
 		std::optional<std::vector<response::IdType>> excludeTagIdsArg,
 		std::optional<bool> expandExcludeTagDescendantsArg) noexcept
 	: entityIds { std::move(entityIdsArg) }
+	, imageIds { std::move(imageIdsArg) }
 	, artistIds { std::move(artistIdsArg) }
 	, includeTagIds { std::move(includeTagIdsArg) }
 	, includeMode { std::move(includeModeArg) }
@@ -609,6 +614,7 @@ ImageFilter::ImageFilter(
 
 ImageFilter::ImageFilter(const ImageFilter& other)
 	: entityIds { service::ModifiedArgument<response::IdType>::duplicate<service::TypeModifier::Nullable, service::TypeModifier::List>(other.entityIds) }
+	, imageIds { service::ModifiedArgument<response::IdType>::duplicate<service::TypeModifier::Nullable, service::TypeModifier::List>(other.imageIds) }
 	, artistIds { service::ModifiedArgument<response::IdType>::duplicate<service::TypeModifier::Nullable, service::TypeModifier::List>(other.artistIds) }
 	, includeTagIds { service::ModifiedArgument<response::IdType>::duplicate<service::TypeModifier::Nullable, service::TypeModifier::List>(other.includeTagIds) }
 	, includeMode { service::ModifiedArgument<TagMatchMode>::duplicate<service::TypeModifier::Nullable>(other.includeMode) }
@@ -620,6 +626,7 @@ ImageFilter::ImageFilter(const ImageFilter& other)
 
 ImageFilter::ImageFilter(ImageFilter&& other) noexcept
 	: entityIds { std::move(other.entityIds) }
+	, imageIds { std::move(other.imageIds) }
 	, artistIds { std::move(other.artistIds) }
 	, includeTagIds { std::move(other.includeTagIds) }
 	, includeMode { std::move(other.includeMode) }
@@ -646,6 +653,7 @@ ImageFilter& ImageFilter::operator=(const ImageFilter& other)
 ImageFilter& ImageFilter::operator=(ImageFilter&& other) noexcept
 {
 	entityIds = std::move(other.entityIds);
+	imageIds = std::move(other.imageIds);
 	artistIds = std::move(other.artistIds);
 	includeTagIds = std::move(other.includeTagIds);
 	includeMode = std::move(other.includeMode);
@@ -1024,6 +1032,7 @@ void AddTypesToSchema(const std::shared_ptr<schema::Schema>& schema)
 	});
 	typeImageFilter->AddInputValues({
 		schema::InputValue::Make(R"gql(entityIds)gql"sv, R"md(图片包含其中任一实体即命中。)md"sv, schema->WrapType(introspection::TypeKind::LIST, schema->WrapType(introspection::TypeKind::NON_NULL, schema->LookupType(R"gql(ID)gql"sv))), R"gql()gql"sv),
+		schema::InputValue::Make(R"gql(imageIds)gql"sv, R"md(图片 ID 命中其中任一即返回，用于按 ID 批量取图片。)md"sv, schema->WrapType(introspection::TypeKind::LIST, schema->WrapType(introspection::TypeKind::NON_NULL, schema->LookupType(R"gql(ID)gql"sv))), R"gql()gql"sv),
 		schema::InputValue::Make(R"gql(artistIds)gql"sv, R"md(图片所属作品包含其中任一艺术家即命中。)md"sv, schema->WrapType(introspection::TypeKind::LIST, schema->WrapType(introspection::TypeKind::NON_NULL, schema->LookupType(R"gql(ID)gql"sv))), R"gql()gql"sv),
 		schema::InputValue::Make(R"gql(includeTagIds)gql"sv, R"md(要求命中的标签 ID 集合。)md"sv, schema->WrapType(introspection::TypeKind::LIST, schema->WrapType(introspection::TypeKind::NON_NULL, schema->LookupType(R"gql(ID)gql"sv))), R"gql()gql"sv),
 		schema::InputValue::Make(R"gql(includeMode)gql"sv, R"md(includeTagIds 的匹配方式，默认全部命中。)md"sv, schema->LookupType(R"gql(TagMatchMode)gql"sv), R"gql(ALL)gql"sv),

@@ -82,6 +82,24 @@
   const excludeStage = document.getElementById("exclude-stage");
   const statusLine = document.getElementById("image-status");
   const results = document.getElementById("image-results");
+  const layoutTools = document.getElementById("layout-tools");
+  const layoutToggle = document.getElementById("layout-toggle");
+  const layoutPanel = document.getElementById("layout-panel");
+  const layoutClose = document.getElementById("layout-close");
+  const layoutColGap = document.getElementById("layout-col-gap");
+  const layoutColGapValue = document.getElementById("layout-col-gap-value");
+  const layoutRowGap = document.getElementById("layout-row-gap");
+  const layoutRowGapValue = document.getElementById("layout-row-gap-value");
+  const layoutRadius = document.getElementById("layout-radius");
+  const layoutRadiusValue = document.getElementById("layout-radius-value");
+  const layoutModeVertical = document.getElementById("layout-mode-vertical");
+  const layoutModeHorizontal = document.getElementById("layout-mode-horizontal");
+  const layoutColumnsField = document.getElementById("layout-columns-field");
+  const layoutColumns = document.getElementById("layout-columns");
+  const layoutColumnsValue = document.getElementById("layout-columns-value");
+  const layoutHeightField = document.getElementById("layout-height-field");
+  const layoutHeight = document.getElementById("layout-height");
+  const layoutHeightValue = document.getElementById("layout-height-value");
   const hoverPreview = document.getElementById("hover-preview");
   const hoverPreviewImage = hoverPreview.querySelector("img");
 
@@ -98,6 +116,20 @@
   const lightboxMeta = document.getElementById("image-lightbox-meta");
   const lightboxSimilar = document.getElementById("image-lightbox-similar");
 
+  const ZOOM_MIN = 1;
+  const ZOOM_MAX = 8;
+  const lightboxZoom = {
+    scale: 1,
+    x: 0,
+    y: 0,
+    dragging: false,
+    pointerId: null,
+    startX: 0,
+    startY: 0,
+    originX: 0,
+    originY: 0,
+  };
+
   const includeTags = [];
   const excludeTags = [];
 
@@ -111,6 +143,19 @@
   let allCards = [];
   let columns = [];
   let resizeTimer = 0;
+
+  // 排版设置只影响卡片排列和外观，不改动后端数据。
+  const layoutSettings = {
+    mode: "vertical",
+    colGap: 18,
+    rowGap: 18,
+    radius: 14,
+    columns: 4,
+    height: 240,
+  };
+  // 默认跟随窗口宽度；拖动列数滑杆后改为手动，刷新页面恢复自动。
+  let layoutAuto = true;
+  let layoutManualColumns = 4;
 
   let lightboxEntries = [];
   let lightboxIndex = -1;
@@ -478,16 +523,21 @@
   // ---------- 卡片与瀑布流 ----------
 
   function desiredColumnCount() {
-    const width = results.clientWidth || window.innerWidth;
+    if (!layoutAuto) {
+      return Math.max(1, Math.min(8, Math.round(layoutManualColumns)));
+    }
+    // 按视口宽度切换列数，保证 780px 起稳定为 4 列。
+    const width = window.innerWidth;
     if (width < 480) {
       return 1;
     }
     if (width < 780) {
       return 2;
     }
-    return Math.max(2, Math.min(5, Math.floor(width / 300)));
+    return 4;
   }
 
+  // 追加新卡片时只放到当前最短的列，已有卡片不会被重新洗牌。
   function shortestColumn() {
     if (columns.length === 0) {
       return null;
@@ -504,27 +554,74 @@
     return target;
   }
 
+  // 横向模式按宽高比分配 flex 宽度，行高由设置项控制。
+  function applyCardLayout(card) {
+    if (layoutSettings.mode !== "horizontal") {
+      card.style.removeProperty("flex-basis");
+      card.style.removeProperty("flex-grow");
+      card.style.removeProperty("flex-shrink");
+      return;
+    }
+    const ratio = Number(card.dataset.aspectRatio) || 1.5;
+    card.style.flexBasis = `${ratio * layoutSettings.height}px`;
+    card.style.flexGrow = String(ratio);
+    card.style.flexShrink = "1";
+  }
+
   function placeCard(card) {
+    applyCardLayout(card);
+    if (layoutSettings.mode === "horizontal") {
+      results.appendChild(card);
+      return;
+    }
     const column = shortestColumn();
     if (column) {
       column.appendChild(card);
     }
   }
 
-  function rebuildColumns() {
-    const count = desiredColumnCount();
-    const fragment = document.createDocumentFragment();
-    const next = [];
-    for (let i = 0; i < count; i += 1) {
-      const column = document.createElement("div");
-      column.className = "masonry-column";
-      next.push(column);
-      fragment.appendChild(column);
+  // 间距和圆角只改 CSS 变量；模式、列数变化才重建容器。
+  function applyLayoutSettings() {
+    results.dataset.layout = layoutSettings.mode;
+    results.style.setProperty("--col-gap", `${layoutSettings.colGap}px`);
+    results.style.setProperty("--row-gap", `${layoutSettings.rowGap}px`);
+    results.style.setProperty("--img-radius", `${layoutSettings.radius}px`);
+    for (const card of allCards) {
+      applyCardLayout(card);
     }
-    results.replaceChildren(fragment);
-    columns = next;
+  }
+
+  function rebuildLayout() {
+    results.replaceChildren();
+    columns = [];
+    if (layoutSettings.mode === "vertical") {
+      const count = desiredColumnCount();
+      for (let index = 0; index < count; index += 1) {
+        const column = document.createElement("div");
+        column.className = "masonry-column";
+        columns.push(column);
+      }
+      results.append(...columns);
+    }
+    applyLayoutSettings();
     for (const card of allCards) {
       placeCard(card);
+    }
+  }
+
+  function layoutNeedsRebuild() {
+    if (layoutSettings.mode === "horizontal") {
+      return results.dataset.layout !== "horizontal" || columns.length !== 0;
+    }
+    return (
+      results.dataset.layout !== "vertical" ||
+      columns.length !== desiredColumnCount()
+    );
+  }
+
+  function relayout() {
+    if (layoutNeedsRebuild()) {
+      rebuildLayout();
     }
   }
 
@@ -577,31 +674,14 @@
     return badge;
   }
 
-  function createArtworkList(item) {
-    const wrapper = document.createElement("div");
-    wrapper.className = "image-artworks";
-
+  function artworkLabel(item) {
     const artworks = Array.isArray(item.artworks) ? item.artworks : [];
     if (artworks.length === 0) {
-      const orphan = document.createElement("a");
-      orphan.className = "image-orphan";
-      orphan.href = "/orphans.html";
-      orphan.textContent = "游离图片";
-      wrapper.appendChild(orphan);
-      return wrapper;
+      return "游离图片";
     }
-
-    for (const artwork of artworks) {
-      const link = document.createElement("a");
-      link.className = "image-artwork-link";
-      link.href = `/artwork.html?id=${encodeURIComponent(artwork.id)}`;
-      link.textContent = artwork.title || "（无标题）";
-      link.title = artwork.publishedAt
-        ? `${artwork.title}\n发布 ${formatDate(artwork.publishedAt)}`
-        : artwork.title;
-      wrapper.appendChild(link);
-    }
-    return wrapper;
+    return artworks
+      .map((artwork) => artwork.title || "（无标题）")
+      .join("、");
   }
 
   function createTagList(item) {
@@ -638,6 +718,12 @@
     const card = document.createElement("article");
     card.className = "card image-card";
 
+    const width = Number(item.width);
+    const height = Number(item.height);
+    const ratioWidth = width > 0 ? width : 3;
+    const ratioHeight = height > 0 ? height : 2;
+    card.dataset.aspectRatio = String(ratioWidth / ratioHeight);
+
     const button = document.createElement("button");
     button.type = "button";
     button.className = "image-thumb-button";
@@ -655,7 +741,23 @@
 
     const body = document.createElement("div");
     body.className = "card-body";
-    body.appendChild(createArtworkList(item));
+
+    const title = document.createElement("h2");
+    title.className = "card-title";
+    title.textContent = artworkLabel(item);
+
+    const meta = document.createElement("div");
+    meta.className = "meta";
+    const metaText = document.createElement("span");
+    metaText.textContent =
+      width > 0 && height > 0 ? `${width}×${height}` : "尺寸未知";
+    const frameCount = Number(item.frameCount);
+    if (frameCount > 1) {
+      metaText.textContent += ` · ${frameCount} 帧`;
+    }
+    meta.appendChild(metaText);
+
+    body.append(title, meta);
     const tags = createTagList(item);
     if (tags.childElementCount > 0) {
       body.appendChild(tags);
@@ -716,8 +818,8 @@
         return;
       }
 
-      if (data.items.length > 0 && columns.length !== desiredColumnCount()) {
-        rebuildColumns();
+      if (data.items.length > 0) {
+        relayout();
       }
 
       // 图片尺寸已经随结果返回，可以直接同步插入卡片，保持后端顺序。
@@ -845,6 +947,76 @@
     appendMeta("图片 ID", item.id);
   }
 
+  function lightboxViewportSize() {
+    const style = window.getComputedStyle(lightboxStage);
+    const paddingX =
+      (parseFloat(style.paddingLeft) || 0) +
+      (parseFloat(style.paddingRight) || 0);
+    const paddingY =
+      (parseFloat(style.paddingTop) || 0) +
+      (parseFloat(style.paddingBottom) || 0);
+    return {
+      width: Math.max(0, lightboxStage.clientWidth - paddingX),
+      height: Math.max(0, lightboxStage.clientHeight - paddingY),
+    };
+  }
+
+  function clampLightboxZoom() {
+    const viewport = lightboxViewportSize();
+    const imageWidth = lightboxImage.offsetWidth * lightboxZoom.scale;
+    const imageHeight = lightboxImage.offsetHeight * lightboxZoom.scale;
+    const maxX = Math.max(0, (imageWidth - viewport.width) / 2);
+    const maxY = Math.max(0, (imageHeight - viewport.height) / 2);
+    lightboxZoom.x = Math.min(maxX, Math.max(-maxX, lightboxZoom.x));
+    lightboxZoom.y = Math.min(maxY, Math.max(-maxY, lightboxZoom.y));
+  }
+
+  function applyLightboxZoom() {
+    lightboxImage.style.transform =
+      `translate(${lightboxZoom.x}px, ${lightboxZoom.y}px) ` +
+      `scale(${lightboxZoom.scale})`;
+    lightboxStage.classList.toggle(
+      "is-zoomed",
+      lightboxZoom.scale > ZOOM_MIN + 0.001,
+    );
+  }
+
+  function resetLightboxZoom() {
+    lightboxZoom.scale = ZOOM_MIN;
+    lightboxZoom.x = 0;
+    lightboxZoom.y = 0;
+    lightboxZoom.dragging = false;
+    lightboxZoom.pointerId = null;
+    lightboxImage.style.transform = "";
+    lightboxStage.classList.remove("is-zoomed", "is-dragging");
+  }
+
+  function zoomLightboxAt(clientX, clientY, factor) {
+    if (lightboxImage.hidden || lightboxImage.offsetWidth === 0) {
+      return;
+    }
+    const nextScale = Math.min(
+      ZOOM_MAX,
+      Math.max(ZOOM_MIN, lightboxZoom.scale * factor),
+    );
+    if (Math.abs(nextScale - lightboxZoom.scale) < 0.0001) {
+      return;
+    }
+    const rect = lightboxStage.getBoundingClientRect();
+    const offsetX = clientX - (rect.left + rect.width / 2);
+    const offsetY = clientY - (rect.top + rect.height / 2);
+    const ratio = nextScale / lightboxZoom.scale;
+    lightboxZoom.x = offsetX - (offsetX - lightboxZoom.x) * ratio;
+    lightboxZoom.y = offsetY - (offsetY - lightboxZoom.y) * ratio;
+    lightboxZoom.scale = nextScale;
+    if (nextScale <= ZOOM_MIN + 0.001) {
+      lightboxZoom.x = 0;
+      lightboxZoom.y = 0;
+    }
+    clampLightboxZoom();
+    applyLightboxZoom();
+  }
+
   function renderLightbox() {
     const item = lightboxEntries[lightboxIndex];
     if (!item) {
@@ -852,6 +1024,7 @@
     }
     const imageId = item.id;
     const token = (lightboxToken += 1);
+    resetLightboxZoom();
     const total = lightboxEntries.length;
     lightboxCaption.textContent = `第 ${lightboxIndex + 1} / ${total} 张`;
     lightboxPrev.hidden = total <= 1;
@@ -915,6 +1088,10 @@
   lightboxImage.addEventListener("load", () => {
     lightboxError.hidden = true;
     lightboxImage.hidden = false;
+    if (lightboxZoom.scale > ZOOM_MIN + 0.001) {
+      clampLightboxZoom();
+      applyLightboxZoom();
+    }
   });
 
   lightboxImage.addEventListener("error", () => {
@@ -947,12 +1124,85 @@
     }
   });
 
+  lightboxStage.addEventListener(
+    "wheel",
+    (event) => {
+      if (!lightbox.open || event.deltaY === 0) {
+        return;
+      }
+      event.preventDefault();
+      const factor = Math.exp(-event.deltaY * 0.0015);
+      zoomLightboxAt(event.clientX, event.clientY, factor);
+    },
+    { passive: false },
+  );
+
+  lightboxImage.addEventListener("dragstart", (event) => {
+    event.preventDefault();
+  });
+
+  lightboxImage.addEventListener("pointerdown", (event) => {
+    if (
+      !lightbox.open ||
+      event.button !== 0 ||
+      lightboxZoom.scale <= ZOOM_MIN + 0.001
+    ) {
+      return;
+    }
+    event.preventDefault();
+    lightboxZoom.dragging = true;
+    lightboxZoom.pointerId = event.pointerId;
+    lightboxZoom.startX = event.clientX;
+    lightboxZoom.startY = event.clientY;
+    lightboxZoom.originX = lightboxZoom.x;
+    lightboxZoom.originY = lightboxZoom.y;
+    lightboxStage.classList.add("is-dragging");
+    try {
+      lightboxImage.setPointerCapture(event.pointerId);
+    } catch {
+      // 某些浏览器在 pointerdown 里不能立即捕获，忽略即可。
+    }
+  });
+
+  lightboxImage.addEventListener("pointermove", (event) => {
+    if (
+      !lightboxZoom.dragging ||
+      event.pointerId !== lightboxZoom.pointerId
+    ) {
+      return;
+    }
+    event.preventDefault();
+    lightboxZoom.x =
+      lightboxZoom.originX + (event.clientX - lightboxZoom.startX);
+    lightboxZoom.y =
+      lightboxZoom.originY + (event.clientY - lightboxZoom.startY);
+    clampLightboxZoom();
+    applyLightboxZoom();
+  });
+
+  function endLightboxDrag(event) {
+    if (
+      !lightboxZoom.dragging ||
+      (event && event.pointerId !== lightboxZoom.pointerId)
+    ) {
+      return;
+    }
+    lightboxZoom.dragging = false;
+    lightboxZoom.pointerId = null;
+    lightboxStage.classList.remove("is-dragging");
+  }
+
+  lightboxImage.addEventListener("pointerup", endLightboxDrag);
+  lightboxImage.addEventListener("pointercancel", endLightboxDrag);
+  lightboxImage.addEventListener("lostpointercapture", endLightboxDrag);
+
   lightbox.addEventListener("close", () => {
     document.body.classList.remove("lightbox-open");
     lightboxToken += 1;
     lightboxPlaceholderSrc = "";
     lightboxEntries = [];
     lightboxIndex = -1;
+    resetLightboxZoom();
     lightboxCaption.textContent = "";
     lightboxImage.removeAttribute("src");
     lightboxImage.removeAttribute("data-image-id");
@@ -996,34 +1246,33 @@
     hideHoverPreview();
   }
 
+  // 把浮层摆到鼠标的对侧：鼠标在左半屏，图贴右侧边缘，左边贴鼠标。
   function positionHoverPreview(x, y) {
     if (!hoverState.shown || !hoverState.naturalWidth || !hoverState.naturalHeight) {
       return;
     }
-    const margin = 16;
     const viewportWidth = window.innerWidth;
     const viewportHeight = window.innerHeight;
-    const placeRight = x < viewportWidth / 2;
-    const available = placeRight ? viewportWidth - x - margin : x - margin;
-    const maxWidth = Math.max(1, Math.min(available, viewportWidth * 0.62));
-    const maxHeight = Math.max(1, viewportHeight - margin * 2);
+    const onLeftHalf = x < viewportWidth / 2;
+    // 鼠标到它对侧边缘的距离，就是图可用的最大宽度。
+    const boxWidth = onLeftHalf ? viewportWidth - x : x;
     const scale = Math.min(
-      maxWidth / hoverState.naturalWidth,
-      maxHeight / hoverState.naturalHeight,
-      1,
+      boxWidth / hoverState.naturalWidth,
+      viewportHeight / hoverState.naturalHeight,
     );
     const width = Math.max(1, hoverState.naturalWidth * scale);
     const height = Math.max(1, hoverState.naturalHeight * scale);
+    const left = onLeftHalf ? x : x - width;
+    // 贴鼠标那条边的中心对齐鼠标 y，越界时夹回视口内。
+    const top = Math.min(
+      Math.max(y - height / 2, 0),
+      Math.max(0, viewportHeight - height),
+    );
 
-    let left = placeRight ? x + margin : x - margin - width;
-    left = Math.max(margin, Math.min(left, viewportWidth - margin - width));
-    let top = y - height / 2;
-    top = Math.max(margin, Math.min(top, viewportHeight - margin - height));
-
-    hoverPreview.style.width = `${width}px`;
-    hoverPreview.style.height = `${height}px`;
     hoverPreview.style.left = `${left}px`;
     hoverPreview.style.top = `${top}px`;
+    hoverPreview.style.width = `${width}px`;
+    hoverPreview.style.height = `${height}px`;
   }
 
   function applyUpgradedHoverImage(imageId, image) {
@@ -1091,10 +1340,11 @@
     if (!imageId) {
       return;
     }
+    // 与作品页一致：先用缩略图实际尺寸，regular 到达后再升级。
     const width =
-      Number(image.dataset.imageWidth) || image.naturalWidth || 0;
+      image.naturalWidth || Number(image.dataset.imageWidth) || 0;
     const height =
-      Number(image.dataset.imageHeight) || image.naturalHeight || 0;
+      image.naturalHeight || Number(image.dataset.imageHeight) || 0;
     if (!width || !height) {
       return;
     }
@@ -1123,16 +1373,16 @@
     return image && image.dataset.imageId ? image : null;
   }
 
+  // 指针落到空白处：立刻收起，并开始计算「秒开」余温。
   function hoverPreviewBlank() {
     window.clearTimeout(hoverState.delayTimer);
-    hideHoverPreview();
-    if (!hoverState.active) {
-      return;
-    }
     window.clearTimeout(hoverState.warmTimer);
-    hoverState.warmTimer = window.setTimeout(() => {
-      hoverState.active = false;
-    }, HOVER_PREVIEW_WARM);
+    hideHoverPreview();
+    if (hoverState.active) {
+      hoverState.warmTimer = window.setTimeout(() => {
+        hoverState.active = false;
+      }, HOVER_PREVIEW_WARM);
+    }
   }
 
   results.addEventListener("pointermove", (event) => {
@@ -1147,27 +1397,29 @@
       return;
     }
 
+    // 必须完全静止：任何一次移动都重新计时。
     window.clearTimeout(hoverState.delayTimer);
+    window.clearTimeout(hoverState.warmTimer);
     hoverState.pointerX = event.clientX;
     hoverState.pointerY = event.clientY;
 
-    if (hoverState.active) {
-      window.clearTimeout(hoverState.warmTimer);
-      if (hoverState.imageId !== image.dataset.imageId) {
-        showHoverPreview(image, event.clientX, event.clientY);
-      } else {
-        positionHoverPreview(event.clientX, event.clientY);
-      }
-      return;
-    }
-
-    if (hoverState.shown && hoverState.imageId === image.dataset.imageId) {
+    if (
+      hoverState.shown &&
+      hoverState.imageId === (image.dataset.imageId || "")
+    ) {
+      // 同一张图：贴着鼠标连续移动。
       positionHoverPreview(event.clientX, event.clientY);
       return;
     }
 
+    if (hoverState.active) {
+      // 已经进入大图模式，换图不等延迟。
+      showHoverPreview(image, event.clientX, event.clientY);
+      return;
+    }
+
     hoverState.delayTimer = window.setTimeout(() => {
-      if (!image.isConnected || !results.contains(image)) {
+      if (!document.contains(image)) {
         return;
       }
       hoverState.active = true;
@@ -1295,6 +1547,110 @@
     sortInput.focus();
   });
 
+  // ---------- 排版面板 ----------
+
+  function syncLayoutSettings() {
+    const vertical = layoutSettings.mode === "vertical";
+    layoutColGap.value = String(layoutSettings.colGap);
+    layoutColGapValue.textContent = String(layoutSettings.colGap);
+    layoutRowGap.value = String(layoutSettings.rowGap);
+    layoutRowGapValue.textContent = String(layoutSettings.rowGap);
+    layoutRadius.value = String(layoutSettings.radius);
+    layoutRadiusValue.textContent = String(layoutSettings.radius);
+    const columns = desiredColumnCount();
+    layoutColumns.value = String(columns);
+    layoutColumnsValue.textContent = String(columns);
+    layoutHeight.value = String(layoutSettings.height);
+    layoutHeightValue.textContent = String(layoutSettings.height);
+    layoutModeVertical.classList.toggle("active", vertical);
+    layoutModeHorizontal.classList.toggle("active", !vertical);
+    layoutModeVertical.setAttribute("aria-pressed", String(vertical));
+    layoutModeHorizontal.setAttribute("aria-pressed", String(!vertical));
+    layoutColumnsField.hidden = !vertical;
+    layoutHeightField.hidden = vertical;
+  }
+
+  function setLayoutPanelOpen(open) {
+    layoutPanel.hidden = !open;
+    layoutToggle.setAttribute("aria-expanded", String(open));
+    layoutTools.classList.toggle("is-open", open);
+  }
+
+  function setLayoutMode(mode) {
+    if (layoutSettings.mode === mode) {
+      return;
+    }
+    layoutSettings.mode = mode;
+    syncLayoutSettings();
+    rebuildLayout();
+  }
+
+  function bindLayoutRange(input, output, key, afterChange) {
+    input.addEventListener("input", () => {
+      const value = Number(input.value);
+      layoutSettings[key] = value;
+      output.textContent = String(value);
+      afterChange();
+    });
+  }
+
+  bindLayoutRange(
+    layoutColGap,
+    layoutColGapValue,
+    "colGap",
+    applyLayoutSettings,
+  );
+  bindLayoutRange(
+    layoutRowGap,
+    layoutRowGapValue,
+    "rowGap",
+    applyLayoutSettings,
+  );
+  bindLayoutRange(
+    layoutRadius,
+    layoutRadiusValue,
+    "radius",
+    applyLayoutSettings,
+  );
+  bindLayoutRange(
+    layoutHeight,
+    layoutHeightValue,
+    "height",
+    applyLayoutSettings,
+  );
+
+  layoutColumns.addEventListener("input", () => {
+    layoutAuto = false;
+    layoutManualColumns = Number(layoutColumns.value);
+    layoutSettings.columns = layoutManualColumns;
+    layoutColumnsValue.textContent = String(layoutManualColumns);
+    rebuildLayout();
+  });
+
+  layoutModeVertical.addEventListener("click", () => {
+    setLayoutMode("vertical");
+  });
+  layoutModeHorizontal.addEventListener("click", () => {
+    setLayoutMode("horizontal");
+  });
+
+  layoutToggle.addEventListener("click", () => {
+    setLayoutPanelOpen(layoutPanel.hidden);
+  });
+  layoutClose.addEventListener("click", () => {
+    setLayoutPanelOpen(false);
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !layoutPanel.hidden) {
+      setLayoutPanelOpen(false);
+    }
+  });
+  document.addEventListener("pointerdown", (event) => {
+    if (!layoutPanel.hidden && !layoutTools.contains(event.target)) {
+      setLayoutPanelOpen(false);
+    }
+  });
+
   // ---------- 事件绑定与启动 ----------
 
   const tagSuggestWidget = TagSearch.create({
@@ -1320,12 +1676,14 @@
     }
     window.clearTimeout(resizeTimer);
     resizeTimer = window.setTimeout(() => {
-      if (columns.length !== desiredColumnCount()) {
-        rebuildColumns();
+      if (layoutAuto) {
+        syncLayoutSettings();
       }
+      relayout();
     }, 150);
   });
 
+  syncLayoutSettings();
   restoreStateFromUrl();
   renderStaging();
   renderReferenceBar();

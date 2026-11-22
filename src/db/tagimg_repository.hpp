@@ -275,6 +275,7 @@ enum class ImageSortField {
 struct ImageSearchQuery {
   // 空数组表示不过滤。
   std::vector<std::string> entity_ids;
+  std::vector<std::string> image_ids;
   std::vector<std::string> artist_ids;
   std::vector<std::string> include_tag_ids;
   bool include_all_tags = true;
