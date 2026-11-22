@@ -84,11 +84,14 @@ type Query {
   """
   按关键词搜索标签库，用于输入联想。
 
+  同时匹配标准名和别名，忽略大小写。同一个标签命中多个名称时只返回一次，
+  name 是命中的那个名称，tagPath 仍然使用标准名拼路径。
+
   scope 不传时在全部标签中搜索；scope.parentId 为 null 时只搜索全局根
   的直接子标签；scope.parentId 有值时搜索该标签的整棵子树。
   """
   tags(
-    "关键词，匹配标签标准名，忽略大小写，1 到 100 个字符。"
+    "关键词，匹配标签标准名或别名，忽略大小写，1 到 100 个字符。"
     query: String!
     "搜索范围，缺省时不限制父标签。"
     scope: TagSearchScope
@@ -346,6 +349,8 @@ type Tag {
   id: ID!
   "标签自身的标准名，例如 1girl。"
   name: String!
+  "直接父标签的 ID；没有父标签时为 null。"
+  parentId: ID
   "直接父标签的标准名，例如 general；没有父标签时为 null。"
   category: String
   "别名列表，按名称升序。"
@@ -364,7 +369,7 @@ input TagSearchScope {
 type TagMatch {
   "标签 ID。"
   tagId: ID!
-  "标签标准名。"
+  "命中的名称：标准名或别名。"
   name: String
   "从根标签到该标签自身的路径，例如 wd14scan::general::1girl。"
   tagPath: String
@@ -441,6 +446,32 @@ input UpdateArtworkInput {
   imageIds: [ID!]
 }
 
+"创建标签所需的参数。"
+input CreateTagInput {
+  "标准名，trim 后 1 到 255 个字符，不能包含 :: 或控制字符。"
+  name: String!
+  "别名列表；按大小写不敏感去重，不能与自身标准名相同。"
+  aliases: [String!] = []
+  "父标签 ID；省略或 null 时创建在根节点下。"
+  parentId: ID
+}
+
+"更新标签所需的参数；至少要提供一项变更。"
+input UpdateTagInput {
+  "新标准名；省略或 null 表示不修改。旧标准名直接覆盖，不自动转别名。"
+  name: String
+  """
+  完整别名列表；省略或 null 表示不修改，空数组表示清空。
+
+  按大小写不敏感去重；最终列表中不能包含最终标准名。
+  """
+  aliases: [String!]
+  "新父标签 ID；省略或 null 表示不修改。"
+  parentId: ID
+  "为 true 时移到根节点；不能与 parentId 同时提供。"
+  clearParent: Boolean = false
+}
+
 "根变更类型。"
 type Mutation {
   """
@@ -485,4 +516,21 @@ type Mutation {
   标签会被忽略。删除发布时间时传 clearPublishedAt: true。
   """
   updateArtwork(id: ID!, input: UpdateArtworkInput!): ID!
+
+  """
+  创建一个标签。
+
+  不传 parentId 时创建在根节点下；同一父标签下标准名必须唯一（忽略大小写）。
+  返回创建后的完整标签。
+  """
+  createTag(input: CreateTagInput!): Tag!
+
+  """
+  更新标签的标准名、别名或父级，返回更新后的完整标签。
+
+  name 省略表示不改名；aliases 省略表示不改别名，传空数组表示清空；
+  parentId 省略表示不移动，clearParent: true 表示移到根节点。
+  至少需要提供一项变更。
+  """
+  updateTag(id: ID!, input: UpdateTagInput!): Tag!
 }

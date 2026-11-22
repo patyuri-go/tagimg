@@ -97,7 +97,7 @@ void AddTagMatchDetails(const std::shared_ptr<schema::ObjectType>& typeTagMatch,
 {
 	typeTagMatch->AddFields({
 		schema::Field::Make(R"gql(tagId)gql"sv, R"md(标签 ID。)md"sv, std::nullopt, schema->WrapType(introspection::TypeKind::NON_NULL, schema->LookupType(R"gql(ID)gql"sv))),
-		schema::Field::Make(R"gql(name)gql"sv, R"md(标签标准名。)md"sv, std::nullopt, schema->LookupType(R"gql(String)gql"sv)),
+		schema::Field::Make(R"gql(name)gql"sv, R"md(命中的名称：标准名或别名。)md"sv, std::nullopt, schema->LookupType(R"gql(String)gql"sv)),
 		schema::Field::Make(R"gql(tagPath)gql"sv, R"md(从根标签到该标签自身的路径，例如 wd14scan::general::1girl。)md"sv, std::nullopt, schema->LookupType(R"gql(String)gql"sv))
 	});
 }

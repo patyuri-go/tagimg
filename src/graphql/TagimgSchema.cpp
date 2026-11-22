@@ -490,6 +490,70 @@ tagimg::UpdateArtworkInput Argument<tagimg::UpdateArtworkInput>::convert(const r
 	};
 }
 
+template <>
+tagimg::CreateTagInput Argument<tagimg::CreateTagInput>::convert(const response::Value& value)
+{
+	const auto defaultValue = []()
+	{
+		response::Value values(response::Type::Map);
+		response::Value entry;
+
+		entry = []()
+		{
+			response::Value elements(response::Type::List);
+			response::Value entry;
+
+			return elements;
+		}();
+		values.emplace_back("aliases", std::move(entry));
+
+		return values;
+	}();
+
+	auto valueName = service::ModifiedArgument<std::string>::require("name", value);
+	auto pairAliases = service::ModifiedArgument<std::string>::find<service::TypeModifier::Nullable, service::TypeModifier::List>("aliases", value);
+	auto valueAliases = (pairAliases.second
+		? std::move(pairAliases.first)
+		: service::ModifiedArgument<std::string>::require<service::TypeModifier::Nullable, service::TypeModifier::List>("aliases", defaultValue));
+	auto valueParentId = service::ModifiedArgument<response::IdType>::require<service::TypeModifier::Nullable>("parentId", value);
+
+	return tagimg::CreateTagInput {
+		std::move(valueName),
+		std::move(valueAliases),
+		std::move(valueParentId)
+	};
+}
+
+template <>
+tagimg::UpdateTagInput Argument<tagimg::UpdateTagInput>::convert(const response::Value& value)
+{
+	const auto defaultValue = []()
+	{
+		response::Value values(response::Type::Map);
+		response::Value entry;
+
+		entry = response::Value(false);
+		values.emplace_back("clearParent", std::move(entry));
+
+		return values;
+	}();
+
+	auto valueName = service::ModifiedArgument<std::string>::require<service::TypeModifier::Nullable>("name", value);
+	auto valueAliases = service::ModifiedArgument<std::string>::require<service::TypeModifier::Nullable, service::TypeModifier::List>("aliases", value);
+	auto valueParentId = service::ModifiedArgument<response::IdType>::require<service::TypeModifier::Nullable>("parentId", value);
+	auto pairClearParent = service::ModifiedArgument<bool>::find<service::TypeModifier::Nullable>("clearParent", value);
+	auto valueClearParent = (pairClearParent.second
+		? std::move(pairClearParent.first)
+		: service::ModifiedArgument<bool>::require<service::TypeModifier::Nullable>("clearParent", defaultValue));
+
+	return tagimg::UpdateTagInput {
+		std::move(valueName),
+		std::move(valueAliases),
+		std::move(valueParentId),
+		std::move(valueClearParent)
+	};
+}
+
 } // namespace service
 
 namespace tagimg {
@@ -938,6 +1002,122 @@ UpdateArtworkInput& UpdateArtworkInput::operator=(UpdateArtworkInput&& other) no
 	return *this;
 }
 
+CreateTagInput::CreateTagInput() noexcept
+	: name {}
+	, aliases {}
+	, parentId {}
+{
+	// Explicit definition to prevent ODR violations when LTO is enabled.
+}
+
+CreateTagInput::CreateTagInput(
+		std::string nameArg,
+		std::optional<std::vector<std::string>> aliasesArg,
+		std::optional<response::IdType> parentIdArg) noexcept
+	: name { std::move(nameArg) }
+	, aliases { std::move(aliasesArg) }
+	, parentId { std::move(parentIdArg) }
+{
+}
+
+CreateTagInput::CreateTagInput(const CreateTagInput& other)
+	: name { service::ModifiedArgument<std::string>::duplicate(other.name) }
+	, aliases { service::ModifiedArgument<std::string>::duplicate<service::TypeModifier::Nullable, service::TypeModifier::List>(other.aliases) }
+	, parentId { service::ModifiedArgument<response::IdType>::duplicate<service::TypeModifier::Nullable>(other.parentId) }
+{
+}
+
+CreateTagInput::CreateTagInput(CreateTagInput&& other) noexcept
+	: name { std::move(other.name) }
+	, aliases { std::move(other.aliases) }
+	, parentId { std::move(other.parentId) }
+{
+}
+
+CreateTagInput::~CreateTagInput()
+{
+	// Explicit definition to prevent ODR violations when LTO is enabled.
+}
+
+CreateTagInput& CreateTagInput::operator=(const CreateTagInput& other)
+{
+	CreateTagInput value { other };
+
+	std::swap(*this, value);
+
+	return *this;
+}
+
+CreateTagInput& CreateTagInput::operator=(CreateTagInput&& other) noexcept
+{
+	name = std::move(other.name);
+	aliases = std::move(other.aliases);
+	parentId = std::move(other.parentId);
+
+	return *this;
+}
+
+UpdateTagInput::UpdateTagInput() noexcept
+	: name {}
+	, aliases {}
+	, parentId {}
+	, clearParent {}
+{
+	// Explicit definition to prevent ODR violations when LTO is enabled.
+}
+
+UpdateTagInput::UpdateTagInput(
+		std::optional<std::string> nameArg,
+		std::optional<std::vector<std::string>> aliasesArg,
+		std::optional<response::IdType> parentIdArg,
+		std::optional<bool> clearParentArg) noexcept
+	: name { std::move(nameArg) }
+	, aliases { std::move(aliasesArg) }
+	, parentId { std::move(parentIdArg) }
+	, clearParent { std::move(clearParentArg) }
+{
+}
+
+UpdateTagInput::UpdateTagInput(const UpdateTagInput& other)
+	: name { service::ModifiedArgument<std::string>::duplicate<service::TypeModifier::Nullable>(other.name) }
+	, aliases { service::ModifiedArgument<std::string>::duplicate<service::TypeModifier::Nullable, service::TypeModifier::List>(other.aliases) }
+	, parentId { service::ModifiedArgument<response::IdType>::duplicate<service::TypeModifier::Nullable>(other.parentId) }
+	, clearParent { service::ModifiedArgument<bool>::duplicate<service::TypeModifier::Nullable>(other.clearParent) }
+{
+}
+
+UpdateTagInput::UpdateTagInput(UpdateTagInput&& other) noexcept
+	: name { std::move(other.name) }
+	, aliases { std::move(other.aliases) }
+	, parentId { std::move(other.parentId) }
+	, clearParent { std::move(other.clearParent) }
+{
+}
+
+UpdateTagInput::~UpdateTagInput()
+{
+	// Explicit definition to prevent ODR violations when LTO is enabled.
+}
+
+UpdateTagInput& UpdateTagInput::operator=(const UpdateTagInput& other)
+{
+	UpdateTagInput value { other };
+
+	std::swap(*this, value);
+
+	return *this;
+}
+
+UpdateTagInput& UpdateTagInput::operator=(UpdateTagInput&& other) noexcept
+{
+	name = std::move(other.name);
+	aliases = std::move(other.aliases);
+	parentId = std::move(other.parentId);
+	clearParent = std::move(other.clearParent);
+
+	return *this;
+}
+
 Operations::Operations(std::shared_ptr<object::Query> query, std::shared_ptr<object::Mutation> mutation)
 	: service::Request({
 		{ service::strQuery, query },
@@ -970,6 +1150,10 @@ void AddTypesToSchema(const std::shared_ptr<schema::Schema>& schema)
 	schema->AddType(R"gql(AddArtworkFromImagesInput)gql"sv, typeAddArtworkFromImagesInput);
 	auto typeUpdateArtworkInput = schema::InputObjectType::Make(R"gql(UpdateArtworkInput)gql"sv, R"md(更新作品所需的参数；至少要提供一项变更。)md"sv);
 	schema->AddType(R"gql(UpdateArtworkInput)gql"sv, typeUpdateArtworkInput);
+	auto typeCreateTagInput = schema::InputObjectType::Make(R"gql(CreateTagInput)gql"sv, R"md(创建标签所需的参数。)md"sv);
+	schema->AddType(R"gql(CreateTagInput)gql"sv, typeCreateTagInput);
+	auto typeUpdateTagInput = schema::InputObjectType::Make(R"gql(UpdateTagInput)gql"sv, R"md(更新标签所需的参数；至少要提供一项变更。)md"sv);
+	schema->AddType(R"gql(UpdateTagInput)gql"sv, typeUpdateTagInput);
 	auto typeQuery = schema::ObjectType::Make(R"gql(Query)gql"sv, R"md(根查询类型。)md"sv);
 	schema->AddType(R"gql(Query)gql"sv, typeQuery);
 	auto typeArtworkConnection = schema::ObjectType::Make(R"gql(ArtworkConnection)gql"sv, R"md(分页结果。)md"sv);
@@ -1071,6 +1255,19 @@ void AddTypesToSchema(const std::shared_ptr<schema::Schema>& schema)
 
 省略或 null 表示不修改图片顺序。提供时必须是当前作品全部图片的完整集合，
 不能借此增删图片；任一图片不存在、重复或不属于该作品都会拒绝整次更新。)md"sv, schema->WrapType(introspection::TypeKind::LIST, schema->WrapType(introspection::TypeKind::NON_NULL, schema->LookupType(R"gql(ID)gql"sv))), R"gql()gql"sv)
+	});
+	typeCreateTagInput->AddInputValues({
+		schema::InputValue::Make(R"gql(name)gql"sv, R"md(标准名，trim 后 1 到 255 个字符，不能包含 :: 或控制字符。)md"sv, schema->WrapType(introspection::TypeKind::NON_NULL, schema->LookupType(R"gql(String)gql"sv)), R"gql()gql"sv),
+		schema::InputValue::Make(R"gql(aliases)gql"sv, R"md(别名列表；按大小写不敏感去重，不能与自身标准名相同。)md"sv, schema->WrapType(introspection::TypeKind::LIST, schema->WrapType(introspection::TypeKind::NON_NULL, schema->LookupType(R"gql(String)gql"sv))), R"gql([])gql"sv),
+		schema::InputValue::Make(R"gql(parentId)gql"sv, R"md(父标签 ID；省略或 null 时创建在根节点下。)md"sv, schema->LookupType(R"gql(ID)gql"sv), R"gql()gql"sv)
+	});
+	typeUpdateTagInput->AddInputValues({
+		schema::InputValue::Make(R"gql(name)gql"sv, R"md(新标准名；省略或 null 表示不修改。旧标准名直接覆盖，不自动转别名。)md"sv, schema->LookupType(R"gql(String)gql"sv), R"gql()gql"sv),
+		schema::InputValue::Make(R"gql(aliases)gql"sv, R"md(完整别名列表；省略或 null 表示不修改，空数组表示清空。
+
+按大小写不敏感去重；最终列表中不能包含最终标准名。)md"sv, schema->WrapType(introspection::TypeKind::LIST, schema->WrapType(introspection::TypeKind::NON_NULL, schema->LookupType(R"gql(String)gql"sv))), R"gql()gql"sv),
+		schema::InputValue::Make(R"gql(parentId)gql"sv, R"md(新父标签 ID；省略或 null 表示不修改。)md"sv, schema->LookupType(R"gql(ID)gql"sv), R"gql()gql"sv),
+		schema::InputValue::Make(R"gql(clearParent)gql"sv, R"md(为 true 时移到根节点；不能与 parentId 同时提供。)md"sv, schema->LookupType(R"gql(Boolean)gql"sv), R"gql(false)gql"sv)
 	});
 
 	AddQueryDetails(typeQuery, schema);

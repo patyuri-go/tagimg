@@ -332,9 +332,12 @@ orderBy 传 SIMILARITY 时必须同时传 sortText 或 referenceImageId 之一�
 		}),
 		schema::Field::Make(R"gql(tags)gql"sv, R"md(按关键词搜索标签库，用于输入联想。
 
+同时匹配标准名和别名，忽略大小写。同一个标签命中多个名称时只返回一次，
+name 是命中的那个名称，tagPath 仍然使用标准名拼路径。
+
 scope 不传时在全部标签中搜索；scope.parentId 为 null 时只搜索全局根
 的直接子标签；scope.parentId 有值时搜索该标签的整棵子树。)md"sv, std::nullopt, schema->WrapType(introspection::TypeKind::NON_NULL, schema->WrapType(introspection::TypeKind::LIST, schema->WrapType(introspection::TypeKind::NON_NULL, schema->LookupType(R"gql(TagMatch)gql"sv)))), {
-			schema::InputValue::Make(R"gql(query)gql"sv, R"md(关键词，匹配标签标准名，忽略大小写，1 到 100 个字符。)md"sv, schema->WrapType(introspection::TypeKind::NON_NULL, schema->LookupType(R"gql(String)gql"sv)), R"gql()gql"sv),
+			schema::InputValue::Make(R"gql(query)gql"sv, R"md(关键词，匹配标签标准名或别名，忽略大小写，1 到 100 个字符。)md"sv, schema->WrapType(introspection::TypeKind::NON_NULL, schema->LookupType(R"gql(String)gql"sv)), R"gql()gql"sv),
 			schema::InputValue::Make(R"gql(scope)gql"sv, R"md(搜索范围，缺省时不限制父标签。)md"sv, schema->LookupType(R"gql(TagSearchScope)gql"sv), R"gql()gql"sv),
 			schema::InputValue::Make(R"gql(limit)gql"sv, R"md(返回条数，1 到 50，默认 10。)md"sv, schema->LookupType(R"gql(Int)gql"sv), R"gql(10)gql"sv)
 		}),

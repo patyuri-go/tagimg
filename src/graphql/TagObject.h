@@ -38,6 +38,18 @@ concept getName = requires (TImpl impl)
 };
 
 template <class TImpl>
+concept getParentIdWithParams = requires (TImpl impl, service::FieldParams params)
+{
+	{ service::AwaitableScalar<std::optional<response::IdType>> { impl.getParentId(std::move(params)) } };
+};
+
+template <class TImpl>
+concept getParentId = requires (TImpl impl)
+{
+	{ service::AwaitableScalar<std::optional<response::IdType>> { impl.getParentId() } };
+};
+
+template <class TImpl>
 concept getCategoryWithParams = requires (TImpl impl, service::FieldParams params)
 {
 	{ service::AwaitableScalar<std::optional<std::string>> { impl.getCategory(std::move(params)) } };
@@ -81,6 +93,7 @@ class [[nodiscard("unnecessary construction")]] Tag final
 private:
 	[[nodiscard("unnecessary call")]] service::AwaitableResolver resolveId(service::ResolverParams&& params) const;
 	[[nodiscard("unnecessary call")]] service::AwaitableResolver resolveName(service::ResolverParams&& params) const;
+	[[nodiscard("unnecessary call")]] service::AwaitableResolver resolveParentId(service::ResolverParams&& params) const;
 	[[nodiscard("unnecessary call")]] service::AwaitableResolver resolveCategory(service::ResolverParams&& params) const;
 	[[nodiscard("unnecessary call")]] service::AwaitableResolver resolveAliases(service::ResolverParams&& params) const;
 
@@ -95,6 +108,7 @@ private:
 
 		[[nodiscard("unnecessary call")]] virtual service::AwaitableScalar<response::IdType> getId(service::FieldParams&& params) const = 0;
 		[[nodiscard("unnecessary call")]] virtual service::AwaitableScalar<std::string> getName(service::FieldParams&& params) const = 0;
+		[[nodiscard("unnecessary call")]] virtual service::AwaitableScalar<std::optional<response::IdType>> getParentId(service::FieldParams&& params) const = 0;
 		[[nodiscard("unnecessary call")]] virtual service::AwaitableScalar<std::optional<std::string>> getCategory(service::FieldParams&& params) const = 0;
 		[[nodiscard("unnecessary call")]] virtual service::AwaitableScalar<std::vector<std::string>> getAliases(service::FieldParams&& params) const = 0;
 	};
@@ -131,6 +145,19 @@ private:
 			{
 				static_assert(methods::TagHas::getName<T>, R"msg(Tag::getName is not implemented)msg");
 				return { _pimpl->getName() };
+			}
+		}
+
+		[[nodiscard("unnecessary call")]] service::AwaitableScalar<std::optional<response::IdType>> getParentId(service::FieldParams&& params) const override
+		{
+			if constexpr (methods::TagHas::getParentIdWithParams<T>)
+			{
+				return { _pimpl->getParentId(std::move(params)) };
+			}
+			else
+			{
+				static_assert(methods::TagHas::getParentId<T>, R"msg(Tag::getParentId is not implemented)msg");
+				return { _pimpl->getParentId() };
 			}
 		}
 

@@ -5,6 +5,7 @@
 
 #include "MutationObject.h"
 #include "DeleteArtworkResultObject.h"
+#include "TagObject.h"
 
 #include "graphqlservice/internal/Schema.h"
 
@@ -37,6 +38,8 @@ service::TypeNames Mutation::getTypeNames() const noexcept
 service::ResolverMap Mutation::getResolvers() const noexcept
 {
 	return {
+		{ R"gql(createTag)gql"sv, [this](service::ResolverParams&& params) { return resolveCreateTag(std::move(params)); } },
+		{ R"gql(updateTag)gql"sv, [this](service::ResolverParams&& params) { return resolveUpdateTag(std::move(params)); } },
 		{ R"gql(__typename)gql"sv, [this](service::ResolverParams&& params) { return resolve_typename(std::move(params)); } },
 		{ R"gql(addArtwork)gql"sv, [this](service::ResolverParams&& params) { return resolveAddArtwork(std::move(params)); } },
 		{ R"gql(deleteArtwork)gql"sv, [this](service::ResolverParams&& params) { return resolveDeleteArtwork(std::move(params)); } },
@@ -117,6 +120,31 @@ service::AwaitableResolver Mutation::resolveUpdateArtwork(service::ResolverParam
 	return service::ModifiedResult<response::IdType>::convert(std::move(result), std::move(params));
 }
 
+service::AwaitableResolver Mutation::resolveCreateTag(service::ResolverParams&& params) const
+{
+	auto argInput = service::ModifiedArgument<tagimg::CreateTagInput>::require("input", params.arguments);
+	std::unique_lock resolverLock(_resolverMutex);
+	service::SelectionSetParams selectionSetParams { static_cast<const service::SelectionSetParams&>(params) };
+	auto directives = std::move(params.fieldDirectives);
+	auto result = _pimpl->applyCreateTag(service::FieldParams { std::move(selectionSetParams), std::move(directives) }, std::move(argInput));
+	resolverLock.unlock();
+
+	return service::ModifiedResult<Tag>::convert(std::move(result), std::move(params));
+}
+
+service::AwaitableResolver Mutation::resolveUpdateTag(service::ResolverParams&& params) const
+{
+	auto argId = service::ModifiedArgument<response::IdType>::require("id", params.arguments);
+	auto argInput = service::ModifiedArgument<tagimg::UpdateTagInput>::require("input", params.arguments);
+	std::unique_lock resolverLock(_resolverMutex);
+	service::SelectionSetParams selectionSetParams { static_cast<const service::SelectionSetParams&>(params) };
+	auto directives = std::move(params.fieldDirectives);
+	auto result = _pimpl->applyUpdateTag(service::FieldParams { std::move(selectionSetParams), std::move(directives) }, std::move(argId), std::move(argInput));
+	resolverLock.unlock();
+
+	return service::ModifiedResult<Tag>::convert(std::move(result), std::move(params));
+}
+
 service::AwaitableResolver Mutation::resolve_typename(service::ResolverParams&& params) const
 {
 	return service::Result<std::string>::convert(std::string{ R"gql(Mutation)gql" }, std::move(params));
@@ -160,6 +188,20 @@ rescan 为 true 时逐张重新扫描并合并扫描标签；任一图片失败�
 标签会被忽略。删除发布时间时传 clearPublishedAt: true。)md"sv, std::nullopt, schema->WrapType(introspection::TypeKind::NON_NULL, schema->LookupType(R"gql(ID)gql"sv)), {
 			schema::InputValue::Make(R"gql(id)gql"sv, R"md()md"sv, schema->WrapType(introspection::TypeKind::NON_NULL, schema->LookupType(R"gql(ID)gql"sv)), R"gql()gql"sv),
 			schema::InputValue::Make(R"gql(input)gql"sv, R"md()md"sv, schema->WrapType(introspection::TypeKind::NON_NULL, schema->LookupType(R"gql(UpdateArtworkInput)gql"sv)), R"gql()gql"sv)
+		}),
+		schema::Field::Make(R"gql(createTag)gql"sv, R"md(创建一个标签。
+
+不传 parentId 时创建在根节点下；同一父标签下标准名必须唯一（忽略大小写）。
+返回创建后的完整标签。)md"sv, std::nullopt, schema->WrapType(introspection::TypeKind::NON_NULL, schema->LookupType(R"gql(Tag)gql"sv)), {
+			schema::InputValue::Make(R"gql(input)gql"sv, R"md()md"sv, schema->WrapType(introspection::TypeKind::NON_NULL, schema->LookupType(R"gql(CreateTagInput)gql"sv)), R"gql()gql"sv)
+		}),
+		schema::Field::Make(R"gql(updateTag)gql"sv, R"md(更新标签的标准名、别名或父级，返回更新后的完整标签。
+
+name 省略表示不改名；aliases 省略表示不改别名，传空数组表示清空；
+parentId 省略表示不移动，clearParent: true 表示移到根节点。
+至少需要提供一项变更。)md"sv, std::nullopt, schema->WrapType(introspection::TypeKind::NON_NULL, schema->LookupType(R"gql(Tag)gql"sv)), {
+			schema::InputValue::Make(R"gql(id)gql"sv, R"md()md"sv, schema->WrapType(introspection::TypeKind::NON_NULL, schema->LookupType(R"gql(ID)gql"sv)), R"gql()gql"sv),
+			schema::InputValue::Make(R"gql(input)gql"sv, R"md()md"sv, schema->WrapType(introspection::TypeKind::NON_NULL, schema->LookupType(R"gql(UpdateTagInput)gql"sv)), R"gql()gql"sv)
 		})
 	});
 }

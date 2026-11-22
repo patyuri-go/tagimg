@@ -28,6 +28,9 @@ enum class TagimgRepositoryError {
   UnknownTag,
   UnknownArtist,
   TagHierarchyMissing,
+  TagNameConflict,
+  TagParentNotFound,
+  TagCycle,
   QueryFailed,
 };
 
@@ -136,6 +139,8 @@ struct ArtworkTagInfo {
   std::string id;
   // 标签自身的标准名。
   std::string name;
+  // 直接父标签 ID；根的直接子标签为空。
+  std::optional<std::string> parent_id;
   // 直接父标签的标准名；根标签为空。
   std::optional<std::string> category;
   // 从根标签到该标签自身、用 :: 连接的路径。
@@ -152,10 +157,32 @@ struct ArtworkArtistInfo {
 // 一条标签搜索结果。
 struct TagMatch {
   std::string id;
-  // 标签自身的标准名。
+  // 命中的名称：标准名或别名。
   std::string name;
   // 从根标签到该标签自身、用 :: 连接的路径。
   std::string path;
+};
+
+// 创建标签的条件。
+struct TagCreateInput {
+  // 标准名，trim 后 1 到 255 个字符。
+  std::string name;
+  // 别名，按大小写不敏感去重。
+  std::vector<std::string> aliases;
+  // 直接父标签 ID；为空表示挂到根。
+  std::optional<std::string> parent_id;
+};
+
+// 更新标签的条件；未提供的字段保持不变。
+struct TagUpdateInput {
+  // 标准名；为空表示不改。
+  std::optional<std::string> name;
+  // 别名；为空表示不改，空数组表示清空。
+  std::optional<std::vector<std::string>> aliases;
+  // 新父标签 ID；为空表示不改。
+  std::optional<std::string> parent_id;
+  // 是否把标签移到根；与 parent_id 互斥。
+  bool clear_parent = false;
 };
 
 // 标签搜索的父标签范围。
@@ -452,9 +479,19 @@ public:
   [[nodiscard]] Result<ImageSearchResult, TagimgRepositoryError>
   search_images(const ImageSearchQuery &query) const;
 
-  // 按标准名搜索标签，用于输入联想。
+  // 按标准名或别名搜索标签，用于输入联想。
   [[nodiscard]] Result<std::vector<TagMatch>, TagimgRepositoryError>
   search_tags(const TagSearchQuery &query) const;
+
+  // 创建标签。同父下标准名冲突时返回 TagNameConflict，父标签不存在时
+  // 返回 TagParentNotFound。
+  [[nodiscard]] Result<ArtworkTagInfo, TagimgRepositoryError>
+  create_tag(const TagCreateInput &input) const;
+
+  // 更新标签的标准名、别名和父级。标签不存在时返回 UnknownTag；父标签
+  // 不存在时返回 TagParentNotFound；移动到自身或后代时返回 TagCycle。
+  [[nodiscard]] Result<ArtworkTagInfo, TagimgRepositoryError>
+  update_tag(const std::string &tag_id, const TagUpdateInput &input) const;
 
   // 删除一个作品；关联表级联清理，图片行保留。
   // 作品不存在时 deleted=false，不视为错误。

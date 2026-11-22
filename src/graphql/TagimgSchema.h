@@ -290,6 +290,46 @@ struct [[nodiscard("unnecessary construction")]] UpdateArtworkInput
 	std::optional<std::vector<response::IdType>> imageIds;
 };
 
+struct [[nodiscard("unnecessary construction")]] CreateTagInput
+{
+	explicit CreateTagInput() noexcept;
+	explicit CreateTagInput(
+		std::string nameArg,
+		std::optional<std::vector<std::string>> aliasesArg,
+		std::optional<response::IdType> parentIdArg) noexcept;
+	CreateTagInput(const CreateTagInput& other);
+	CreateTagInput(CreateTagInput&& other) noexcept;
+	~CreateTagInput();
+
+	CreateTagInput& operator=(const CreateTagInput& other);
+	CreateTagInput& operator=(CreateTagInput&& other) noexcept;
+
+	std::string name;
+	std::optional<std::vector<std::string>> aliases;
+	std::optional<response::IdType> parentId;
+};
+
+struct [[nodiscard("unnecessary construction")]] UpdateTagInput
+{
+	explicit UpdateTagInput() noexcept;
+	explicit UpdateTagInput(
+		std::optional<std::string> nameArg,
+		std::optional<std::vector<std::string>> aliasesArg,
+		std::optional<response::IdType> parentIdArg,
+		std::optional<bool> clearParentArg) noexcept;
+	UpdateTagInput(const UpdateTagInput& other);
+	UpdateTagInput(UpdateTagInput&& other) noexcept;
+	~UpdateTagInput();
+
+	UpdateTagInput& operator=(const UpdateTagInput& other);
+	UpdateTagInput& operator=(UpdateTagInput&& other) noexcept;
+
+	std::optional<std::string> name;
+	std::optional<std::vector<std::string>> aliases;
+	std::optional<response::IdType> parentId;
+	std::optional<bool> clearParent;
+};
+
 namespace object {
 
 class Query;

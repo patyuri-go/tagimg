@@ -16,6 +16,8 @@ inline constexpr std::size_t kMaxTitleLength = 500;
 // 标签搜索的关键词长度与返回条数上限，仓储层与 GraphQL 层共用。
 inline constexpr std::size_t kMaxTagSearchLength = 100;
 inline constexpr std::size_t kMaxTagSearchLimit = 50;
+// 标签标准名与别名的最大长度（按 Unicode 字符计）。
+inline constexpr std::size_t kMaxTagNameLength = 255;
 // 编辑作品时单次添加/移除的标签数量上限。
 inline constexpr std::size_t kMaxArtworkEditTags = 200;
 // 单个作品的图片数量上限，也是完整图片顺序的最大长度。

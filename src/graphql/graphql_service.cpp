@@ -310,6 +310,15 @@ public:
         info_.aliases);
   }
 
+  gql::service::AwaitableScalar<std::optional<IdType>> getParentId() const {
+    std::optional<IdType> parent_id;
+    if (info_.parent_id) {
+      parent_id = IdType(IdType::OpaqueString(*info_.parent_id));
+    }
+    return gql::service::AwaitableScalar<std::optional<IdType>>(
+        std::move(parent_id));
+  }
+
 private:
   ArtworkTagInfo info_;
 };
@@ -773,6 +782,14 @@ private:
     fail("UNKNOWN_TAG", "tag id does not exist");
   case TagimgRepositoryError::UnknownArtist:
     fail("UNKNOWN_ARTIST", "artist id does not exist");
+  case TagimgRepositoryError::TagNameConflict:
+    fail("TAG_NAME_CONFLICT",
+         "a tag with the same name already exists under this parent");
+  case TagimgRepositoryError::TagParentNotFound:
+    fail("TAG_PARENT_NOT_FOUND", "parent tag does not exist");
+  case TagimgRepositoryError::TagCycle:
+    fail("TAG_CYCLE",
+         "tag cannot be moved under itself or its descendants");
   case TagimgRepositoryError::DuplicateImage:
   case TagimgRepositoryError::TagHierarchyMissing:
   case TagimgRepositoryError::ConnectionFailed:
@@ -1422,6 +1439,58 @@ public:
     return id_scalar(text);
   }
 
+  gql::service::AwaitableObject<std::shared_ptr<gql::tagimg::object::Tag>>
+  applyCreateTag(gql::tagimg::CreateTagInput input) const {
+    TagCreateInput request;
+    request.name = std::move(input.name);
+    if (input.aliases) {
+      request.aliases = std::move(*input.aliases);
+    }
+    if (input.parentId) {
+      request.parent_id = id_text(*input.parentId);
+    }
+
+    const auto result = repository_->create_tag(request);
+    if (!result) {
+      fail_repository(result.error());
+    }
+
+    return gql::service::AwaitableObject<
+        std::shared_ptr<gql::tagimg::object::Tag>>(
+        std::make_shared<gql::tagimg::object::Tag>(
+            std::make_shared<TagModel>(*result)));
+  }
+
+  gql::service::AwaitableObject<std::shared_ptr<gql::tagimg::object::Tag>>
+  applyUpdateTag(IdType id, gql::tagimg::UpdateTagInput input) const {
+    const std::string tag_id = id_text(id);
+    if (!is_uuid(tag_id)) {
+      fail("INVALID_ARGUMENT", "id must be a uuid string");
+    }
+
+    TagUpdateInput request;
+    if (input.name) {
+      request.name = std::move(*input.name);
+    }
+    if (input.aliases) {
+      request.aliases = std::move(*input.aliases);
+    }
+    if (input.parentId) {
+      request.parent_id = id_text(*input.parentId);
+    }
+    request.clear_parent = input.clearParent.value_or(false);
+
+    const auto result = repository_->update_tag(tag_id, request);
+    if (!result) {
+      fail_repository(result.error());
+    }
+
+    return gql::service::AwaitableObject<
+        std::shared_ptr<gql::tagimg::object::Tag>>(
+        std::make_shared<gql::tagimg::object::Tag>(
+            std::make_shared<TagModel>(*result)));
+  }
+
   gql::service::AwaitableScalar<IdType>
   applyRescanArtwork(IdType artwork_id) const {
     const std::string text = id_text(artwork_id);
@@ -1480,10 +1549,11 @@ Value attach_error_codes(Value response) {
 
   static constexpr std::string_view kWrapper = "unknown error: ";
   static constexpr std::string_view kCodes[] = {
-      "INVALID_ARGUMENT", "SERVICE_UNAVAILABLE", "AI_UNAVAILABLE",
-      "INTERNAL_ERROR",   "QUERY_FAILED",        "UNKNOWN_TAG",
-      "UNKNOWN_ARTIST",   "NOT_FOUND",           "TIMEOUT",
-      "CANCELLED"};
+      "INVALID_ARGUMENT",    "SERVICE_UNAVAILABLE",  "AI_UNAVAILABLE",
+      "INTERNAL_ERROR",      "QUERY_FAILED",         "UNKNOWN_TAG",
+      "UNKNOWN_ARTIST",      "NOT_FOUND",            "TIMEOUT",
+      "CANCELLED",           "TAG_NAME_CONFLICT",    "TAG_PARENT_NOT_FOUND",
+      "TAG_CYCLE"};
 
   auto fields = response.release<MapType>();
   for (auto &[name, value] : fields) {

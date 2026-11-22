@@ -40,6 +40,7 @@ service::ResolverMap Tag::getResolvers() const noexcept
 		{ R"gql(name)gql"sv, [this](service::ResolverParams&& params) { return resolveName(std::move(params)); } },
 		{ R"gql(aliases)gql"sv, [this](service::ResolverParams&& params) { return resolveAliases(std::move(params)); } },
 		{ R"gql(category)gql"sv, [this](service::ResolverParams&& params) { return resolveCategory(std::move(params)); } },
+		{ R"gql(parentId)gql"sv, [this](service::ResolverParams&& params) { return resolveParentId(std::move(params)); } },
 		{ R"gql(__typename)gql"sv, [this](service::ResolverParams&& params) { return resolve_typename(std::move(params)); } }
 	};
 }
@@ -76,6 +77,17 @@ service::AwaitableResolver Tag::resolveName(service::ResolverParams&& params) co
 	return service::ModifiedResult<std::string>::convert(std::move(result), std::move(params));
 }
 
+service::AwaitableResolver Tag::resolveParentId(service::ResolverParams&& params) const
+{
+	std::unique_lock resolverLock(_resolverMutex);
+	service::SelectionSetParams selectionSetParams { static_cast<const service::SelectionSetParams&>(params) };
+	auto directives = std::move(params.fieldDirectives);
+	auto result = _pimpl->getParentId(service::FieldParams { std::move(selectionSetParams), std::move(directives) });
+	resolverLock.unlock();
+
+	return service::ModifiedResult<response::IdType>::convert<service::TypeModifier::Nullable>(std::move(result), std::move(params));
+}
+
 service::AwaitableResolver Tag::resolveCategory(service::ResolverParams&& params) const
 {
 	std::unique_lock resolverLock(_resolverMutex);
@@ -110,6 +122,7 @@ void AddTagDetails(const std::shared_ptr<schema::ObjectType>& typeTag, const std
 	typeTag->AddFields({
 		schema::Field::Make(R"gql(id)gql"sv, R"md(标签 ID。)md"sv, std::nullopt, schema->WrapType(introspection::TypeKind::NON_NULL, schema->LookupType(R"gql(ID)gql"sv))),
 		schema::Field::Make(R"gql(name)gql"sv, R"md(标签自身的标准名，例如 1girl。)md"sv, std::nullopt, schema->WrapType(introspection::TypeKind::NON_NULL, schema->LookupType(R"gql(String)gql"sv))),
+		schema::Field::Make(R"gql(parentId)gql"sv, R"md(直接父标签的 ID；没有父标签时为 null。)md"sv, std::nullopt, schema->LookupType(R"gql(ID)gql"sv)),
 		schema::Field::Make(R"gql(category)gql"sv, R"md(直接父标签的标准名，例如 general；没有父标签时为 null。)md"sv, std::nullopt, schema->LookupType(R"gql(String)gql"sv)),
 		schema::Field::Make(R"gql(aliases)gql"sv, R"md(别名列表，按名称升序。)md"sv, std::nullopt, schema->WrapType(introspection::TypeKind::NON_NULL, schema->WrapType(introspection::TypeKind::LIST, schema->WrapType(introspection::TypeKind::NON_NULL, schema->LookupType(R"gql(String)gql"sv)))))
 	});

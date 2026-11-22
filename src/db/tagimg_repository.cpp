@@ -1,6 +1,7 @@
 #include "db/tagimg_repository.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -9,6 +10,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include <soci/postgresql/soci-postgresql.h>
@@ -298,6 +300,110 @@ INSERT INTO tag_name (tag_id, type, name)
 VALUES (:tag_id, 'standard'::tag_name_type, :name)
 )sql";
 
+constexpr const char *kInsertAliasNameSql = R"sql(
+INSERT INTO tag_name (tag_id, type, name)
+VALUES (:tag_id, 'alias'::tag_name_type, :name)
+)sql";
+
+constexpr const char *kDeleteTagAliasesSql = R"sql(
+DELETE FROM tag_name
+WHERE tag_id = :tag_id AND type = 'alias'
+)sql";
+
+// 取该标签的第一条标准名；脏数据里有多条时只认 id 最小的一条。
+constexpr const char *kSelectStandardNameSql = R"sql(
+SELECT id::text, name
+FROM tag_name
+WHERE tag_id = :tag_id AND type = 'standard'
+ORDER BY id
+LIMIT 1
+)sql";
+
+constexpr const char *kUpdateTagNameSql = R"sql(
+UPDATE tag_name
+SET name = :name
+WHERE id = :id
+)sql";
+
+// 锁定标签行，同时取当前父级；空字符串表示根。
+constexpr const char *kSelectTagForUpdateSql = R"sql(
+SELECT COALESCE(parent_id::text, '')
+FROM tags
+WHERE id = :tag_id
+FOR UPDATE
+)sql";
+
+constexpr const char *kUpdateTagParentSql = R"sql(
+UPDATE tags
+SET parent_id = :parent_id
+WHERE id = :tag_id
+)sql";
+
+// 同一父级下是否已有同名标准名；parent_id 为空表示根。
+constexpr const char *kCountCreateNameConflictSql = R"sql(
+WITH params AS (
+  SELECT CAST(:parent_id AS uuid) AS parent_id,
+         CAST(:name AS text) AS name
+)
+SELECT count(*)
+FROM params p
+JOIN tags t
+  ON (p.parent_id IS NULL AND t.parent_id IS NULL)
+  OR t.parent_id = p.parent_id
+JOIN tag_name n ON n.tag_id = t.id
+WHERE n.type = 'standard' AND lower(n.name) = lower(p.name)
+)sql";
+
+// 改名/移动时检查最终父级下的同名标准名，排除标签自身。
+constexpr const char *kCountUpdateNameConflictSql = R"sql(
+WITH params AS (
+  SELECT CAST(:parent_id AS uuid) AS parent_id,
+         CAST(:tag_id AS uuid) AS tag_id,
+         CAST(:name AS text) AS name
+)
+SELECT count(*)
+FROM params p
+JOIN tags t
+  ON (p.parent_id IS NULL AND t.parent_id IS NULL)
+  OR t.parent_id = p.parent_id
+JOIN tag_name n ON n.tag_id = t.id
+WHERE n.type = 'standard'
+  AND lower(n.name) = lower(p.name)
+  AND t.id <> p.tag_id
+)sql";
+
+// 当前标签是否已有与给定标准名相同的别名。
+constexpr const char *kCountTagAliasNameSql = R"sql(
+SELECT count(*)
+FROM tag_name
+WHERE tag_id = :tag_id
+  AND type = 'alias'
+  AND lower(name) = lower(:name)
+)sql";
+
+// 从新父级向上回溯，若遇到标签自身则说明成环。
+constexpr const char *kCheckTagCycleSql = R"sql(
+WITH RECURSIVE ancestors(id) AS (
+  SELECT CAST(:parent_id AS uuid)
+  UNION ALL
+  SELECT t.parent_id
+  FROM tags t
+  JOIN ancestors a ON t.id = a.id
+  WHERE t.parent_id IS NOT NULL
+)
+SELECT count(*)
+FROM ancestors
+WHERE id = CAST(:tag_id AS uuid)
+)sql";
+
+// 按父级串行化创建/移动。根节点用固定 key，其它父级用父级 ID。
+constexpr const char *kAcquireTagLockSql = R"sql(
+WITH lock AS (
+  SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))
+)
+SELECT 1 FROM lock
+)sql";
+
 std::optional<std::string> find_root_tag(soci::session &sql) {
   soci::rowset<soci::row> rows = (sql.prepare << kFindRootTagSql);
   const auto row = rows.begin();
@@ -477,6 +583,84 @@ std::string like_prefix_pattern(std::string_view text) {
 std::vector<std::string> unique_ids(const std::vector<std::string> &ids) {
   const std::set<std::string> ordered(ids.begin(), ids.end());
   return std::vector<std::string>(ordered.begin(), ordered.end());
+}
+
+std::string trim_ascii(std::string_view text) {
+  std::size_t begin = 0;
+  std::size_t end = text.size();
+  const auto is_space = [](unsigned char c) {
+    return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' ||
+           c == '\v';
+  };
+  while (begin < end && is_space(static_cast<unsigned char>(text[begin]))) {
+    ++begin;
+  }
+  while (end > begin &&
+         is_space(static_cast<unsigned char>(text[end - 1]))) {
+    --end;
+  }
+  return std::string(text.substr(begin, end - begin));
+}
+
+// 名称比较只需要覆盖 ASCII 大小写；非 ASCII 字节原样保留。
+std::string ascii_lower(std::string_view text) {
+  std::string lowered;
+  lowered.reserve(text.size());
+  for (const unsigned char c : text) {
+    lowered.push_back(static_cast<char>(std::tolower(c)));
+  }
+  return lowered;
+}
+
+bool has_control_char(std::string_view text) {
+  for (std::size_t i = 0; i < text.size(); ++i) {
+    const unsigned char c = static_cast<unsigned char>(text[i]);
+    if (c < 0x20 || c == 0x7F) {
+      return true;
+    }
+    // UTF-8 编码的 C1 控制字符：C2 80..9F。
+    if (c == 0xC2 && i + 1 < text.size()) {
+      const unsigned char next = static_cast<unsigned char>(text[i + 1]);
+      if (next >= 0x80 && next <= 0x9F) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+bool valid_tag_name(std::string_view name) {
+  if (name.empty() || utf8_length(name) > kMaxTagNameLength) {
+    return false;
+  }
+  if (name.find("::") != std::string_view::npos) {
+    return false;
+  }
+  return !has_control_char(name);
+}
+
+// trim、校验并按大小写不敏感去重；别名不能等于自身标准名。
+Result<std::vector<std::string>, TagimgRepositoryError>
+normalize_tag_aliases(const std::vector<std::string> &aliases,
+                      const std::string &standard_name) {
+  std::vector<std::string> normalized;
+  std::set<std::string> seen;
+  const std::string standard_key = ascii_lower(standard_name);
+  for (const std::string &raw : aliases) {
+    std::string alias = trim_ascii(raw);
+    if (!valid_tag_name(alias)) {
+      return TagimgRepositoryError::InvalidArgument;
+    }
+    const std::string key = ascii_lower(alias);
+    if (!standard_name.empty() && key == standard_key) {
+      return TagimgRepositoryError::TagNameConflict;
+    }
+    if (!seen.insert(key).second) {
+      continue;
+    }
+    normalized.push_back(std::move(alias));
+  }
+  return normalized;
 }
 
 // 实体模式与图片模式共用的写库参数。
@@ -912,7 +1096,13 @@ segments AS (
          a.distance,
          COALESCE(n.name, a.cur_id::text) AS segment
   FROM ancestors a
-  LEFT JOIN tag_name n ON n.tag_id = a.cur_id AND n.type = 'standard'
+  LEFT JOIN LATERAL (
+    SELECT name
+    FROM tag_name
+    WHERE tag_id = a.cur_id AND type = 'standard'
+    ORDER BY id
+    LIMIT 1
+  ) n ON TRUE
 ),
 aggregated AS (
   SELECT tag_id,
@@ -925,9 +1115,17 @@ aggregated AS (
 SELECT a.tag_id::text,
        COALESCE(n.name, a.tag_id::text) AS name,
        CASE WHEN a.depth >= 1 THEN a.parts[2] ELSE NULL END AS category,
-       a.path
+       a.path,
+       t.parent_id::text
 FROM aggregated a
-LEFT JOIN tag_name n ON n.tag_id = a.tag_id AND n.type = 'standard'
+JOIN tags t ON t.id = a.tag_id
+LEFT JOIN LATERAL (
+  SELECT name
+  FROM tag_name
+  WHERE tag_id = a.tag_id AND type = 'standard'
+  ORDER BY id
+  LIMIT 1
+) n ON TRUE
 )sql";
 
 constexpr const char *kArtworkAliasesSql = R"sql(
@@ -936,6 +1134,63 @@ FROM tag_name tn
 WHERE tn.type = 'alias' AND tn.tag_id = ANY(CAST(:tag_ids AS uuid[]))
 ORDER BY tn.tag_id, tn.name
 )sql";
+
+// 读取单个标签的完整信息（含父级、路径、别名）。
+std::optional<ArtworkTagInfo> load_tag_info(soci::session &sql,
+                                            const std::string &tag_id) {
+  const std::string tag_array = uuid_array_literal({tag_id});
+  std::optional<ArtworkTagInfo> info;
+  soci::rowset<soci::row> rows =
+      (sql.prepare << kTagInfoSql, soci::use(tag_array));
+  for (const soci::row &row : rows) {
+    ArtworkTagInfo item;
+    item.id = row.get<std::string>(0);
+    item.name = row.get<std::string>(1);
+    if (row.get_indicator(2) != soci::i_null) {
+      item.category = row.get<std::string>(2);
+    }
+    item.path = row.get<std::string>(3);
+    if (row.get_indicator(4) != soci::i_null) {
+      item.parent_id = row.get<std::string>(4);
+    }
+    info = std::move(item);
+    break;
+  }
+  if (!info) {
+    return std::nullopt;
+  }
+
+  soci::rowset<soci::row> aliases =
+      (sql.prepare << kArtworkAliasesSql, soci::use(tag_array));
+  for (const soci::row &row : aliases) {
+    info->aliases.push_back(row.get<std::string>(1));
+  }
+  return info;
+}
+
+std::string tag_lock_key(const std::optional<std::string> &parent_id) {
+  return parent_id ? "tag:" + *parent_id : "root";
+}
+
+void acquire_tag_lock(soci::session &sql, const std::string &key) {
+  soci::rowset<soci::row> rows =
+      (sql.prepare << kAcquireTagLockSql, soci::use(key));
+  for (const soci::row &row : rows) {
+    (void)row;
+    break;
+  }
+}
+
+std::optional<std::pair<std::string, std::string>>
+find_standard_name(soci::session &sql, const std::string &tag_id) {
+  soci::rowset<soci::row> rows =
+      (sql.prepare << kSelectStandardNameSql, soci::use(tag_id));
+  const auto row = rows.begin();
+  if (row == rows.end()) {
+    return std::nullopt;
+  }
+  return std::make_pair(row->get<std::string>(0), row->get<std::string>(1));
+}
 
 constexpr const char *kArtworkArtistsSql = R"sql(
 SELECT aa.artwork_id::text, ar.id::text, ar.name
@@ -1042,6 +1297,9 @@ void attach_relations(soci::session &sql, std::vector<ArtworkSummary> &items) {
         info.category = row.get<std::string>(2);
       }
       info.path = row.get<std::string>(3);
+      if (row.get_indicator(4) != soci::i_null) {
+        info.parent_id = row.get<std::string>(4);
+      }
       tag_infos.emplace(info.id, std::move(info));
     }
 
@@ -1133,6 +1391,9 @@ void attach_image_relations(soci::session &sql,
         info.category = row.get<std::string>(2);
       }
       info.path = row.get<std::string>(3);
+      if (row.get_indicator(4) != soci::i_null) {
+        info.parent_id = row.get<std::string>(4);
+      }
       tag_infos.emplace(info.id, std::move(info));
     }
 
@@ -1198,6 +1459,12 @@ std::string_view to_string(TagimgRepositoryError error) noexcept {
     return "UnknownArtist";
   case TagimgRepositoryError::TagHierarchyMissing:
     return "TagHierarchyMissing";
+  case TagimgRepositoryError::TagNameConflict:
+    return "TagNameConflict";
+  case TagimgRepositoryError::TagParentNotFound:
+    return "TagParentNotFound";
+  case TagimgRepositoryError::TagCycle:
+    return "TagCycle";
   case TagimgRepositoryError::QueryFailed:
     return "QueryFailed";
   }
@@ -1822,37 +2089,45 @@ TagimgRepository::search_tags(const TagSearchQuery &query) const {
 ),
 )sql";
   }
-  // 先算出候选和名次再拼路径：名次在窗口函数里计算，
-  // 同一层排序键只出现一次，便于按位置绑定参数。
-  sql_text += R"sql(candidates AS (
-  SELECT id, name,
-         row_number() OVER (
-           ORDER BY is_exact DESC, is_prefix DESC, length(name), name, id
-         ) AS rn
-  FROM (
-    SELECT t.id,
-           n.name,
-           (lower(n.name) = lower(:text)) AS is_exact,
-           (n.name ILIKE :prefix ESCAPE '\') AS is_prefix
-    FROM tags t
-    JOIN tag_name n ON n.tag_id = t.id AND n.type = 'standard'
-    WHERE n.name ILIKE :pattern ESCAPE '\')sql";
+  // 标准名和别名都参与匹配；先按 tag 选最佳命中，再去重排序。
+  sql_text += R"sql(matched AS (
+  SELECT t.id AS tag_id,
+         n.name,
+         (n.type = 'standard') AS is_standard,
+         (lower(n.name) = lower(:text)) AS is_exact,
+         (n.name ILIKE :prefix ESCAPE '\') AS is_prefix
+  FROM tags t
+  JOIN tag_name n ON n.tag_id = t.id AND n.type IN ('standard', 'alias')
+  WHERE n.name ILIKE :pattern ESCAPE '\')sql";
   if (query.scope == TagSearchScope::Root) {
-    sql_text += "\n      AND t.parent_id IS NULL";
+    sql_text += "\n    AND t.parent_id IS NULL";
   } else if (query.scope == TagSearchScope::Subtree) {
     if (query.direct_only) {
-      sql_text += "\n      AND t.parent_id = CAST(:parent_id AS uuid)";
+      sql_text += "\n    AND t.parent_id = CAST(:parent_id AS uuid)";
     } else {
-      sql_text += "\n      AND t.id IN (SELECT id FROM subtree)";
+      sql_text += "\n    AND t.id IN (SELECT id FROM subtree)";
     }
   }
   sql_text += R"sql(
-  ) m
-  ORDER BY is_exact DESC, is_prefix DESC, length(name), name, id
+),
+best AS (
+  SELECT DISTINCT ON (tag_id)
+         tag_id, name, is_exact, is_prefix
+  FROM matched
+  ORDER BY tag_id, is_exact DESC, is_prefix DESC, length(name), name,
+           is_standard DESC
+),
+candidates AS (
+  SELECT tag_id, name,
+         row_number() OVER (
+           ORDER BY is_exact DESC, is_prefix DESC, length(name), name, tag_id
+         ) AS rn
+  FROM best
+  ORDER BY is_exact DESC, is_prefix DESC, length(name), name, tag_id
   LIMIT :limit
 ),
 ancestors(tag_id, cur_id, distance) AS (
-  SELECT c.id, c.id, 0 FROM candidates c
+  SELECT c.tag_id, c.tag_id, 0 FROM candidates c
   UNION ALL
   SELECT a.tag_id, p.parent_id, a.distance + 1
   FROM ancestors a
@@ -1864,7 +2139,13 @@ segments AS (
          a.distance,
          COALESCE(n.name, a.cur_id::text) AS segment
   FROM ancestors a
-  LEFT JOIN tag_name n ON n.tag_id = a.cur_id AND n.type = 'standard'
+  LEFT JOIN LATERAL (
+    SELECT name
+    FROM tag_name
+    WHERE tag_id = a.cur_id AND type = 'standard'
+    ORDER BY id
+    LIMIT 1
+  ) n ON TRUE
 ),
 aggregated AS (
   SELECT tag_id,
@@ -1872,9 +2153,9 @@ aggregated AS (
   FROM segments
   GROUP BY tag_id
 )
-SELECT c.id::text, c.name, ag.path
+SELECT c.tag_id::text, c.name, ag.path
 FROM candidates c
-JOIN aggregated ag ON ag.tag_id = c.id
+JOIN aggregated ag ON ag.tag_id = c.tag_id
 ORDER BY c.rn)sql";
 
   try {
@@ -1920,6 +2201,232 @@ ORDER BY c.rn)sql";
       }
     }
     return matches;
+  } catch (const std::exception &) {
+    return TagimgRepositoryError::QueryFailed;
+  }
+}
+
+Result<ArtworkTagInfo, TagimgRepositoryError>
+TagimgRepository::create_tag(const TagCreateInput &input) const {
+  const std::string name = trim_ascii(input.name);
+  if (!valid_tag_name(name)) {
+    return TagimgRepositoryError::InvalidArgument;
+  }
+  auto normalized_aliases = normalize_tag_aliases(input.aliases, name);
+  if (normalized_aliases.has_error()) {
+    return normalized_aliases.error();
+  }
+  auto aliases = std::move(normalized_aliases).value();
+
+  if (input.parent_id && !is_uuid(*input.parent_id)) {
+    return TagimgRepositoryError::InvalidArgument;
+  }
+  if (!impl_ || !impl_->pool) {
+    return TagimgRepositoryError::ConnectionFailed;
+  }
+
+  try {
+    db_detail::PoolLease lease(*impl_->pool);
+    soci::session &sql = impl_->pool->at(lease.position());
+    soci::transaction transaction(sql);
+
+    if (input.parent_id &&
+        count_rows(sql, kCountTagSql, *input.parent_id) == 0) {
+      return TagimgRepositoryError::TagParentNotFound;
+    }
+
+    acquire_tag_lock(sql, tag_lock_key(input.parent_id));
+
+    const std::string parent_value = input.parent_id.value_or("");
+    soci::indicator parent_indicator =
+        input.parent_id ? soci::i_ok : soci::i_null;
+    long long conflicts = 0;
+    sql << kCountCreateNameConflictSql,
+        soci::use(parent_value, parent_indicator), soci::use(name),
+        soci::into(conflicts);
+    if (conflicts > 0) {
+      return TagimgRepositoryError::TagNameConflict;
+    }
+
+    std::string tag_id;
+    {
+      soci::rowset<soci::row> rows =
+          (sql.prepare << kInsertTagSql,
+           soci::use(parent_value, parent_indicator));
+      const auto row = rows.begin();
+      if (row != rows.end()) {
+        tag_id = row->get<std::string>(0);
+      }
+    }
+    if (tag_id.empty()) {
+      return TagimgRepositoryError::QueryFailed;
+    }
+
+    sql << kInsertTagNameSql, soci::use(tag_id), soci::use(name);
+    for (const std::string &alias : aliases) {
+      sql << kInsertAliasNameSql, soci::use(tag_id), soci::use(alias);
+    }
+
+    auto info = load_tag_info(sql, tag_id);
+    if (!info) {
+      return TagimgRepositoryError::QueryFailed;
+    }
+    transaction.commit();
+    return std::move(*info);
+  } catch (const std::exception &) {
+    return TagimgRepositoryError::QueryFailed;
+  }
+}
+
+Result<ArtworkTagInfo, TagimgRepositoryError>
+TagimgRepository::update_tag(const std::string &tag_id,
+                             const TagUpdateInput &input) const {
+  if (!is_uuid(tag_id)) {
+    return TagimgRepositoryError::InvalidArgument;
+  }
+  if (input.clear_parent && input.parent_id) {
+    return TagimgRepositoryError::InvalidArgument;
+  }
+
+  std::optional<std::string> requested_name;
+  if (input.name) {
+    requested_name = trim_ascii(*input.name);
+    if (!valid_tag_name(*requested_name)) {
+      return TagimgRepositoryError::InvalidArgument;
+    }
+  }
+  if (input.parent_id && !is_uuid(*input.parent_id)) {
+    return TagimgRepositoryError::InvalidArgument;
+  }
+  if (!requested_name && !input.aliases && !input.parent_id &&
+      !input.clear_parent) {
+    return TagimgRepositoryError::InvalidArgument;
+  }
+  if (!impl_ || !impl_->pool) {
+    return TagimgRepositoryError::ConnectionFailed;
+  }
+
+  try {
+    db_detail::PoolLease lease(*impl_->pool);
+    soci::session &sql = impl_->pool->at(lease.position());
+    soci::transaction transaction(sql);
+
+    std::optional<std::string> current_parent;
+    {
+      soci::rowset<soci::row> rows =
+          (sql.prepare << kSelectTagForUpdateSql, soci::use(tag_id));
+      const auto row = rows.begin();
+      if (row == rows.end()) {
+        return TagimgRepositoryError::UnknownTag;
+      }
+      std::string parent_value = row->get<std::string>(0);
+      if (!parent_value.empty()) {
+        current_parent = std::move(parent_value);
+      }
+    }
+
+    const auto current_standard = find_standard_name(sql, tag_id);
+    const std::string final_name =
+        requested_name
+            ? *requested_name
+            : (current_standard ? current_standard->second : std::string{});
+
+    std::optional<std::string> final_parent = current_parent;
+    if (input.clear_parent) {
+      final_parent.reset();
+    } else if (input.parent_id) {
+      final_parent = *input.parent_id;
+    }
+
+    if (final_parent && final_parent != current_parent) {
+      if (count_rows(sql, kCountTagSql, *final_parent) == 0) {
+        return TagimgRepositoryError::TagParentNotFound;
+      }
+      long long cycle = 0;
+      sql << kCheckTagCycleSql, soci::use(*final_parent), soci::use(tag_id),
+          soci::into(cycle);
+      if (cycle > 0) {
+        return TagimgRepositoryError::TagCycle;
+      }
+    }
+
+    std::vector<std::string> lock_keys;
+    lock_keys.push_back(tag_lock_key(current_parent));
+    if (final_parent != current_parent) {
+      lock_keys.push_back(tag_lock_key(final_parent));
+    }
+    std::sort(lock_keys.begin(), lock_keys.end());
+    lock_keys.erase(std::unique(lock_keys.begin(), lock_keys.end()),
+                    lock_keys.end());
+    for (const std::string &key : lock_keys) {
+      acquire_tag_lock(sql, key);
+    }
+
+    std::optional<std::vector<std::string>> final_aliases;
+    if (input.aliases) {
+      auto normalized_aliases =
+          normalize_tag_aliases(*input.aliases, final_name);
+      if (normalized_aliases.has_error()) {
+        return normalized_aliases.error();
+      }
+      final_aliases = std::move(normalized_aliases).value();
+    } else if (requested_name && !final_name.empty()) {
+      long long alias_conflict = 0;
+      sql << kCountTagAliasNameSql, soci::use(tag_id), soci::use(final_name),
+          soci::into(alias_conflict);
+      if (alias_conflict > 0) {
+        return TagimgRepositoryError::TagNameConflict;
+      }
+    }
+
+    if (!final_name.empty()) {
+      const std::string parent_value = final_parent.value_or("");
+      soci::indicator parent_indicator =
+          final_parent ? soci::i_ok : soci::i_null;
+      long long conflicts = 0;
+      sql << kCountUpdateNameConflictSql,
+          soci::use(parent_value, parent_indicator), soci::use(tag_id),
+          soci::use(final_name), soci::into(conflicts);
+      if (conflicts > 0) {
+        return TagimgRepositoryError::TagNameConflict;
+      }
+    }
+
+    // 先删旧别名，避免“标准名改成旧别名”时触发 (tag_id, name) 唯一约束；
+    // 再改标准名，最后插新别名，避免“新别名复用旧标准名”时冲突。
+    if (final_aliases) {
+      sql << kDeleteTagAliasesSql, soci::use(tag_id);
+    }
+
+    if (requested_name) {
+      if (current_standard) {
+        sql << kUpdateTagNameSql, soci::use(final_name),
+            soci::use(current_standard->first);
+      } else {
+        sql << kInsertTagNameSql, soci::use(tag_id), soci::use(final_name);
+      }
+    }
+
+    if (final_aliases) {
+      for (const std::string &alias : *final_aliases) {
+        sql << kInsertAliasNameSql, soci::use(tag_id), soci::use(alias);
+      }
+    }
+
+    if (final_parent != current_parent) {
+      const std::string parent_value = final_parent.value_or("");
+      soci::indicator parent_indicator =
+          final_parent ? soci::i_ok : soci::i_null;
+      sql << kUpdateTagParentSql, soci::use(parent_value, parent_indicator),
+          soci::use(tag_id);
+    }
+
+    auto info = load_tag_info(sql, tag_id);
+    if (!info) {
+      return TagimgRepositoryError::QueryFailed;
+    }
+    transaction.commit();
+    return std::move(*info);
   } catch (const std::exception &) {
     return TagimgRepositoryError::QueryFailed;
   }
