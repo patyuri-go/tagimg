@@ -495,6 +495,16 @@ input UpdateArtworkInput {
   imageIds: [ID!]
 }
 
+"批量更新图片所需的参数。"
+input UpdateImagesInput {
+  "要更新的图片 ID，1 个及以上，不能重复。"
+  imageIds: [ID!]!
+  "要批量添加的标签 ID；已经挂在这些图片上的会忽略。"
+  addTagIds: [ID!]
+  "要批量移除的标签 ID；没有挂在这些图片上的会忽略。"
+  removeTagIds: [ID!]
+}
+
 "创建标签所需的参数。"
 input CreateTagInput {
   "标准名，trim 后 1 到 255 个字符，不能包含 :: 或控制字符。"
@@ -582,4 +592,13 @@ type Mutation {
   至少需要提供一项变更。
   """
   updateTag(id: ID!, input: UpdateTagInput!): Tag!
+
+  """
+  批量更新图片，返回成功处理的图片数量。
+
+  当前支持为多张图片批量添加/移除标签。所有图片和标签必须存在，任一项
+  校验失败则整次更新回滚。添加和移除不能包含同一个标签；移除只解除图片
+  与标签的关联，不删除标签本身。
+  """
+  updateImages(input: UpdateImagesInput!): Int!
 }

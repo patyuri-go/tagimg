@@ -174,6 +174,27 @@ FROM tags
 WHERE id = ANY(CAST(:tag_ids AS uuid[]))
 )sql";
 
+constexpr const char *kCountExistingImagesSql = R"sql(
+SELECT count(*)
+FROM images
+WHERE id = ANY(CAST(:image_ids AS uuid[]))
+)sql";
+
+constexpr const char *kInsertImageTagsForImagesSql = R"sql(
+INSERT INTO image_tags (image_id, tag_id)
+SELECT i.id, t.id
+FROM images i
+CROSS JOIN unnest(CAST(:tag_ids AS uuid[])) AS t(id)
+WHERE i.id = ANY(CAST(:image_ids AS uuid[]))
+ON CONFLICT DO NOTHING
+)sql";
+
+constexpr const char *kDeleteImageTagsForImagesSql = R"sql(
+DELETE FROM image_tags
+WHERE image_id = ANY(CAST(:image_ids AS uuid[]))
+  AND tag_id = ANY(CAST(:tag_ids AS uuid[]))
+)sql";
+
 constexpr const char *kInsertImageTagsForArtworkSql = R"sql(
 INSERT INTO image_tags (image_id, tag_id)
 SELECT ai.image_id, t.id
@@ -1533,6 +1554,8 @@ std::string_view to_string(TagimgRepositoryError error) noexcept {
     return "UnknownTag";
   case TagimgRepositoryError::UnknownArtist:
     return "UnknownArtist";
+  case TagimgRepositoryError::UnknownImage:
+    return "UnknownImage";
   case TagimgRepositoryError::TagHierarchyMissing:
     return "TagHierarchyMissing";
   case TagimgRepositoryError::TagNameConflict:
@@ -2136,6 +2159,86 @@ TagimgRepository::search_images(const ImageSearchQuery &query) const {
     }
 
     return result;
+  } catch (const std::exception &) {
+    return TagimgRepositoryError::QueryFailed;
+  }
+}
+
+Result<std::size_t, TagimgRepositoryError>
+TagimgRepository::update_images(const ImageUpdateInput &input) const {
+  if (input.image_ids.empty()) {
+    return TagimgRepositoryError::InvalidArgument;
+  }
+  if (input.add_tag_ids.size() + input.remove_tag_ids.size() >
+      kMaxArtworkEditTags) {
+    return TagimgRepositoryError::InvalidArgument;
+  }
+
+  std::set<std::string> image_ids;
+  for (const std::string &image_id : input.image_ids) {
+    if (!is_uuid(image_id) || !image_ids.insert(image_id).second) {
+      return TagimgRepositoryError::InvalidArgument;
+    }
+  }
+
+  std::set<std::string> add_tag_ids;
+  for (const std::string &tag_id : input.add_tag_ids) {
+    if (!is_uuid(tag_id) || !add_tag_ids.insert(tag_id).second) {
+      return TagimgRepositoryError::InvalidArgument;
+    }
+  }
+  std::set<std::string> remove_tag_ids;
+  for (const std::string &tag_id : input.remove_tag_ids) {
+    if (!is_uuid(tag_id) || !remove_tag_ids.insert(tag_id).second ||
+        add_tag_ids.count(tag_id) > 0) {
+      return TagimgRepositoryError::InvalidArgument;
+    }
+  }
+  if (add_tag_ids.empty() && remove_tag_ids.empty()) {
+    return TagimgRepositoryError::InvalidArgument;
+  }
+  if (!impl_ || !impl_->pool) {
+    return TagimgRepositoryError::ConnectionFailed;
+  }
+
+  try {
+    db_detail::PoolLease lease(*impl_->pool);
+    soci::session &sql = impl_->pool->at(lease.position());
+    soci::transaction transaction(sql);
+
+    const std::string image_array = uuid_array_literal(input.image_ids);
+    long long known_images = 0;
+    sql << kCountExistingImagesSql, soci::use(image_array),
+        soci::into(known_images);
+    if (known_images != static_cast<long long>(input.image_ids.size())) {
+      return TagimgRepositoryError::UnknownImage;
+    }
+
+    std::vector<std::string> checked_tags = input.add_tag_ids;
+    checked_tags.insert(checked_tags.end(), input.remove_tag_ids.begin(),
+                        input.remove_tag_ids.end());
+    const std::string tag_array = uuid_array_literal(checked_tags);
+    long long known_tags = 0;
+    sql << kCountExistingTagsSql, soci::use(tag_array), soci::into(known_tags);
+    if (known_tags != static_cast<long long>(checked_tags.size())) {
+      return TagimgRepositoryError::UnknownTag;
+    }
+
+    if (!add_tag_ids.empty()) {
+      const std::string add_array = uuid_array_literal(input.add_tag_ids);
+      // 按 SQL 中占位符出现顺序绑定：先 :tag_ids，再 :image_ids。
+      sql << kInsertImageTagsForImagesSql, soci::use(add_array),
+          soci::use(image_array);
+    }
+    if (!remove_tag_ids.empty()) {
+      const std::string remove_array =
+          uuid_array_literal(input.remove_tag_ids);
+      sql << kDeleteImageTagsForImagesSql, soci::use(image_array),
+          soci::use(remove_array);
+    }
+
+    transaction.commit();
+    return input.image_ids.size();
   } catch (const std::exception &) {
     return TagimgRepositoryError::QueryFailed;
   }

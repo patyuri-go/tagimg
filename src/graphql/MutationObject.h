@@ -98,6 +98,18 @@ concept applyUpdateTag = requires (TImpl impl, response::IdType idArg, UpdateTag
 };
 
 template <class TImpl>
+concept applyUpdateImagesWithParams = requires (TImpl impl, service::FieldParams params, UpdateImagesInput inputArg)
+{
+	{ service::AwaitableScalar<int> { impl.applyUpdateImages(std::move(params), std::move(inputArg)) } };
+};
+
+template <class TImpl>
+concept applyUpdateImages = requires (TImpl impl, UpdateImagesInput inputArg)
+{
+	{ service::AwaitableScalar<int> { impl.applyUpdateImages(std::move(inputArg)) } };
+};
+
+template <class TImpl>
 concept beginSelectionSet = requires (TImpl impl, const service::SelectionSetParams params)
 {
 	{ impl.beginSelectionSet(params) };
@@ -122,6 +134,7 @@ private:
 	[[nodiscard("unnecessary call")]] service::AwaitableResolver resolveUpdateArtwork(service::ResolverParams&& params) const;
 	[[nodiscard("unnecessary call")]] service::AwaitableResolver resolveCreateTag(service::ResolverParams&& params) const;
 	[[nodiscard("unnecessary call")]] service::AwaitableResolver resolveUpdateTag(service::ResolverParams&& params) const;
+	[[nodiscard("unnecessary call")]] service::AwaitableResolver resolveUpdateImages(service::ResolverParams&& params) const;
 
 	[[nodiscard("unnecessary call")]] service::AwaitableResolver resolve_typename(service::ResolverParams&& params) const;
 
@@ -139,6 +152,7 @@ private:
 		[[nodiscard("unnecessary call")]] virtual service::AwaitableScalar<response::IdType> applyUpdateArtwork(service::FieldParams&& params, response::IdType&& idArg, UpdateArtworkInput&& inputArg) const = 0;
 		[[nodiscard("unnecessary call")]] virtual service::AwaitableObject<std::shared_ptr<Tag>> applyCreateTag(service::FieldParams&& params, CreateTagInput&& inputArg) const = 0;
 		[[nodiscard("unnecessary call")]] virtual service::AwaitableObject<std::shared_ptr<Tag>> applyUpdateTag(service::FieldParams&& params, response::IdType&& idArg, UpdateTagInput&& inputArg) const = 0;
+		[[nodiscard("unnecessary call")]] virtual service::AwaitableScalar<int> applyUpdateImages(service::FieldParams&& params, UpdateImagesInput&& inputArg) const = 0;
 	};
 
 	template <class T>
@@ -238,6 +252,19 @@ private:
 			{
 				static_assert(methods::MutationHas::applyUpdateTag<T>, R"msg(Mutation::applyUpdateTag is not implemented)msg");
 				return { _pimpl->applyUpdateTag(std::move(idArg), std::move(inputArg)) };
+			}
+		}
+
+		[[nodiscard("unnecessary call")]] service::AwaitableScalar<int> applyUpdateImages(service::FieldParams&& params, UpdateImagesInput&& inputArg) const override
+		{
+			if constexpr (methods::MutationHas::applyUpdateImagesWithParams<T>)
+			{
+				return { _pimpl->applyUpdateImages(std::move(params), std::move(inputArg)) };
+			}
+			else
+			{
+				static_assert(methods::MutationHas::applyUpdateImages<T>, R"msg(Mutation::applyUpdateImages is not implemented)msg");
+				return { _pimpl->applyUpdateImages(std::move(inputArg)) };
 			}
 		}
 

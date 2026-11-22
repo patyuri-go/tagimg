@@ -863,6 +863,8 @@ private:
     fail("UNKNOWN_TAG", "tag id does not exist");
   case TagimgRepositoryError::UnknownArtist:
     fail("UNKNOWN_ARTIST", "artist id does not exist");
+  case TagimgRepositoryError::UnknownImage:
+    fail("UNKNOWN_IMAGE", "image id does not exist");
   case TagimgRepositoryError::TagNameConflict:
     fail("TAG_NAME_CONFLICT",
          "a tag with the same name already exists under this parent");
@@ -1630,6 +1632,56 @@ public:
             std::make_shared<TagModel>(*result)));
   }
 
+  gql::service::AwaitableScalar<int>
+  applyUpdateImages(gql::tagimg::UpdateImagesInput input) const {
+    ImageUpdateInput request;
+    request.image_ids = id_list(input.imageIds);
+    if (request.image_ids.empty()) {
+      fail("INVALID_ARGUMENT", "imageIds must not be empty");
+    }
+    if (const auto error =
+            validate_uuid_list(request.image_ids, "imageIds")) {
+      fail("INVALID_ARGUMENT", *error);
+    }
+    const std::set<std::string> unique_images(request.image_ids.begin(),
+                                              request.image_ids.end());
+    if (unique_images.size() != request.image_ids.size()) {
+      fail("INVALID_ARGUMENT", "imageIds contains duplicate items");
+    }
+
+    if (input.addTagIds) {
+      request.add_tag_ids = id_list(*input.addTagIds);
+      if (const auto error =
+              validate_tag_update_ids(request.add_tag_ids, "addTagIds")) {
+        fail("INVALID_ARGUMENT", *error);
+      }
+    }
+    if (input.removeTagIds) {
+      request.remove_tag_ids = id_list(*input.removeTagIds);
+      if (const auto error =
+              validate_tag_update_ids(request.remove_tag_ids, "removeTagIds")) {
+        fail("INVALID_ARGUMENT", *error);
+      }
+    }
+    if (request.add_tag_ids.empty() && request.remove_tag_ids.empty()) {
+      fail("INVALID_ARGUMENT", "at least one tag change is required");
+    }
+
+    const std::set<std::string> add_tags(request.add_tag_ids.begin(),
+                                         request.add_tag_ids.end());
+    for (const std::string &tag_id : request.remove_tag_ids) {
+      if (add_tags.count(tag_id) > 0) {
+        fail("INVALID_ARGUMENT", "addTagIds and removeTagIds must not overlap");
+      }
+    }
+
+    const auto result = repository_->update_images(request);
+    if (!result) {
+      fail_repository(result.error());
+    }
+    return gql::service::AwaitableScalar<int>(static_cast<int>(*result));
+  }
+
   gql::service::AwaitableScalar<IdType>
   applyRescanArtwork(IdType artwork_id) const {
     const std::string text = id_text(artwork_id);
@@ -1690,7 +1742,8 @@ Value attach_error_codes(Value response) {
   static constexpr std::string_view kCodes[] = {
       "INVALID_ARGUMENT",    "SERVICE_UNAVAILABLE",  "AI_UNAVAILABLE",
       "INTERNAL_ERROR",      "QUERY_FAILED",         "UNKNOWN_TAG",
-      "UNKNOWN_ARTIST",      "NOT_FOUND",            "TIMEOUT",
+      "UNKNOWN_ARTIST",      "UNKNOWN_IMAGE",        "NOT_FOUND",
+      "TIMEOUT",
       "CANCELLED",           "TAG_NAME_CONFLICT",    "TAG_PARENT_NOT_FOUND",
       "TAG_CYCLE"};
 

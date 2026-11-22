@@ -26,6 +26,8 @@ JobError map_write_error(TagimgRepositoryError error) {
     return JobError::UnknownTag;
   case TagimgRepositoryError::UnknownArtist:
     return JobError::UnknownArtist;
+  case TagimgRepositoryError::UnknownImage:
+    return JobError::InvalidArgument;
   case TagimgRepositoryError::TagHierarchyMissing:
     return JobError::TagHierarchyMissing;
   }

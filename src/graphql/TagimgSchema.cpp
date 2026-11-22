@@ -491,6 +491,20 @@ tagimg::UpdateArtworkInput Argument<tagimg::UpdateArtworkInput>::convert(const r
 }
 
 template <>
+tagimg::UpdateImagesInput Argument<tagimg::UpdateImagesInput>::convert(const response::Value& value)
+{
+	auto valueImageIds = service::ModifiedArgument<response::IdType>::require<service::TypeModifier::List>("imageIds", value);
+	auto valueAddTagIds = service::ModifiedArgument<response::IdType>::require<service::TypeModifier::Nullable, service::TypeModifier::List>("addTagIds", value);
+	auto valueRemoveTagIds = service::ModifiedArgument<response::IdType>::require<service::TypeModifier::Nullable, service::TypeModifier::List>("removeTagIds", value);
+
+	return tagimg::UpdateImagesInput {
+		std::move(valueImageIds),
+		std::move(valueAddTagIds),
+		std::move(valueRemoveTagIds)
+	};
+}
+
+template <>
 tagimg::CreateTagInput Argument<tagimg::CreateTagInput>::convert(const response::Value& value)
 {
 	const auto defaultValue = []()
@@ -1002,6 +1016,61 @@ UpdateArtworkInput& UpdateArtworkInput::operator=(UpdateArtworkInput&& other) no
 	return *this;
 }
 
+UpdateImagesInput::UpdateImagesInput() noexcept
+	: imageIds {}
+	, addTagIds {}
+	, removeTagIds {}
+{
+	// Explicit definition to prevent ODR violations when LTO is enabled.
+}
+
+UpdateImagesInput::UpdateImagesInput(
+		std::vector<response::IdType> imageIdsArg,
+		std::optional<std::vector<response::IdType>> addTagIdsArg,
+		std::optional<std::vector<response::IdType>> removeTagIdsArg) noexcept
+	: imageIds { std::move(imageIdsArg) }
+	, addTagIds { std::move(addTagIdsArg) }
+	, removeTagIds { std::move(removeTagIdsArg) }
+{
+}
+
+UpdateImagesInput::UpdateImagesInput(const UpdateImagesInput& other)
+	: imageIds { service::ModifiedArgument<response::IdType>::duplicate<service::TypeModifier::List>(other.imageIds) }
+	, addTagIds { service::ModifiedArgument<response::IdType>::duplicate<service::TypeModifier::Nullable, service::TypeModifier::List>(other.addTagIds) }
+	, removeTagIds { service::ModifiedArgument<response::IdType>::duplicate<service::TypeModifier::Nullable, service::TypeModifier::List>(other.removeTagIds) }
+{
+}
+
+UpdateImagesInput::UpdateImagesInput(UpdateImagesInput&& other) noexcept
+	: imageIds { std::move(other.imageIds) }
+	, addTagIds { std::move(other.addTagIds) }
+	, removeTagIds { std::move(other.removeTagIds) }
+{
+}
+
+UpdateImagesInput::~UpdateImagesInput()
+{
+	// Explicit definition to prevent ODR violations when LTO is enabled.
+}
+
+UpdateImagesInput& UpdateImagesInput::operator=(const UpdateImagesInput& other)
+{
+	UpdateImagesInput value { other };
+
+	std::swap(*this, value);
+
+	return *this;
+}
+
+UpdateImagesInput& UpdateImagesInput::operator=(UpdateImagesInput&& other) noexcept
+{
+	imageIds = std::move(other.imageIds);
+	addTagIds = std::move(other.addTagIds);
+	removeTagIds = std::move(other.removeTagIds);
+
+	return *this;
+}
+
 CreateTagInput::CreateTagInput() noexcept
 	: name {}
 	, aliases {}
@@ -1150,6 +1219,8 @@ void AddTypesToSchema(const std::shared_ptr<schema::Schema>& schema)
 	schema->AddType(R"gql(AddArtworkFromImagesInput)gql"sv, typeAddArtworkFromImagesInput);
 	auto typeUpdateArtworkInput = schema::InputObjectType::Make(R"gql(UpdateArtworkInput)gql"sv, R"md(更新作品所需的参数；至少要提供一项变更。)md"sv);
 	schema->AddType(R"gql(UpdateArtworkInput)gql"sv, typeUpdateArtworkInput);
+	auto typeUpdateImagesInput = schema::InputObjectType::Make(R"gql(UpdateImagesInput)gql"sv, R"md(批量更新图片所需的参数。)md"sv);
+	schema->AddType(R"gql(UpdateImagesInput)gql"sv, typeUpdateImagesInput);
 	auto typeCreateTagInput = schema::InputObjectType::Make(R"gql(CreateTagInput)gql"sv, R"md(创建标签所需的参数。)md"sv);
 	schema->AddType(R"gql(CreateTagInput)gql"sv, typeCreateTagInput);
 	auto typeUpdateTagInput = schema::InputObjectType::Make(R"gql(UpdateTagInput)gql"sv, R"md(更新标签所需的参数；至少要提供一项变更。)md"sv);
@@ -1259,6 +1330,11 @@ void AddTypesToSchema(const std::shared_ptr<schema::Schema>& schema)
 
 省略或 null 表示不修改图片顺序。提供时必须是当前作品全部图片的完整集合，
 不能借此增删图片；任一图片不存在、重复或不属于该作品都会拒绝整次更新。)md"sv, schema->WrapType(introspection::TypeKind::LIST, schema->WrapType(introspection::TypeKind::NON_NULL, schema->LookupType(R"gql(ID)gql"sv))), R"gql()gql"sv)
+	});
+	typeUpdateImagesInput->AddInputValues({
+		schema::InputValue::Make(R"gql(imageIds)gql"sv, R"md(要更新的图片 ID，1 个及以上，不能重复。)md"sv, schema->WrapType(introspection::TypeKind::NON_NULL, schema->WrapType(introspection::TypeKind::LIST, schema->WrapType(introspection::TypeKind::NON_NULL, schema->LookupType(R"gql(ID)gql"sv)))), R"gql()gql"sv),
+		schema::InputValue::Make(R"gql(addTagIds)gql"sv, R"md(要批量添加的标签 ID；已经挂在这些图片上的会忽略。)md"sv, schema->WrapType(introspection::TypeKind::LIST, schema->WrapType(introspection::TypeKind::NON_NULL, schema->LookupType(R"gql(ID)gql"sv))), R"gql()gql"sv),
+		schema::InputValue::Make(R"gql(removeTagIds)gql"sv, R"md(要批量移除的标签 ID；没有挂在这些图片上的会忽略。)md"sv, schema->WrapType(introspection::TypeKind::LIST, schema->WrapType(introspection::TypeKind::NON_NULL, schema->LookupType(R"gql(ID)gql"sv))), R"gql()gql"sv)
 	});
 	typeCreateTagInput->AddInputValues({
 		schema::InputValue::Make(R"gql(name)gql"sv, R"md(标准名，trim 后 1 到 255 个字符，不能包含 :: 或控制字符。)md"sv, schema->WrapType(introspection::TypeKind::NON_NULL, schema->LookupType(R"gql(String)gql"sv)), R"gql()gql"sv),

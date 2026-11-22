@@ -27,6 +27,7 @@ enum class TagimgRepositoryError {
   DuplicateImage,
   UnknownTag,
   UnknownArtist,
+  UnknownImage,
   TagHierarchyMissing,
   TagNameConflict,
   TagParentNotFound,
@@ -341,6 +342,17 @@ struct ImageSearchResult {
   std::optional<std::size_t> total;
 };
 
+// 一次批量图片更新的输入。
+//
+// 当前只支持标签增量：add/remove 都为空表示不修改。图片 ID 必须非空且不重复，
+// 添加/移除的标签 ID 也必须不重复且互不重叠；任何图片或标签不存在都会
+// 让整次更新失败。
+struct ImageUpdateInput {
+  std::vector<std::string> image_ids;
+  std::vector<std::string> add_tag_ids;
+  std::vector<std::string> remove_tag_ids;
+};
+
 // 一张不属于任何作品的图片。
 struct OrphanImage {
   std::string id;
@@ -490,6 +502,11 @@ public:
   // 分页查询图片。条件之间是 AND，同一数组内部是 OR。
   [[nodiscard]] Result<ImageSearchResult, TagimgRepositoryError>
   search_images(const ImageSearchQuery &query) const;
+
+  // 批量更新图片；当前支持添加/移除标签，单事务原子执行。
+  // 图片不存在返回 UnknownImage，标签不存在返回 UnknownTag。
+  [[nodiscard]] Result<std::size_t, TagimgRepositoryError>
+  update_images(const ImageUpdateInput &input) const;
 
   // 按标准名或别名搜索标签，用于输入联想。
   [[nodiscard]] Result<std::vector<TagMatch>, TagimgRepositoryError>

@@ -125,6 +125,12 @@
     }
   `;
 
+  const UPDATE_IMAGES_MUTATION = `
+    mutation UpdateImages($input: UpdateImagesInput!) {
+      updateImages(input: $input)
+    }
+  `;
+
   const tagInput = document.getElementById("tag-input");
   const tagSuggest = document.getElementById("tag-suggest");
   const orderSelect = document.getElementById("image-order");
@@ -210,6 +216,17 @@
   const tagEditorCancel = document.getElementById("tag-editor-cancel");
   const tagEditorSave = document.getElementById("tag-editor-save");
 
+  const selectionCard = document.getElementById("selection-card");
+  const selectionCount = document.getElementById("selection-count");
+  const selectionClose = document.getElementById("selection-close");
+  const selectionCommonTags = document.getElementById("selection-common-tags");
+  const selectionTagInput = document.getElementById("selection-tag-input");
+  const selectionTagSuggest = document.getElementById("selection-tag-suggest");
+  const selectionLockHint = document.getElementById("selection-lock-hint");
+  const selectionError = document.getElementById("selection-error");
+  const selectionCancel = document.getElementById("selection-cancel");
+  const selectionSave = document.getElementById("selection-save");
+
   const ZOOM_MIN = 1;
   const ZOOM_MAX = 8;
   const TAG_DRAWER_WIDTH = 320;
@@ -240,6 +257,25 @@
   let tagEditorOriginalParentId = null;
   let tagEditorSaving = false;
   let tagEditorParentSuggestWidget = null;
+
+  const selectedImageItems = new Map();
+  let selectionPendingAdditions = [];
+  const selectionPendingRemovals = new Set();
+  let selectionSaving = false;
+  let selectionTagSuggestWidget = null;
+  let suppressSelectionClick = false;
+  let suppressSelectionClickTimer = 0;
+  const selectionDrag = {
+    active: false,
+    pointerId: null,
+    startX: 0,
+    startY: 0,
+    lastX: 0,
+    lastY: 0,
+    moved: false,
+    scrollSpeed: 0,
+    scrollFrame: 0,
+  };
 
   const lightboxZoom = {
     scale: 1,
@@ -420,6 +456,7 @@
     }
     renderStaging();
     syncStateToUrl();
+    clearSelection();
     search(true);
   }
 
@@ -432,6 +469,7 @@
     list.splice(index, 1);
     renderStaging();
     syncStateToUrl();
+    clearSelection();
     search(true);
   }
 
@@ -1668,6 +1706,8 @@
     image.alt = artworkTitles(item).join("、") || "图片";
     image.loading = "lazy";
     image.decoding = "async";
+    image.draggable = false;
+    image.addEventListener("dragstart", (event) => event.preventDefault());
     image.dataset.imageId = item.id;
     image.dataset.imageWidth = String(ratioWidth);
     image.dataset.imageHeight = String(ratioHeight);
@@ -1746,6 +1786,7 @@
   function createCard(item, index) {
     const card = document.createElement("article");
     card.className = "card image-card";
+    card.dataset.imageId = item.id;
 
     const width = Number(item.width);
     const height = Number(item.height);
@@ -1756,6 +1797,7 @@
     const button = document.createElement("button");
     button.type = "button";
     button.className = "image-thumb-button";
+    button.setAttribute("aria-pressed", "false");
     button.setAttribute(
       "aria-label",
       `查看大图：${artworkTitles(item).join("、") || "图片"}`,
@@ -1766,7 +1808,9 @@
       thumb.appendChild(createScoreBadge(item));
     }
     button.appendChild(thumb);
-    button.addEventListener("click", () => openLightbox(index));
+    button.addEventListener("click", (event) =>
+      handleCardClick(item, index, event),
+    );
 
     const body = document.createElement("div");
     body.className = "card-body";
@@ -1794,7 +1838,623 @@
 
     card.appendChild(button);
     card.appendChild(body);
+    applySelectionToCard(card);
     return card;
+  }
+
+  // ---------- 多选批量标签 ----------
+
+  function multiSelectEnabled() {
+    if (window.innerWidth < 900) {
+      return false;
+    }
+    if (
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(hover: none)").matches
+    ) {
+      return false;
+    }
+    return true;
+  }
+
+  function selectionHasChanges() {
+    return (
+      selectionPendingAdditions.length > 0 ||
+      selectionPendingRemovals.size > 0
+    );
+  }
+
+  function selectionLocked() {
+    return selectionSaving || selectionHasChanges();
+  }
+
+  function getSelectionCommonTags() {
+    if (selectedImageItems.size === 0) {
+      return [];
+    }
+    let common = null;
+    for (const item of selectedImageItems.values()) {
+      const tags = new Map();
+      for (const tag of item.tags || []) {
+        tags.set(tag.id, tag);
+      }
+      if (common === null) {
+        common = tags;
+      } else {
+        for (const id of [...common.keys()]) {
+          if (!tags.has(id)) {
+            common.delete(id);
+          }
+        }
+      }
+      if (common.size === 0) {
+        break;
+      }
+    }
+    return [...(common ? common.values() : [])].sort((left, right) =>
+      String(left.name).localeCompare(String(right.name), "zh-CN"),
+    );
+  }
+
+  function getSelectionTagPaths() {
+    const paths = new Map();
+    for (const item of selectedImageItems.values()) {
+      for (const entry of item.tagPaths || []) {
+        if (!paths.has(entry.id)) {
+          paths.set(entry.id, entry.path);
+        }
+      }
+    }
+    return paths;
+  }
+
+  function setSelectionError(text) {
+    const value = String(text || "");
+    selectionError.textContent = value;
+    selectionError.hidden = value === "";
+  }
+
+  function clearSelectionError() {
+    setSelectionError("");
+  }
+
+  function updateSelectionUi() {
+    const count = selectedImageItems.size;
+    selectionCount.textContent = String(count);
+    const hasChanges = selectionHasChanges();
+    selectionSave.disabled = !hasChanges || selectionSaving;
+    selectionSave.textContent = selectionSaving ? "保存中…" : "保存";
+    selectionCancel.disabled = selectionSaving;
+    selectionClose.disabled = selectionSaving;
+    selectionTagInput.disabled = selectionSaving;
+    selectionLockHint.hidden = !(hasChanges || selectionSaving);
+    selectionLockHint.textContent = selectionSaving
+      ? "保存中…"
+      : "保存或取消后可继续选择";
+    selectionCard.hidden = count === 0;
+  }
+
+  function renderSelectionTags() {
+    const fragment = document.createDocumentFragment();
+    const common = getSelectionCommonTags();
+    const paths = getSelectionTagPaths();
+
+    if (common.length === 0) {
+      const empty = document.createElement("span");
+      empty.className = "selection-empty";
+      empty.textContent = "没有共同标签";
+      fragment.appendChild(empty);
+    }
+
+    for (const tag of common) {
+      const path = paths.get(tag.id) || tag.path || tag.name;
+      const removing = selectionPendingRemovals.has(tag.id);
+      const chip = document.createElement("button");
+      chip.type = "button";
+      chip.className = "chip chip-editable";
+      if (removing) {
+        chip.classList.add("chip-remove");
+      }
+      chip.textContent = tag.name;
+      chip.title = `${path}\n${removing ? "点击取消删除" : "点击标记删除"}`;
+      chip.setAttribute("aria-pressed", String(removing));
+      chip.addEventListener("click", () => toggleSelectionRemoval(tag.id));
+      fragment.appendChild(chip);
+    }
+
+    for (const tag of selectionPendingAdditions) {
+      const chip = document.createElement("button");
+      chip.type = "button";
+      chip.className = "chip chip-editable chip-add";
+      chip.textContent = tag.name;
+      chip.title = `${tag.path || tag.name}\n点击移除`;
+      chip.addEventListener("click", () => removeSelectionAddition(tag.id));
+      fragment.appendChild(chip);
+    }
+
+    selectionCommonTags.replaceChildren(fragment);
+  }
+
+  function selectionChanged() {
+    if (selectedImageItems.size === 0) {
+      selectionCount.textContent = "0";
+      resetSelectionEditor();
+      selectionCard.hidden = true;
+      return;
+    }
+    selectionCard.hidden = false;
+    renderSelectionTags();
+    updateSelectionUi();
+  }
+
+  function applySelectionToCard(card) {
+    const selected = selectedImageItems.has(card.dataset.imageId);
+    card.classList.toggle("is-selected", selected);
+    const button = card.querySelector(".image-thumb-button");
+    if (button) {
+      button.setAttribute("aria-pressed", String(selected));
+    }
+  }
+
+  function setImageSelected(item, selected) {
+    if (!item || !item.id) {
+      return;
+    }
+    if (selected) {
+      selectedImageItems.set(item.id, item);
+    } else {
+      selectedImageItems.delete(item.id);
+    }
+    for (const card of allCards) {
+      if (card.dataset.imageId === item.id) {
+        applySelectionToCard(card);
+      }
+    }
+    selectionChanged();
+  }
+
+  function addSelection(item) {
+    if (!multiSelectEnabled() || !item || selectedImageItems.has(item.id)) {
+      return;
+    }
+    if (selectionLocked()) {
+      updateSelectionUi();
+      return;
+    }
+    setImageSelected(item, true);
+  }
+
+  function toggleSelection(item) {
+    if (!multiSelectEnabled() || !item) {
+      return;
+    }
+    if (selectionLocked()) {
+      updateSelectionUi();
+      return;
+    }
+    setImageSelected(item, !selectedImageItems.has(item.id));
+  }
+
+  function resetSelectionEditor() {
+    selectionPendingAdditions = [];
+    selectionPendingRemovals.clear();
+    clearSelectionError();
+    selectionTagInput.value = "";
+    selectionLockHint.hidden = true;
+    selectionSave.disabled = true;
+    if (selectionTagSuggestWidget) {
+      selectionTagSuggestWidget.clearChosen();
+      selectionTagSuggestWidget.close();
+    }
+  }
+
+  function clearSelection() {
+    finishSelectionDrag(false);
+    selectedImageItems.clear();
+    for (const card of allCards) {
+      applySelectionToCard(card);
+    }
+    selectionSaving = false;
+    resetSelectionEditor();
+    selectionCount.textContent = "0";
+    selectionCard.hidden = true;
+  }
+
+  function toggleSelectionRemoval(id) {
+    if (selectionSaving) {
+      return;
+    }
+    if (selectionPendingRemovals.has(id)) {
+      selectionPendingRemovals.delete(id);
+    } else {
+      selectionPendingRemovals.add(id);
+    }
+    clearSelectionError();
+    renderSelectionTags();
+    updateSelectionUi();
+  }
+
+  function removeSelectionAddition(id) {
+    if (selectionSaving) {
+      return;
+    }
+    selectionPendingAdditions = selectionPendingAdditions.filter(
+      (tag) => tag.id !== id,
+    );
+    clearSelectionError();
+    renderSelectionTags();
+    updateSelectionUi();
+  }
+
+  function addSelectionTag(tag) {
+    if (!tag || !tag.id || selectionSaving) {
+      return;
+    }
+    clearSelectionError();
+    const commonIds = new Set(getSelectionCommonTags().map((item) => item.id));
+    if (commonIds.has(tag.id)) {
+      selectionPendingRemovals.delete(tag.id);
+    } else if (
+      !selectionPendingAdditions.some((item) => item.id === tag.id)
+    ) {
+      selectionPendingAdditions.push({
+        id: tag.id,
+        name: tag.name,
+        path: tag.path || tag.name,
+      });
+    }
+    renderSelectionTags();
+    updateSelectionUi();
+  }
+
+  async function addSelectionTagFromInput() {
+    const normalized = TagSearch.trimPathSuffix(selectionTagInput.value);
+    if (normalized === "") {
+      return;
+    }
+    let tag = null;
+    try {
+      const chosen = selectionTagSuggestWidget
+        ? selectionTagSuggestWidget.getChosen()
+        : null;
+      tag =
+        chosen && normalized === chosen.path
+          ? chosen
+          : await TagSearch.resolveTagPath(normalized);
+    } catch (error) {
+      setSelectionError(error.message || "标签查询失败");
+      return;
+    }
+    if (!tag || !tag.id) {
+      setSelectionError("未找到该标签");
+      return;
+    }
+    addSelectionTag(tag);
+    selectionTagInput.value = `${tag.path}::`;
+    selectionTagInput.focus();
+    if (selectionTagSuggestWidget) {
+      selectionTagSuggestWidget.clearChosen();
+      selectionTagSuggestWidget.close();
+    }
+  }
+
+  function applySelectionTagChangesLocally(imageIds, additions, removeIds) {
+    const idSet = new Set(imageIds);
+    const removeSet = new Set(removeIds);
+    const itemById = new Map();
+    for (const item of allItems) {
+      if (idSet.has(item.id)) {
+        itemById.set(item.id, item);
+      }
+    }
+
+    for (const item of itemById.values()) {
+      const tags = (item.tags || []).filter((tag) => !removeSet.has(tag.id));
+      for (const tag of additions) {
+        if (!tags.some((entry) => entry.id === tag.id)) {
+          tags.push({
+            id: tag.id,
+            name: tag.name,
+            category: tag.category || null,
+            aliases: Array.isArray(tag.aliases) ? tag.aliases : [],
+          });
+        }
+      }
+      item.tags = tags;
+
+      const paths = (item.tagPaths || []).filter(
+        (entry) => !removeSet.has(entry.id),
+      );
+      for (const tag of additions) {
+        if (!paths.some((entry) => entry.id === tag.id)) {
+          paths.push({ id: tag.id, path: tag.path || tag.name });
+        }
+      }
+      item.tagPaths = paths;
+    }
+
+    for (const card of allCards) {
+      const item = itemById.get(card.dataset.imageId);
+      if (!item) {
+        continue;
+      }
+      const body = card.querySelector(".card-body");
+      if (!body) {
+        continue;
+      }
+      const oldTags = body.querySelector(".tags");
+      if (oldTags) {
+        oldTags.remove();
+      }
+      const tags = createTagList(item);
+      if (tags.childElementCount > 0) {
+        body.appendChild(tags);
+      }
+    }
+  }
+
+  async function saveSelection() {
+    if (
+      selectionSaving ||
+      selectedImageItems.size === 0 ||
+      !selectionHasChanges()
+    ) {
+      return;
+    }
+
+    const imageIds = [...selectedImageItems.keys()];
+    const additions = selectionPendingAdditions.map((tag) => ({ ...tag }));
+    const removeIds = [...selectionPendingRemovals];
+    const hadTagFilter = includeTags.length > 0 || excludeTags.length > 0;
+
+    selectionSaving = true;
+    clearSelectionError();
+    updateSelectionUi();
+
+    try {
+      await requestGraphQl(UPDATE_IMAGES_MUTATION, {
+        input: {
+          imageIds,
+          addTagIds: additions.map((tag) => tag.id),
+          removeTagIds: removeIds,
+        },
+      });
+      applySelectionTagChangesLocally(imageIds, additions, removeIds);
+      clearSelection();
+      if (hadTagFilter) {
+        search(true);
+      }
+    } catch (error) {
+      selectionSaving = false;
+      updateSelectionUi();
+      setSelectionError(error.message || "保存失败");
+    }
+  }
+
+  function handleCardClick(item, index, event) {
+    if (suppressSelectionClick) {
+      suppressSelectionClick = false;
+      window.clearTimeout(suppressSelectionClickTimer);
+      event.preventDefault();
+      return;
+    }
+    if (!multiSelectEnabled()) {
+      openLightbox(index);
+      return;
+    }
+    if (
+      selectedImageItems.size > 0 ||
+      event.ctrlKey ||
+      event.metaKey
+    ) {
+      event.preventDefault();
+      toggleSelection(item);
+      return;
+    }
+    openLightbox(index);
+  }
+
+  function selectCardAtPoint(x, y, event) {
+    let target = null;
+    if (typeof document.elementFromPoint === "function") {
+      target = document.elementFromPoint(x, y);
+    }
+    if (!(target instanceof Element) && event) {
+      target = event.target instanceof Element ? event.target : null;
+    }
+    if (!target) {
+      return;
+    }
+    const card = target.closest(".image-card");
+    if (!card || !results.contains(card)) {
+      return;
+    }
+    const item = allItems.find((entry) => entry.id === card.dataset.imageId);
+    if (item) {
+      addSelection(item);
+    }
+  }
+
+  function tickSelectionAutoScroll() {
+    selectionDrag.scrollFrame = 0;
+    if (!selectionDrag.active || selectionDrag.scrollSpeed === 0) {
+      return;
+    }
+    window.scrollBy(0, selectionDrag.scrollSpeed);
+    selectCardAtPoint(selectionDrag.lastX, selectionDrag.lastY);
+    selectionDrag.scrollFrame = window.requestAnimationFrame(
+      tickSelectionAutoScroll,
+    );
+  }
+
+  function updateSelectionAutoScroll(y) {
+    const margin = 72;
+    let speed = 0;
+    if (y < margin) {
+      speed = -Math.ceil((margin - y) / 4);
+    } else if (y > window.innerHeight - margin) {
+      speed = Math.ceil((y - (window.innerHeight - margin)) / 4);
+    }
+    speed = Math.max(-45, Math.min(45, speed));
+    selectionDrag.scrollSpeed = speed;
+
+    if (speed !== 0 && selectionDrag.scrollFrame === 0) {
+      selectionDrag.scrollFrame = window.requestAnimationFrame(
+        tickSelectionAutoScroll,
+      );
+    } else if (speed === 0 && selectionDrag.scrollFrame !== 0) {
+      window.cancelAnimationFrame(selectionDrag.scrollFrame);
+      selectionDrag.scrollFrame = 0;
+    }
+  }
+
+  function finishSelectionDrag(suppressClick) {
+    if (!selectionDrag.active) {
+      return;
+    }
+    const moved = selectionDrag.moved;
+    selectionDrag.active = false;
+    selectionDrag.pointerId = null;
+    selectionDrag.moved = false;
+    selectionDrag.scrollSpeed = 0;
+    if (selectionDrag.scrollFrame !== 0) {
+      window.cancelAnimationFrame(selectionDrag.scrollFrame);
+      selectionDrag.scrollFrame = 0;
+    }
+    document.body.classList.remove("selection-dragging");
+    if (moved && suppressClick) {
+      suppressSelectionClick = true;
+      window.clearTimeout(suppressSelectionClickTimer);
+      suppressSelectionClickTimer = window.setTimeout(() => {
+        suppressSelectionClick = false;
+      }, 0);
+    }
+  }
+
+  function beginSelectionDrag(event) {
+    if (
+      !multiSelectEnabled() ||
+      event.button !== 0 ||
+      event.pointerType === "touch" ||
+      !(event.ctrlKey || event.metaKey)
+    ) {
+      return;
+    }
+    if (selectionLocked()) {
+      updateSelectionUi();
+      return;
+    }
+    finishSelectionDrag(false);
+    selectionDrag.active = true;
+    selectionDrag.pointerId =
+      typeof event.pointerId === "number" ? event.pointerId : null;
+    selectionDrag.startX = event.clientX;
+    selectionDrag.startY = event.clientY;
+    selectionDrag.lastX = event.clientX;
+    selectionDrag.lastY = event.clientY;
+    selectionDrag.moved = false;
+    document.body.classList.add("selection-dragging");
+    exitHoverPreview();
+  }
+
+  function bindSelectionUi() {
+    selectionClose.addEventListener("click", clearSelection);
+    selectionCancel.addEventListener("click", clearSelection);
+    selectionSave.addEventListener("click", saveSelection);
+    selectionTagInput.addEventListener("input", clearSelectionError);
+
+    selectionTagSuggestWidget = TagSearch.create({
+      input: selectionTagInput,
+      list: selectionTagSuggest,
+      idPrefix: "selection-tag",
+      onEnter: () => addSelectionTagFromInput(),
+      onChoose: (tag) => {
+        addSelectionTag(tag);
+        selectionTagInput.value = "";
+        selectionTagSuggestWidget.clearChosen();
+        selectionTagSuggestWidget.close();
+        selectionTagInput.focus();
+      },
+    });
+
+    results.addEventListener("pointerdown", beginSelectionDrag);
+    document.addEventListener(
+      "pointermove",
+      (event) => {
+        if (!selectionDrag.active) {
+          return;
+        }
+        if (
+          selectionDrag.pointerId !== null &&
+          event.pointerId !== selectionDrag.pointerId
+        ) {
+          return;
+        }
+        selectionDrag.lastX = event.clientX;
+        selectionDrag.lastY = event.clientY;
+        if (!selectionDrag.moved) {
+          const dx = event.clientX - selectionDrag.startX;
+          const dy = event.clientY - selectionDrag.startY;
+          if (Math.hypot(dx, dy) < 4) {
+            return;
+          }
+          selectionDrag.moved = true;
+          selectCardAtPoint(
+            selectionDrag.startX,
+            selectionDrag.startY,
+            event,
+          );
+        }
+        event.preventDefault();
+        selectCardAtPoint(event.clientX, event.clientY, event);
+        updateSelectionAutoScroll(event.clientY);
+      },
+      { passive: false },
+    );
+    document.addEventListener("pointerup", (event) => {
+      if (!selectionDrag.active) {
+        return;
+      }
+      if (
+        selectionDrag.pointerId !== null &&
+        event.pointerId !== selectionDrag.pointerId
+      ) {
+        return;
+      }
+      finishSelectionDrag(true);
+    });
+    document.addEventListener("pointercancel", (event) => {
+      if (
+        selectionDrag.active &&
+        (selectionDrag.pointerId === null ||
+          event.pointerId === selectionDrag.pointerId)
+      ) {
+        finishSelectionDrag(false);
+      }
+    });
+    window.addEventListener("blur", () => finishSelectionDrag(false));
+
+    document.addEventListener("keydown", (event) => {
+      if (event.key !== "Escape" || event.defaultPrevented) {
+        return;
+      }
+      if (lightbox.open || tagEditorOpen) {
+        return;
+      }
+      if (selectionDrag.active) {
+        event.preventDefault();
+        finishSelectionDrag(true);
+        return;
+      }
+      if (selectionSaving) {
+        event.preventDefault();
+        return;
+      }
+      if (selectedImageItems.size > 0) {
+        event.preventDefault();
+        clearSelection();
+      }
+    });
   }
 
   // ---------- 搜索与分页 ----------
@@ -2415,7 +3075,7 @@
   }
 
   results.addEventListener("pointermove", (event) => {
-    if (event.pointerType === "touch") {
+    if (event.pointerType === "touch" || selectionDrag.active) {
       exitHoverPreview();
       return;
     }
@@ -2492,6 +3152,7 @@
     renderReferenceBar();
     syncSortUi();
     syncStateToUrl();
+    clearSelection();
     search(true);
   }
 
@@ -2673,7 +3334,12 @@
     if (
       event.key === "Escape" &&
       !event.defaultPrevented &&
-      !layoutPanel.hidden
+      !layoutPanel.hidden &&
+      selectedImageItems.size === 0 &&
+      !selectionDrag.active &&
+      !tagDrawerOpen &&
+      !tagEditorOpen &&
+      !lightbox.open
     ) {
       setLayoutPanelOpen(false);
     }
@@ -2778,6 +3444,13 @@
         closeTagEditor();
         return;
       }
+      if (
+        lightbox.open ||
+        selectedImageItems.size > 0 ||
+        selectionDrag.active
+      ) {
+        return;
+      }
       if (tagDrawerOpen) {
         event.preventDefault();
         setTagDrawerOpen(false);
@@ -2795,6 +3468,7 @@
     onShiftEnter: () => addTagFromInput("exclude"),
   });
   bindTagTreeUi();
+  bindSelectionUi();
   updateTagEditButton();
 
   window.addEventListener(
@@ -2812,6 +3486,9 @@
     }
     window.clearTimeout(resizeTimer);
     resizeTimer = window.setTimeout(() => {
+      if (!multiSelectEnabled() && selectedImageItems.size > 0) {
+        clearSelection();
+      }
       if (layoutAuto) {
         syncLayoutSettings();
       }

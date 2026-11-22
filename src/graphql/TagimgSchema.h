@@ -290,6 +290,25 @@ struct [[nodiscard("unnecessary construction")]] UpdateArtworkInput
 	std::optional<std::vector<response::IdType>> imageIds;
 };
 
+struct [[nodiscard("unnecessary construction")]] UpdateImagesInput
+{
+	explicit UpdateImagesInput() noexcept;
+	explicit UpdateImagesInput(
+		std::vector<response::IdType> imageIdsArg,
+		std::optional<std::vector<response::IdType>> addTagIdsArg,
+		std::optional<std::vector<response::IdType>> removeTagIdsArg) noexcept;
+	UpdateImagesInput(const UpdateImagesInput& other);
+	UpdateImagesInput(UpdateImagesInput&& other) noexcept;
+	~UpdateImagesInput();
+
+	UpdateImagesInput& operator=(const UpdateImagesInput& other);
+	UpdateImagesInput& operator=(UpdateImagesInput&& other) noexcept;
+
+	std::vector<response::IdType> imageIds;
+	std::optional<std::vector<response::IdType>> addTagIds;
+	std::optional<std::vector<response::IdType>> removeTagIds;
+};
+
 struct [[nodiscard("unnecessary construction")]] CreateTagInput
 {
 	explicit CreateTagInput() noexcept;

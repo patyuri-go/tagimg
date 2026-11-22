@@ -385,6 +385,73 @@
       </form>
     </dialog>
 
+    <aside
+      id="selection-card"
+      class="selection-card"
+      aria-labelledby="selection-title"
+      hidden
+    >
+      <header class="selection-card-head">
+        <h2 id="selection-title" class="selection-card-title">
+          已选 <span id="selection-count">0</span> 张
+        </h2>
+        <button
+          id="selection-close"
+          class="icon-button"
+          type="button"
+          aria-label="关闭批量标签"
+        >
+          ×
+        </button>
+      </header>
+
+      <div class="selection-card-body">
+        <section class="selection-section">
+          <h3 class="selection-section-title">共同标签</h3>
+          <div id="selection-common-tags" class="selection-tags"></div>
+        </section>
+
+        <section class="selection-section">
+          <h3 class="selection-section-title">添加标签</h3>
+          <div class="selection-tag-search">
+            <input
+              id="selection-tag-input"
+              type="text"
+              autocomplete="off"
+              spellcheck="false"
+              aria-label="搜索要添加的标签"
+              placeholder="输入标签名或路径…"
+            />
+            <ul
+              id="selection-tag-suggest"
+              class="tag-suggest"
+              role="listbox"
+              hidden
+            ></ul>
+          </div>
+        </section>
+
+        <p id="selection-lock-hint" class="selection-hint" role="status" hidden>
+          保存或取消后可继续选择
+        </p>
+        <p id="selection-error" class="form-error" role="alert" hidden></p>
+      </div>
+
+      <footer class="selection-card-foot">
+        <button id="selection-cancel" class="button ghost" type="button">
+          取消
+        </button>
+        <button
+          id="selection-save"
+          class="button primary"
+          type="button"
+          disabled
+        >
+          保存
+        </button>
+      </footer>
+    </aside>
+
     <dialog
       id="image-lightbox"
       class="dialog image-lightbox"

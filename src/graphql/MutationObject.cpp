@@ -42,6 +42,7 @@ service::ResolverMap Mutation::getResolvers() const noexcept
 		{ R"gql(updateTag)gql"sv, [this](service::ResolverParams&& params) { return resolveUpdateTag(std::move(params)); } },
 		{ R"gql(__typename)gql"sv, [this](service::ResolverParams&& params) { return resolve_typename(std::move(params)); } },
 		{ R"gql(addArtwork)gql"sv, [this](service::ResolverParams&& params) { return resolveAddArtwork(std::move(params)); } },
+		{ R"gql(updateImages)gql"sv, [this](service::ResolverParams&& params) { return resolveUpdateImages(std::move(params)); } },
 		{ R"gql(deleteArtwork)gql"sv, [this](service::ResolverParams&& params) { return resolveDeleteArtwork(std::move(params)); } },
 		{ R"gql(rescanArtwork)gql"sv, [this](service::ResolverParams&& params) { return resolveRescanArtwork(std::move(params)); } },
 		{ R"gql(updateArtwork)gql"sv, [this](service::ResolverParams&& params) { return resolveUpdateArtwork(std::move(params)); } },
@@ -145,6 +146,18 @@ service::AwaitableResolver Mutation::resolveUpdateTag(service::ResolverParams&& 
 	return service::ModifiedResult<Tag>::convert(std::move(result), std::move(params));
 }
 
+service::AwaitableResolver Mutation::resolveUpdateImages(service::ResolverParams&& params) const
+{
+	auto argInput = service::ModifiedArgument<UpdateImagesInput>::require("input", params.arguments);
+	std::unique_lock resolverLock(_resolverMutex);
+	service::SelectionSetParams selectionSetParams { static_cast<const service::SelectionSetParams&>(params) };
+	auto directives = std::move(params.fieldDirectives);
+	auto result = _pimpl->applyUpdateImages(service::FieldParams { std::move(selectionSetParams), std::move(directives) }, std::move(argInput));
+	resolverLock.unlock();
+
+	return service::ModifiedResult<int>::convert(std::move(result), std::move(params));
+}
+
 service::AwaitableResolver Mutation::resolve_typename(service::ResolverParams&& params) const
 {
 	return service::Result<std::string>::convert(std::string{ R"gql(Mutation)gql" }, std::move(params));
@@ -202,6 +215,13 @@ parentId 省略表示不移动，clearParent: true 表示移到根节点。
 至少需要提供一项变更。)md"sv, std::nullopt, schema->WrapType(introspection::TypeKind::NON_NULL, schema->LookupType(R"gql(Tag)gql"sv)), {
 			schema::InputValue::Make(R"gql(id)gql"sv, R"md()md"sv, schema->WrapType(introspection::TypeKind::NON_NULL, schema->LookupType(R"gql(ID)gql"sv)), R"gql()gql"sv),
 			schema::InputValue::Make(R"gql(input)gql"sv, R"md()md"sv, schema->WrapType(introspection::TypeKind::NON_NULL, schema->LookupType(R"gql(UpdateTagInput)gql"sv)), R"gql()gql"sv)
+		}),
+		schema::Field::Make(R"gql(updateImages)gql"sv, R"md(批量更新图片，返回成功处理的图片数量。
+
+当前支持为多张图片批量添加/移除标签。所有图片和标签必须存在，任一项
+校验失败则整次更新回滚。添加和移除不能包含同一个标签；移除只解除图片
+与标签的关联，不删除标签本身。)md"sv, std::nullopt, schema->WrapType(introspection::TypeKind::NON_NULL, schema->LookupType(R"gql(Int)gql"sv)), {
+			schema::InputValue::Make(R"gql(input)gql"sv, R"md()md"sv, schema->WrapType(introspection::TypeKind::NON_NULL, schema->LookupType(R"gql(UpdateImagesInput)gql"sv)), R"gql()gql"sv)
 		})
 	});
 }
