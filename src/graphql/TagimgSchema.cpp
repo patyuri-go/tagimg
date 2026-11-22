@@ -1174,6 +1174,10 @@ void AddTypesToSchema(const std::shared_ptr<schema::Schema>& schema)
 	schema->AddType(R"gql(Image)gql"sv, typeImage);
 	auto typeTag = schema::ObjectType::Make(R"gql(Tag)gql"sv, R"md(标签。)md"sv);
 	schema->AddType(R"gql(Tag)gql"sv, typeTag);
+	auto typeTagTreeNode = schema::ObjectType::Make(R"gql(TagTreeNode)gql"sv, R"md(标签树节点。)md"sv);
+	schema->AddType(R"gql(TagTreeNode)gql"sv, typeTagTreeNode);
+	auto typeTagTreeMatch = schema::ObjectType::Make(R"gql(TagTreeMatch)gql"sv, R"md(标签树搜索结果。)md"sv);
+	schema->AddType(R"gql(TagTreeMatch)gql"sv, typeTagTreeMatch);
 	auto typeTagMatch = schema::ObjectType::Make(R"gql(TagMatch)gql"sv, R"md(标签搜索结果。)md"sv);
 	schema->AddType(R"gql(TagMatch)gql"sv, typeTagMatch);
 	auto typeTagPath = schema::ObjectType::Make(R"gql(TagPath)gql"sv, R"md(标签路径。)md"sv);
@@ -1280,6 +1284,8 @@ void AddTypesToSchema(const std::shared_ptr<schema::Schema>& schema)
 	AddImageArtworkDetails(typeImageArtwork, schema);
 	AddImageDetails(typeImage, schema);
 	AddTagDetails(typeTag, schema);
+	AddTagTreeNodeDetails(typeTagTreeNode, schema);
+	AddTagTreeMatchDetails(typeTagTreeMatch, schema);
 	AddTagMatchDetails(typeTagMatch, schema);
 	AddTagPathDetails(typeTagPath, schema);
 	AddArtistDetails(typeArtist, schema);

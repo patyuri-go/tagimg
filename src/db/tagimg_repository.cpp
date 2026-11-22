@@ -1116,7 +1116,10 @@ SELECT a.tag_id::text,
        COALESCE(n.name, a.tag_id::text) AS name,
        CASE WHEN a.depth >= 1 THEN a.parts[2] ELSE NULL END AS category,
        a.path,
-       t.parent_id::text
+       t.parent_id::text,
+       (EXISTS (
+         SELECT 1 FROM tags child WHERE child.parent_id = t.id
+       ))::int AS has_children
 FROM aggregated a
 JOIN tags t ON t.id = a.tag_id
 LEFT JOIN LATERAL (
@@ -1135,11 +1138,73 @@ WHERE tn.type = 'alias' AND tn.tag_id = ANY(CAST(:tag_ids AS uuid[]))
 ORDER BY tn.tag_id, tn.name
 )sql";
 
-// 读取单个标签的完整信息（含父级、路径、别名）。
-std::optional<ArtworkTagInfo> load_tag_info(soci::session &sql,
-                                            const std::string &tag_id) {
-  const std::string tag_array = uuid_array_literal({tag_id});
-  std::optional<ArtworkTagInfo> info;
+// 按父标签列出直接子标签；parent_id 为空时列出顶层标签。
+constexpr const char *kTagChildrenSql = R"sql(
+SELECT t.id::text
+FROM tags t
+LEFT JOIN LATERAL (
+  SELECT name
+  FROM tag_name
+  WHERE tag_id = t.id AND type = 'standard'
+  ORDER BY id
+  LIMIT 1
+) n ON TRUE
+WHERE t.parent_id IS NOT DISTINCT FROM CAST(:parent_id AS uuid)
+ORDER BY lower(COALESCE(n.name, t.id::text)),
+         COALESCE(n.name, t.id::text),
+         t.id
+)sql";
+
+// 标签树搜索：标准名和别名都参与匹配，每个标签只取最佳命中。
+constexpr const char *kTagTreeMatchSql = R"sql(
+WITH matched AS (
+  SELECT t.id AS tag_id,
+         n.name,
+         (n.type = 'standard')::int AS is_standard,
+         (lower(n.name) = lower(:text)) AS is_exact,
+         (n.name ILIKE :prefix ESCAPE '\') AS is_prefix
+  FROM tags t
+  JOIN tag_name n ON n.tag_id = t.id AND n.type IN ('standard', 'alias')
+  WHERE n.name ILIKE :pattern ESCAPE '\'
+),
+best AS (
+  SELECT DISTINCT ON (tag_id)
+         tag_id, name, is_standard, is_exact, is_prefix
+  FROM matched
+  ORDER BY tag_id, is_exact DESC, is_prefix DESC, length(name), name,
+           is_standard DESC
+)
+SELECT tag_id::text, name, is_standard
+FROM best
+ORDER BY is_exact DESC, is_prefix DESC, length(name), name, tag_id
+)sql";
+
+// 为搜索命中的标签取完整祖先链；distance=0 是命中节点自身。
+constexpr const char *kTagTreeAncestorsSql = R"sql(
+WITH RECURSIVE chains(match_id, cur_id, distance) AS (
+  SELECT t.id, t.id, 0
+  FROM tags t
+  WHERE t.id = ANY(CAST(:tag_ids AS uuid[]))
+  UNION ALL
+  SELECT c.match_id, p.parent_id, c.distance + 1
+  FROM chains c
+  JOIN tags p ON p.id = c.cur_id
+  WHERE p.parent_id IS NOT NULL
+)
+SELECT match_id::text, cur_id::text, distance
+FROM chains
+ORDER BY match_id, distance DESC
+)sql";
+
+// 批量读取标签完整信息（含父级、路径、别名、是否有子标签）。
+std::map<std::string, ArtworkTagInfo>
+load_tag_infos(soci::session &sql, const std::vector<std::string> &tag_ids) {
+  std::map<std::string, ArtworkTagInfo> infos;
+  if (tag_ids.empty()) {
+    return infos;
+  }
+
+  const std::string tag_array = uuid_array_literal(tag_ids);
   soci::rowset<soci::row> rows =
       (sql.prepare << kTagInfoSql, soci::use(tag_array));
   for (const soci::row &row : rows) {
@@ -1153,19 +1218,30 @@ std::optional<ArtworkTagInfo> load_tag_info(soci::session &sql,
     if (row.get_indicator(4) != soci::i_null) {
       item.parent_id = row.get<std::string>(4);
     }
-    info = std::move(item);
-    break;
-  }
-  if (!info) {
-    return std::nullopt;
+    item.has_children = row.get<int>(5) != 0;
+    infos.emplace(item.id, std::move(item));
   }
 
   soci::rowset<soci::row> aliases =
       (sql.prepare << kArtworkAliasesSql, soci::use(tag_array));
   for (const soci::row &row : aliases) {
-    info->aliases.push_back(row.get<std::string>(1));
+    auto found = infos.find(row.get<std::string>(0));
+    if (found != infos.end()) {
+      found->second.aliases.push_back(row.get<std::string>(1));
+    }
   }
-  return info;
+  return infos;
+}
+
+// 读取单个标签的完整信息（含父级、路径、别名）。
+std::optional<ArtworkTagInfo> load_tag_info(soci::session &sql,
+                                            const std::string &tag_id) {
+  auto infos = load_tag_infos(sql, {tag_id});
+  auto found = infos.find(tag_id);
+  if (found == infos.end()) {
+    return std::nullopt;
+  }
+  return std::move(found->second);
 }
 
 std::string tag_lock_key(const std::optional<std::string> &parent_id) {
@@ -2201,6 +2277,128 @@ ORDER BY c.rn)sql";
       }
     }
     return matches;
+  } catch (const std::exception &) {
+    return TagimgRepositoryError::QueryFailed;
+  }
+}
+
+Result<std::vector<ArtworkTagInfo>, TagimgRepositoryError>
+TagimgRepository::list_tag_children(
+    const std::optional<std::string> &parent_id) const {
+  if (parent_id && !is_uuid(*parent_id)) {
+    return TagimgRepositoryError::InvalidArgument;
+  }
+  if (!impl_ || !impl_->pool) {
+    return TagimgRepositoryError::ConnectionFailed;
+  }
+
+  try {
+    db_detail::PoolLease lease(*impl_->pool);
+    soci::session &sql = impl_->pool->at(lease.position());
+
+    const std::string parent_value = parent_id.value_or("");
+    soci::indicator parent_indicator =
+        parent_id ? soci::i_ok : soci::i_null;
+
+    std::vector<std::string> ids;
+    soci::rowset<soci::row> rows =
+        (sql.prepare << kTagChildrenSql,
+         soci::use(parent_value, parent_indicator));
+    for (const soci::row &row : rows) {
+      ids.push_back(row.get<std::string>(0));
+    }
+
+    auto infos = load_tag_infos(sql, ids);
+    std::vector<ArtworkTagInfo> result;
+    result.reserve(ids.size());
+    for (const std::string &id : ids) {
+      auto found = infos.find(id);
+      if (found != infos.end()) {
+        result.push_back(std::move(found->second));
+      }
+    }
+    return result;
+  } catch (const std::exception &) {
+    return TagimgRepositoryError::QueryFailed;
+  }
+}
+
+Result<std::vector<TagTreeMatchInfo>, TagimgRepositoryError>
+TagimgRepository::search_tag_tree(const std::string &text) const {
+  const std::string trimmed = trim_ascii(text);
+  if (trimmed.empty() || utf8_length(trimmed) > kMaxTagSearchLength) {
+    return TagimgRepositoryError::InvalidArgument;
+  }
+  if (!impl_ || !impl_->pool) {
+    return TagimgRepositoryError::ConnectionFailed;
+  }
+
+  try {
+    db_detail::PoolLease lease(*impl_->pool);
+    soci::session &sql = impl_->pool->at(lease.position());
+
+    const std::string prefix = like_prefix_pattern(trimmed);
+    const std::string pattern = like_pattern(trimmed);
+
+    struct MatchRow {
+      std::string id;
+      std::string name;
+      bool alias = false;
+    };
+    std::vector<MatchRow> matches;
+    std::vector<std::string> match_ids;
+    soci::rowset<soci::row> rows =
+        (sql.prepare << kTagTreeMatchSql, soci::use(trimmed),
+         soci::use(prefix), soci::use(pattern));
+    for (const soci::row &row : rows) {
+      MatchRow item;
+      item.id = row.get<std::string>(0);
+      item.name = row.get<std::string>(1);
+      item.alias = row.get<int>(2) == 0;
+      match_ids.push_back(item.id);
+      matches.push_back(std::move(item));
+    }
+    if (matches.empty()) {
+      return std::vector<TagTreeMatchInfo>{};
+    }
+
+    // 收集命中节点自身和祖先 ID，随后一次批量读取节点详情。
+    std::map<std::string, std::vector<std::string>> ancestor_ids;
+    std::vector<std::string> all_ids = match_ids;
+    const std::string match_array = uuid_array_literal(match_ids);
+    soci::rowset<soci::row> ancestors =
+        (sql.prepare << kTagTreeAncestorsSql, soci::use(match_array));
+    for (const soci::row &row : ancestors) {
+      const std::string match_id = row.get<std::string>(0);
+      const std::string ancestor_id = row.get<std::string>(1);
+      const int distance = row.get<int>(2);
+      if (distance > 0) {
+        ancestor_ids[match_id].push_back(ancestor_id);
+        all_ids.push_back(ancestor_id);
+      }
+    }
+
+    auto infos = load_tag_infos(sql, all_ids);
+    std::vector<TagTreeMatchInfo> result;
+    result.reserve(matches.size());
+    for (const MatchRow &match : matches) {
+      auto node = infos.find(match.id);
+      if (node == infos.end()) {
+        continue;
+      }
+      TagTreeMatchInfo item;
+      item.node = node->second;
+      item.matched_name = match.name;
+      item.matched_alias = match.alias;
+      for (const std::string &ancestor_id : ancestor_ids[match.id]) {
+        auto ancestor = infos.find(ancestor_id);
+        if (ancestor != infos.end()) {
+          item.ancestors.push_back(ancestor->second);
+        }
+      }
+      result.push_back(std::move(item));
+    }
+    return result;
   } catch (const std::exception &) {
     return TagimgRepositoryError::QueryFailed;
   }

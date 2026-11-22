@@ -37,6 +37,8 @@
 #include "graphql/TagMatchObject.h"
 #include "graphql/TagObject.h"
 #include "graphql/TagPathObject.h"
+#include "graphql/TagTreeMatchObject.h"
+#include "graphql/TagTreeNodeObject.h"
 #include "graphql/TagimgSchema.h"
 #include "graphqlservice/GraphQLParse.h"
 #include "graphqlservice/JSONResponse.h"
@@ -363,6 +365,85 @@ public:
 
 private:
   TagMatch info_;
+};
+
+class TagTreeNodeModel {
+public:
+  explicit TagTreeNodeModel(ArtworkTagInfo info) : info_(std::move(info)) {
+  }
+
+  gql::service::AwaitableScalar<IdType> getId() const {
+    return id_scalar(info_.id);
+  }
+
+  gql::service::AwaitableScalar<std::optional<IdType>> getParentId() const {
+    std::optional<IdType> parent_id;
+    if (info_.parent_id) {
+      parent_id = IdType(IdType::OpaqueString(*info_.parent_id));
+    }
+    return gql::service::AwaitableScalar<std::optional<IdType>>(
+        std::move(parent_id));
+  }
+
+  gql::service::AwaitableScalar<std::string> getName() const {
+    return gql::service::AwaitableScalar<std::string>(info_.name);
+  }
+
+  gql::service::AwaitableScalar<std::vector<std::string>> getAliases() const {
+    return gql::service::AwaitableScalar<std::vector<std::string>>(
+        info_.aliases);
+  }
+
+  gql::service::AwaitableScalar<std::string> getPath() const {
+    return gql::service::AwaitableScalar<std::string>(info_.path);
+  }
+
+  gql::service::AwaitableScalar<bool> getHasChildren() const {
+    return gql::service::AwaitableScalar<bool>(info_.has_children);
+  }
+
+private:
+  ArtworkTagInfo info_;
+};
+
+class TagTreeMatchModel {
+public:
+  explicit TagTreeMatchModel(TagTreeMatchInfo info) : info_(std::move(info)) {
+  }
+
+  gql::service::AwaitableObject<
+      std::shared_ptr<gql::tagimg::object::TagTreeNode>>
+  getNode() const {
+    return gql::service::AwaitableObject<
+        std::shared_ptr<gql::tagimg::object::TagTreeNode>>(
+        std::make_shared<gql::tagimg::object::TagTreeNode>(
+            std::make_shared<TagTreeNodeModel>(info_.node)));
+  }
+
+  gql::service::AwaitableObject<
+      std::vector<std::shared_ptr<gql::tagimg::object::TagTreeNode>>>
+  getAncestors() const {
+    std::vector<std::shared_ptr<gql::tagimg::object::TagTreeNode>> items;
+    items.reserve(info_.ancestors.size());
+    for (const ArtworkTagInfo &ancestor : info_.ancestors) {
+      items.push_back(std::make_shared<gql::tagimg::object::TagTreeNode>(
+          std::make_shared<TagTreeNodeModel>(ancestor)));
+    }
+    return gql::service::AwaitableObject<
+        std::vector<std::shared_ptr<gql::tagimg::object::TagTreeNode>>>(
+        std::move(items));
+  }
+
+  gql::service::AwaitableScalar<std::string> getMatchedName() const {
+    return gql::service::AwaitableScalar<std::string>(info_.matched_name);
+  }
+
+  gql::service::AwaitableScalar<bool> getMatchedAlias() const {
+    return gql::service::AwaitableScalar<bool>(info_.matched_alias);
+  }
+
+private:
+  TagTreeMatchInfo info_;
 };
 
 class ArtistModel {
@@ -1251,6 +1332,64 @@ public:
     }
     return gql::service::AwaitableObject<
         std::vector<std::shared_ptr<gql::tagimg::object::TagMatch>>>(
+        std::move(items));
+  }
+
+  gql::service::AwaitableObject<
+      std::vector<std::shared_ptr<gql::tagimg::object::TagTreeNode>>>
+  getTagChildren(gql::service::FieldParams &&params,
+                 std::optional<IdType> parent_id) const {
+    RequestScope request(std::move(params));
+
+    std::optional<std::string> parent;
+    if (parent_id) {
+      std::string text = id_text(*parent_id);
+      if (!is_uuid(text)) {
+        fail("INVALID_ARGUMENT", "parentId is not a valid uuid");
+      }
+      parent = std::move(text);
+    }
+
+    const auto result = repository_->list_tag_children(parent);
+    if (!result) {
+      fail_repository(result.error());
+    }
+    request.check();
+
+    std::vector<std::shared_ptr<gql::tagimg::object::TagTreeNode>> items;
+    items.reserve(result->size());
+    for (const ArtworkTagInfo &tag : *result) {
+      items.push_back(std::make_shared<gql::tagimg::object::TagTreeNode>(
+          std::make_shared<TagTreeNodeModel>(tag)));
+    }
+    return gql::service::AwaitableObject<
+        std::vector<std::shared_ptr<gql::tagimg::object::TagTreeNode>>>(
+        std::move(items));
+  }
+
+  gql::service::AwaitableObject<
+      std::vector<std::shared_ptr<gql::tagimg::object::TagTreeMatch>>>
+  getTagTreeSearch(gql::service::FieldParams &&params,
+                   std::string query) const {
+    RequestScope request(std::move(params));
+    if (query.empty() || utf8_length(query) > kMaxTagSearchLength) {
+      fail("INVALID_ARGUMENT", "query must be 1 to 100 characters");
+    }
+
+    const auto result = repository_->search_tag_tree(query);
+    if (!result) {
+      fail_repository(result.error());
+    }
+    request.check();
+
+    std::vector<std::shared_ptr<gql::tagimg::object::TagTreeMatch>> items;
+    items.reserve(result->size());
+    for (const TagTreeMatchInfo &match : *result) {
+      items.push_back(std::make_shared<gql::tagimg::object::TagTreeMatch>(
+          std::make_shared<TagTreeMatchModel>(match)));
+    }
+    return gql::service::AwaitableObject<
+        std::vector<std::shared_ptr<gql::tagimg::object::TagTreeMatch>>>(
         std::move(items));
   }
 

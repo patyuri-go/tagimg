@@ -342,6 +342,8 @@ class Artwork;
 class ImageArtwork;
 class Image;
 class Tag;
+class TagTreeNode;
+class TagTreeMatch;
 class TagMatch;
 class TagPath;
 class Artist;
@@ -379,6 +381,8 @@ void AddArtworkDetails(const std::shared_ptr<schema::ObjectType>& typeArtwork, c
 void AddImageArtworkDetails(const std::shared_ptr<schema::ObjectType>& typeImageArtwork, const std::shared_ptr<schema::Schema>& schema);
 void AddImageDetails(const std::shared_ptr<schema::ObjectType>& typeImage, const std::shared_ptr<schema::Schema>& schema);
 void AddTagDetails(const std::shared_ptr<schema::ObjectType>& typeTag, const std::shared_ptr<schema::Schema>& schema);
+void AddTagTreeNodeDetails(const std::shared_ptr<schema::ObjectType>& typeTagTreeNode, const std::shared_ptr<schema::Schema>& schema);
+void AddTagTreeMatchDetails(const std::shared_ptr<schema::ObjectType>& typeTagTreeMatch, const std::shared_ptr<schema::Schema>& schema);
 void AddTagMatchDetails(const std::shared_ptr<schema::ObjectType>& typeTagMatch, const std::shared_ptr<schema::Schema>& schema);
 void AddTagPathDetails(const std::shared_ptr<schema::ObjectType>& typeTagPath, const std::shared_ptr<schema::Schema>& schema);
 void AddArtistDetails(const std::shared_ptr<schema::ObjectType>& typeArtist, const std::shared_ptr<schema::Schema>& schema);

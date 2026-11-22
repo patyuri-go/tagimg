@@ -207,6 +207,184 @@
       ></section>
     </main>
 
+    <aside id="tag-drawer" class="tag-drawer" aria-label="标签树">
+      <button
+        id="tag-drawer-handle"
+        class="tag-drawer-handle"
+        type="button"
+        aria-controls="tag-drawer-panel"
+        aria-expanded="false"
+      >
+        <span>标签</span>
+      </button>
+      <div id="tag-drawer-panel" class="tag-drawer-panel" inert>
+        <header class="tag-drawer-head">
+          <h2 id="tag-drawer-title" class="tag-drawer-title">标签树</h2>
+          <button
+            id="tag-drawer-close"
+            class="icon-button"
+            type="button"
+            aria-label="关闭标签树"
+          >
+            ×
+          </button>
+        </header>
+        <div class="tag-drawer-tools">
+          <div class="tag-tree-search-wrap">
+            <input
+              id="tag-tree-search"
+              class="tag-tree-search"
+              type="search"
+              placeholder="搜索标签名或别名…"
+              autocomplete="off"
+              spellcheck="false"
+              aria-label="搜索标签树"
+            />
+            <button
+              id="tag-tree-search-clear"
+              class="tag-tree-search-clear"
+              type="button"
+              aria-label="清空标签搜索"
+              hidden
+            >
+              ×
+            </button>
+          </div>
+          <button id="tag-edit-button" class="button tag-edit-button" type="button">
+            编辑
+          </button>
+        </div>
+        <p id="tag-tree-status" class="tag-tree-status" hidden></p>
+        <div id="tag-tree" class="tag-tree" role="tree" aria-label="标签树"></div>
+      </div>
+    </aside>
+
+    <dialog
+      id="tag-editor"
+      class="dialog tag-editor"
+      aria-labelledby="tag-editor-title"
+    >
+      <form id="tag-editor-form" class="dialog-form">
+        <header class="dialog-head">
+          <h2 id="tag-editor-title">编辑标签</h2>
+          <button
+            id="tag-editor-close"
+            class="icon-button"
+            type="button"
+            aria-label="关闭标签编辑"
+          >
+            ×
+          </button>
+        </header>
+
+        <div class="dialog-body">
+          <div
+            id="tag-editor-tabs"
+            class="tag-editor-tabs"
+            role="tablist"
+            aria-label="标签编辑模式"
+          >
+            <button
+              id="tag-editor-mode-edit"
+              class="tag-editor-tab"
+              type="button"
+              role="tab"
+              aria-selected="true"
+            >
+              编辑
+            </button>
+            <button
+              id="tag-editor-mode-add"
+              class="tag-editor-tab"
+              type="button"
+              role="tab"
+              aria-selected="false"
+            >
+              添加子标签
+            </button>
+          </div>
+
+          <label class="field">
+            <span class="field-label">标准名</span>
+            <input
+              id="tag-editor-name"
+              type="text"
+              maxlength="255"
+              autocomplete="off"
+              placeholder="标签标准名"
+            />
+          </label>
+
+          <div class="field">
+            <span class="field-label">
+              别名
+              <span class="hint">回车或逗号添加</span>
+            </span>
+            <div id="tag-editor-aliases" class="tag-editor-aliases"></div>
+            <input
+              id="tag-editor-alias-input"
+              type="text"
+              maxlength="255"
+              autocomplete="off"
+              placeholder="输入别名后按回车"
+            />
+          </div>
+
+          <div id="tag-editor-parent-field" class="field">
+            <span class="field-label">父标签</span>
+            <div class="tag-editor-parent-row">
+              <button
+                id="tag-editor-parent-display"
+                class="tag-editor-parent-display"
+                type="button"
+              >
+                全局父节点
+              </button>
+              <button
+                id="tag-editor-parent-clear"
+                class="button ghost tag-editor-parent-clear"
+                type="button"
+              >
+                全局父节点
+              </button>
+            </div>
+            <div
+              id="tag-editor-parent-search"
+              class="tag-editor-parent-search"
+              hidden
+            >
+              <input
+                id="tag-editor-parent-input"
+                type="text"
+                autocomplete="off"
+                spellcheck="false"
+                placeholder="输入标签名或路径…"
+              />
+              <ul
+                id="tag-editor-parent-suggest"
+                class="tag-suggest"
+                role="listbox"
+                hidden
+              ></ul>
+            </div>
+          </div>
+
+          <p id="tag-editor-error" class="form-error" hidden></p>
+        </div>
+
+        <footer class="dialog-foot">
+          <button
+            id="tag-editor-cancel"
+            class="button ghost"
+            type="button"
+          >
+            取消
+          </button>
+          <button id="tag-editor-save" class="button" type="button">保存</button>
+        </footer>
+      </form>
+    </dialog>
+
     <dialog
       id="image-lightbox"
       class="dialog image-lightbox"

@@ -74,6 +74,30 @@ concept getTags = requires (TImpl impl, std::string queryArg, std::unique_ptr<Ta
 };
 
 template <class TImpl>
+concept getTagChildrenWithParams = requires (TImpl impl, service::FieldParams params, std::optional<response::IdType> parentIdArg)
+{
+	{ service::AwaitableObject<std::vector<std::shared_ptr<TagTreeNode>>> { impl.getTagChildren(std::move(params), std::move(parentIdArg)) } };
+};
+
+template <class TImpl>
+concept getTagChildren = requires (TImpl impl, std::optional<response::IdType> parentIdArg)
+{
+	{ service::AwaitableObject<std::vector<std::shared_ptr<TagTreeNode>>> { impl.getTagChildren(std::move(parentIdArg)) } };
+};
+
+template <class TImpl>
+concept getTagTreeSearchWithParams = requires (TImpl impl, service::FieldParams params, std::string queryArg)
+{
+	{ service::AwaitableObject<std::vector<std::shared_ptr<TagTreeMatch>>> { impl.getTagTreeSearch(std::move(params), std::move(queryArg)) } };
+};
+
+template <class TImpl>
+concept getTagTreeSearch = requires (TImpl impl, std::string queryArg)
+{
+	{ service::AwaitableObject<std::vector<std::shared_ptr<TagTreeMatch>>> { impl.getTagTreeSearch(std::move(queryArg)) } };
+};
+
+template <class TImpl>
 concept getOrphanImagesWithParams = requires (TImpl impl, service::FieldParams params, std::optional<int> limitArg, std::optional<int> offsetArg, std::optional<bool> includeTotalArg)
 {
 	{ service::AwaitableObject<std::shared_ptr<OrphanImageConnection>> { impl.getOrphanImages(std::move(params), std::move(limitArg), std::move(offsetArg), std::move(includeTotalArg)) } };
@@ -108,6 +132,8 @@ private:
 	[[nodiscard("unnecessary call")]] service::AwaitableResolver resolveArtworks(service::ResolverParams&& params) const;
 	[[nodiscard("unnecessary call")]] service::AwaitableResolver resolveImages(service::ResolverParams&& params) const;
 	[[nodiscard("unnecessary call")]] service::AwaitableResolver resolveTags(service::ResolverParams&& params) const;
+	[[nodiscard("unnecessary call")]] service::AwaitableResolver resolveTagChildren(service::ResolverParams&& params) const;
+	[[nodiscard("unnecessary call")]] service::AwaitableResolver resolveTagTreeSearch(service::ResolverParams&& params) const;
 	[[nodiscard("unnecessary call")]] service::AwaitableResolver resolveOrphanImages(service::ResolverParams&& params) const;
 
 	[[nodiscard("unnecessary call")]] service::AwaitableResolver resolve_typename(service::ResolverParams&& params) const;
@@ -128,6 +154,8 @@ private:
 		[[nodiscard("unnecessary call")]] virtual service::AwaitableObject<std::shared_ptr<ArtworkConnection>> getArtworks(service::FieldParams&& params, std::unique_ptr<ArtworkFilter>&& filterArg, std::optional<ArtworkOrderField>&& orderByArg, std::optional<SortDirection>&& directionArg, std::optional<int>&& limitArg, std::optional<int>&& offsetArg, std::optional<bool>&& includeTotalArg, std::optional<std::string>&& sortTextArg) const = 0;
 		[[nodiscard("unnecessary call")]] virtual service::AwaitableObject<std::shared_ptr<ImageConnection>> getImages(service::FieldParams&& params, std::unique_ptr<ImageFilter>&& filterArg, std::optional<ImageOrderField>&& orderByArg, std::optional<SortDirection>&& directionArg, std::optional<int>&& limitArg, std::optional<int>&& offsetArg, std::optional<bool>&& includeTotalArg, std::optional<std::string>&& sortTextArg, std::optional<response::IdType>&& referenceImageIdArg) const = 0;
 		[[nodiscard("unnecessary call")]] virtual service::AwaitableObject<std::vector<std::shared_ptr<TagMatch>>> getTags(service::FieldParams&& params, std::string&& queryArg, std::unique_ptr<TagSearchScope>&& scopeArg, std::optional<int>&& limitArg) const = 0;
+		[[nodiscard("unnecessary call")]] virtual service::AwaitableObject<std::vector<std::shared_ptr<TagTreeNode>>> getTagChildren(service::FieldParams&& params, std::optional<response::IdType>&& parentIdArg) const = 0;
+		[[nodiscard("unnecessary call")]] virtual service::AwaitableObject<std::vector<std::shared_ptr<TagTreeMatch>>> getTagTreeSearch(service::FieldParams&& params, std::string&& queryArg) const = 0;
 		[[nodiscard("unnecessary call")]] virtual service::AwaitableObject<std::shared_ptr<OrphanImageConnection>> getOrphanImages(service::FieldParams&& params, std::optional<int>&& limitArg, std::optional<int>&& offsetArg, std::optional<bool>&& includeTotalArg) const = 0;
 	};
 
@@ -202,6 +230,32 @@ private:
 			{
 				static_assert(methods::QueryHas::getTags<T>, R"msg(Query::getTags is not implemented)msg");
 				return { _pimpl->getTags(std::move(queryArg), std::move(scopeArg), std::move(limitArg)) };
+			}
+		}
+
+		[[nodiscard("unnecessary call")]] service::AwaitableObject<std::vector<std::shared_ptr<TagTreeNode>>> getTagChildren(service::FieldParams&& params, std::optional<response::IdType>&& parentIdArg) const override
+		{
+			if constexpr (methods::QueryHas::getTagChildrenWithParams<T>)
+			{
+				return { _pimpl->getTagChildren(std::move(params), std::move(parentIdArg)) };
+			}
+			else
+			{
+				static_assert(methods::QueryHas::getTagChildren<T>, R"msg(Query::getTagChildren is not implemented)msg");
+				return { _pimpl->getTagChildren(std::move(parentIdArg)) };
+			}
+		}
+
+		[[nodiscard("unnecessary call")]] service::AwaitableObject<std::vector<std::shared_ptr<TagTreeMatch>>> getTagTreeSearch(service::FieldParams&& params, std::string&& queryArg) const override
+		{
+			if constexpr (methods::QueryHas::getTagTreeSearchWithParams<T>)
+			{
+				return { _pimpl->getTagTreeSearch(std::move(params), std::move(queryArg)) };
+			}
+			else
+			{
+				static_assert(methods::QueryHas::getTagTreeSearch<T>, R"msg(Query::getTagTreeSearch is not implemented)msg");
+				return { _pimpl->getTagTreeSearch(std::move(queryArg)) };
 			}
 		}
 

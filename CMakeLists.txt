@@ -245,6 +245,8 @@ add_library(tagimg_graphql STATIC
     src/graphql/TagMatchObject.cpp
     src/graphql/TagObject.cpp
     src/graphql/TagPathObject.cpp
+    src/graphql/TagTreeMatchObject.cpp
+    src/graphql/TagTreeNodeObject.cpp
     src/graphql/TagimgSchema.cpp
     src/graphql/graphql_service.cpp
 )

@@ -100,6 +100,27 @@ type Query {
   ): [TagMatch!]!
 
   """
+  按父标签 ID 列出直接子标签，用于图片页标签树的懒加载。
+
+  parentId 为 null 时列出所有顶层标签；没有子标签时返回空数组。
+  """
+  tagChildren(
+    "父标签 ID；null 表示全局父节点。"
+    parentId: ID
+  ): [TagTreeNode!]!
+
+  """
+  按标准名或别名搜索全部标签，并返回每个命中节点的祖先链。
+
+  与 tags 不同，这个查询不限制返回数量，返回完整节点信息和祖先的 ID，
+  供树状展示和继续编辑使用。
+  """
+  tagTreeSearch(
+    "关键词，匹配标签标准名或别名，忽略大小写，1 到 100 个字符。"
+    query: String!
+  ): [TagTreeMatch!]!
+
+  """
   分页列出不属于任何作品的游离图片，按入库时间倒序。
 
   游离图片只会在删除作品后产生；删除前就已游离的图片同样会出现在列表里。
@@ -355,6 +376,34 @@ type Tag {
   category: String
   "别名列表，按名称升序。"
   aliases: [String!]!
+}
+
+"标签树节点。"
+type TagTreeNode {
+  "标签 ID。"
+  id: ID!
+  "直接父标签 ID；顶层标签为 null。"
+  parentId: ID
+  "标签自身的标准名。"
+  name: String!
+  "别名列表，按名称升序。"
+  aliases: [String!]!
+  "从根标签到该标签自身、用 :: 连接的路径。"
+  path: String!
+  "是否有直接子标签。"
+  hasChildren: Boolean!
+}
+
+"标签树搜索结果。"
+type TagTreeMatch {
+  "命中的标签节点。"
+  node: TagTreeNode!
+  "从根到父级的祖先链，按根到父级排序；命中顶层标签时为空。"
+  ancestors: [TagTreeNode!]!
+  "命中的标准名或别名。"
+  matchedName: String!
+  "命中的名称是否为别名。"
+  matchedAlias: Boolean!
 }
 
 "标签搜索范围。"

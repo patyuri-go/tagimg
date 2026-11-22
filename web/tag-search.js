@@ -106,9 +106,11 @@
 
   // 给一个输入框绑定路径补全、键盘选择和下拉渲染。
   // onEnter / onShiftEnter 由使用方决定回车后怎么处理选中的标签。
+  // filterItem 可选，返回 false 的候选不会显示，也不会被键盘选中。
   function createTagSuggest(options) {
     const { input, list, idPrefix } = options;
     const emptyText = options.emptyText || "没有匹配的标签";
+    const filterItem = options.filterItem || (() => true);
     let timer = 0;
     let controller = null;
     let composing = false;
@@ -154,6 +156,9 @@
       close();
       input.focus();
       input.setSelectionRange(input.value.length, input.value.length);
+      if (options.onChoose) {
+        options.onChoose(chosen);
+      }
     }
 
     function render(items, text) {
@@ -223,7 +228,7 @@
       if (signal.aborted) {
         return;
       }
-      render(items);
+      render(items.filter((item) => filterItem(item)));
     }
 
     function handleInput() {

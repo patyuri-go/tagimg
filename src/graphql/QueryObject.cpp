@@ -8,6 +8,8 @@
 #include "ArtworkConnectionObject.h"
 #include "ImageConnectionObject.h"
 #include "TagMatchObject.h"
+#include "TagTreeNodeObject.h"
+#include "TagTreeMatchObject.h"
 #include "OrphanImageConnectionObject.h"
 
 #include "graphqlservice/internal/Introspection.h"
@@ -51,7 +53,9 @@ service::ResolverMap Query::getResolvers() const noexcept
 		{ R"gql(__schema)gql"sv, [this](service::ResolverParams&& params) { return resolve_schema(std::move(params)); } },
 		{ R"gql(artworks)gql"sv, [this](service::ResolverParams&& params) { return resolveArtworks(std::move(params)); } },
 		{ R"gql(__typename)gql"sv, [this](service::ResolverParams&& params) { return resolve_typename(std::move(params)); } },
-		{ R"gql(orphanImages)gql"sv, [this](service::ResolverParams&& params) { return resolveOrphanImages(std::move(params)); } }
+		{ R"gql(tagChildren)gql"sv, [this](service::ResolverParams&& params) { return resolveTagChildren(std::move(params)); } },
+		{ R"gql(orphanImages)gql"sv, [this](service::ResolverParams&& params) { return resolveOrphanImages(std::move(params)); } },
+		{ R"gql(tagTreeSearch)gql"sv, [this](service::ResolverParams&& params) { return resolveTagTreeSearch(std::move(params)); } }
 	};
 }
 
@@ -225,6 +229,30 @@ service::AwaitableResolver Query::resolveTags(service::ResolverParams&& params) 
 	return service::ModifiedResult<TagMatch>::convert<service::TypeModifier::List>(std::move(result), std::move(params));
 }
 
+service::AwaitableResolver Query::resolveTagChildren(service::ResolverParams&& params) const
+{
+	auto argParentId = service::ModifiedArgument<response::IdType>::require<service::TypeModifier::Nullable>("parentId", params.arguments);
+	std::unique_lock resolverLock(_resolverMutex);
+	service::SelectionSetParams selectionSetParams { static_cast<const service::SelectionSetParams&>(params) };
+	auto directives = std::move(params.fieldDirectives);
+	auto result = _pimpl->getTagChildren(service::FieldParams { std::move(selectionSetParams), std::move(directives) }, std::move(argParentId));
+	resolverLock.unlock();
+
+	return service::ModifiedResult<TagTreeNode>::convert<service::TypeModifier::List>(std::move(result), std::move(params));
+}
+
+service::AwaitableResolver Query::resolveTagTreeSearch(service::ResolverParams&& params) const
+{
+	auto argQuery = service::ModifiedArgument<std::string>::require("query", params.arguments);
+	std::unique_lock resolverLock(_resolverMutex);
+	service::SelectionSetParams selectionSetParams { static_cast<const service::SelectionSetParams&>(params) };
+	auto directives = std::move(params.fieldDirectives);
+	auto result = _pimpl->getTagTreeSearch(service::FieldParams { std::move(selectionSetParams), std::move(directives) }, std::move(argQuery));
+	resolverLock.unlock();
+
+	return service::ModifiedResult<TagTreeMatch>::convert<service::TypeModifier::List>(std::move(result), std::move(params));
+}
+
 service::AwaitableResolver Query::resolveOrphanImages(service::ResolverParams&& params) const
 {
 	static const auto defaultArguments = []()
@@ -340,6 +368,17 @@ scope 不传时在全部标签中搜索；scope.parentId 为 null 时只搜索�
 			schema::InputValue::Make(R"gql(query)gql"sv, R"md(关键词，匹配标签标准名或别名，忽略大小写，1 到 100 个字符。)md"sv, schema->WrapType(introspection::TypeKind::NON_NULL, schema->LookupType(R"gql(String)gql"sv)), R"gql()gql"sv),
 			schema::InputValue::Make(R"gql(scope)gql"sv, R"md(搜索范围，缺省时不限制父标签。)md"sv, schema->LookupType(R"gql(TagSearchScope)gql"sv), R"gql()gql"sv),
 			schema::InputValue::Make(R"gql(limit)gql"sv, R"md(返回条数，1 到 50，默认 10。)md"sv, schema->LookupType(R"gql(Int)gql"sv), R"gql(10)gql"sv)
+		}),
+		schema::Field::Make(R"gql(tagChildren)gql"sv, R"md(按父标签 ID 列出直接子标签，用于图片页标签树的懒加载。
+
+parentId 为 null 时列出所有顶层标签；没有子标签时返回空数组。)md"sv, std::nullopt, schema->WrapType(introspection::TypeKind::NON_NULL, schema->WrapType(introspection::TypeKind::LIST, schema->WrapType(introspection::TypeKind::NON_NULL, schema->LookupType(R"gql(TagTreeNode)gql"sv)))), {
+			schema::InputValue::Make(R"gql(parentId)gql"sv, R"md(父标签 ID；null 表示全局父节点。)md"sv, schema->LookupType(R"gql(ID)gql"sv), R"gql()gql"sv)
+		}),
+		schema::Field::Make(R"gql(tagTreeSearch)gql"sv, R"md(按标准名或别名搜索全部标签，并返回每个命中节点的祖先链。
+
+与 tags 不同，这个查询不限制返回数量，返回完整节点信息和祖先的 ID，
+供树状展示和继续编辑使用。)md"sv, std::nullopt, schema->WrapType(introspection::TypeKind::NON_NULL, schema->WrapType(introspection::TypeKind::LIST, schema->WrapType(introspection::TypeKind::NON_NULL, schema->LookupType(R"gql(TagTreeMatch)gql"sv)))), {
+			schema::InputValue::Make(R"gql(query)gql"sv, R"md(关键词，匹配标签标准名或别名，忽略大小写，1 到 100 个字符。)md"sv, schema->WrapType(introspection::TypeKind::NON_NULL, schema->LookupType(R"gql(String)gql"sv)), R"gql()gql"sv)
 		}),
 		schema::Field::Make(R"gql(orphanImages)gql"sv, R"md(分页列出不属于任何作品的游离图片，按入库时间倒序。
 

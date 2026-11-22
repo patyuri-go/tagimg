@@ -65,6 +65,66 @@
     }
   `;
 
+  const TAG_CHILDREN_QUERY = `
+    query TagChildren($parentId: ID) {
+      tagChildren(parentId: $parentId) {
+        id
+        parentId
+        name
+        aliases
+        path
+        hasChildren
+      }
+    }
+  `;
+
+  const TAG_TREE_SEARCH_QUERY = `
+    query TagTreeSearch($query: String!) {
+      tagTreeSearch(query: $query) {
+        node {
+          id
+          parentId
+          name
+          aliases
+          path
+          hasChildren
+        }
+        ancestors {
+          id
+          parentId
+          name
+          aliases
+          path
+          hasChildren
+        }
+        matchedName
+        matchedAlias
+      }
+    }
+  `;
+
+  const CREATE_TAG_MUTATION = `
+    mutation CreateTag($input: CreateTagInput!) {
+      createTag(input: $input) {
+        id
+        parentId
+        name
+        aliases
+      }
+    }
+  `;
+
+  const UPDATE_TAG_MUTATION = `
+    mutation UpdateTag($id: ID!, $input: UpdateTagInput!) {
+      updateTag(id: $id, input: $input) {
+        id
+        parentId
+        name
+        aliases
+      }
+    }
+  `;
+
   const tagInput = document.getElementById("tag-input");
   const tagSuggest = document.getElementById("tag-suggest");
   const orderSelect = document.getElementById("image-order");
@@ -116,8 +176,71 @@
   const lightboxMeta = document.getElementById("image-lightbox-meta");
   const lightboxSimilar = document.getElementById("image-lightbox-similar");
 
+  const tagDrawer = document.getElementById("tag-drawer");
+  const tagDrawerHandle = document.getElementById("tag-drawer-handle");
+  const tagDrawerPanel = document.getElementById("tag-drawer-panel");
+  const tagDrawerClose = document.getElementById("tag-drawer-close");
+  const tagTreeSearch = document.getElementById("tag-tree-search");
+  const tagTreeSearchClear = document.getElementById("tag-tree-search-clear");
+  const tagEditButton = document.getElementById("tag-edit-button");
+  const tagTreeStatus = document.getElementById("tag-tree-status");
+  const tagTree = document.getElementById("tag-tree");
+  const tagEditor = document.getElementById("tag-editor");
+  const tagEditorForm = document.getElementById("tag-editor-form");
+  const tagEditorTitle = document.getElementById("tag-editor-title");
+  const tagEditorClose = document.getElementById("tag-editor-close");
+  const tagEditorModeEdit = document.getElementById("tag-editor-mode-edit");
+  const tagEditorModeAdd = document.getElementById("tag-editor-mode-add");
+  const tagEditorName = document.getElementById("tag-editor-name");
+  const tagEditorAliases = document.getElementById("tag-editor-aliases");
+  const tagEditorAliasInput = document.getElementById("tag-editor-alias-input");
+  const tagEditorParentField = document.getElementById("tag-editor-parent-field");
+  const tagEditorParentDisplay = document.getElementById(
+    "tag-editor-parent-display",
+  );
+  const tagEditorParentClear = document.getElementById("tag-editor-parent-clear");
+  const tagEditorParentSearch = document.getElementById(
+    "tag-editor-parent-search",
+  );
+  const tagEditorParentInput = document.getElementById("tag-editor-parent-input");
+  const tagEditorParentSuggest = document.getElementById(
+    "tag-editor-parent-suggest",
+  );
+  const tagEditorError = document.getElementById("tag-editor-error");
+  const tagEditorCancel = document.getElementById("tag-editor-cancel");
+  const tagEditorSave = document.getElementById("tag-editor-save");
+
   const ZOOM_MIN = 1;
   const ZOOM_MAX = 8;
+  const TAG_DRAWER_WIDTH = 320;
+  const TAG_TREE_SEARCH_DELAY = 200;
+
+  let tagNodeCache = new Map();
+  let tagTreeRootIds = [];
+  let tagTreeRootsLoaded = false;
+  let tagTreeRootsLoading = false;
+  let tagTreeRootsError = false;
+  let selectedTagId = "";
+  let tagTreeSearchText = "";
+  let tagTreeSearchTimer = 0;
+  let tagTreeSearchController = null;
+  let tagTreeSearchToken = 0;
+  let tagTreeSearchActive = false;
+  let tagTreeSearchRoots = [];
+  let tagTreeSearchLoading = false;
+  let tagTreeSearchError = false;
+  let tagTreeSearchExpanded = new Map();
+  let tagDrawerOpen = false;
+  let tagEditorOpen = false;
+  let tagEditorMode = "edit";
+  let tagEditorTagId = "";
+  let tagEditorAliasesValue = [];
+  let tagEditorParentId = null;
+  let tagEditorParentNode = null;
+  let tagEditorOriginalParentId = null;
+  let tagEditorSaving = false;
+  let tagEditorParentSuggestWidget = null;
+
   const lightboxZoom = {
     scale: 1,
     x: 0,
@@ -367,6 +490,910 @@
     addStageTag(tag, kind);
   }
 
+  async function requestGraphQl(query, variables, signal) {
+    const response = await fetch("/graphql", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query, variables }),
+      signal,
+    });
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+    const payload = await response.json();
+    if (Array.isArray(payload.errors) && payload.errors.length > 0) {
+      throw new Error(payload.errors[0].message || "请求失败");
+    }
+    return payload.data || {};
+  }
+
+  // ---------- 标签树抽屉 ----------
+
+  function rememberTagNode(source) {
+    let node = tagNodeCache.get(source.id);
+    if (!node) {
+      node = {
+        id: source.id,
+        parentId: null,
+        name: "",
+        aliases: [],
+        path: "",
+        hasChildren: false,
+        children: [],
+        childrenLoaded: false,
+        loading: false,
+        error: false,
+        expanded: false,
+      };
+      tagNodeCache.set(node.id, node);
+    }
+    node.parentId = source.parentId || null;
+    node.name = source.name || "";
+    node.aliases = Array.isArray(source.aliases) ? source.aliases : [];
+    node.path = source.path || node.name;
+    node.hasChildren = Boolean(source.hasChildren);
+    return node;
+  }
+
+  function tagNodeFromLoose(tag) {
+    return rememberTagNode({
+      id: tag.id,
+      parentId: tag.parentId || null,
+      name: tag.name,
+      aliases: tag.aliases || [],
+      path: tag.path,
+      hasChildren: Boolean(tag.hasChildren),
+    });
+  }
+
+  function resetTagTree() {
+    tagNodeCache = new Map();
+    tagTreeRootIds = [];
+    tagTreeRootsLoaded = false;
+    tagTreeRootsLoading = false;
+    tagTreeRootsError = false;
+    selectedTagId = "";
+    tagTreeSearchExpanded = new Map();
+  }
+
+  async function loadTagRoots() {
+    if (tagTreeRootsLoading) {
+      return;
+    }
+    tagTreeRootsLoading = true;
+    tagTreeRootsError = false;
+    renderTagTree();
+    try {
+      const data = await requestGraphQl(TAG_CHILDREN_QUERY, { parentId: null });
+      const roots = (data.tagChildren || []).map(rememberTagNode);
+      tagTreeRootIds = roots.map((node) => node.id);
+      tagTreeRootsLoaded = true;
+      renderTagTree();
+      await Promise.all(
+        roots
+          .filter((node) => node.hasChildren)
+          .map((node) => loadTagChildren(node.id, true)),
+      );
+    } catch {
+      tagTreeRootsError = true;
+    } finally {
+      tagTreeRootsLoading = false;
+      renderTagTree();
+    }
+  }
+
+  async function loadTagChildren(id, expand) {
+    const node = tagNodeCache.get(id);
+    if (!node || node.loading) {
+      return;
+    }
+    if (node.childrenLoaded) {
+      if (expand) {
+        node.expanded = true;
+        renderTagTree();
+      }
+      return;
+    }
+
+    node.loading = true;
+    node.error = false;
+    if (expand) {
+      node.expanded = true;
+    }
+    renderTagTree();
+    try {
+      const data = await requestGraphQl(TAG_CHILDREN_QUERY, { parentId: id });
+      const children = (data.tagChildren || []).map(rememberTagNode);
+      for (const child of children) {
+        child.parentId = id;
+      }
+      node.children = children.map((child) => child.id);
+      node.childrenLoaded = true;
+      node.hasChildren = children.length > 0;
+    } catch {
+      node.error = true;
+    } finally {
+      node.loading = false;
+      renderTagTree();
+    }
+  }
+
+  function toggleTagNode(node) {
+    if (node.expanded) {
+      node.expanded = false;
+      renderTagTree();
+      return;
+    }
+    if (node.childrenLoaded) {
+      node.expanded = true;
+      renderTagTree();
+      return;
+    }
+    loadTagChildren(node.id, true);
+  }
+
+  function buildTagSearchTree(matches) {
+    const roots = [];
+    const views = new Map();
+    for (const match of matches) {
+      const chain = [...(match.ancestors || []), match.node].filter(Boolean);
+      let parent = null;
+      chain.forEach((raw, index) => {
+        const node = rememberTagNode(raw);
+        let view = views.get(node.id);
+        if (!view) {
+          view = { id: node.id, children: [], alias: "" };
+          views.set(node.id, view);
+        }
+        if (index === chain.length - 1 && match.matchedAlias) {
+          view.alias = match.matchedName || "";
+        }
+        if (parent) {
+          if (!parent.children.includes(view)) {
+            parent.children.push(view);
+          }
+        } else if (!roots.includes(view)) {
+          roots.push(view);
+        }
+        parent = view;
+      });
+    }
+    return roots;
+  }
+
+  function exitTagTreeSearch() {
+    tagTreeSearchActive = false;
+    tagTreeSearchRoots = [];
+    tagTreeSearchLoading = false;
+    tagTreeSearchError = false;
+    tagTreeSearchExpanded = new Map();
+    tagTreeSearchToken += 1;
+    if (tagTreeSearchController) {
+      tagTreeSearchController.abort();
+      tagTreeSearchController = null;
+    }
+    renderTagTree();
+  }
+
+  async function runTagTreeSearch() {
+    const text = tagTreeSearch.value.trim();
+    tagTreeSearchText = text;
+    if (tagTreeSearchController) {
+      tagTreeSearchController.abort();
+      tagTreeSearchController = null;
+    }
+    tagTreeSearchToken += 1;
+    const token = tagTreeSearchToken;
+
+    if (!text) {
+      exitTagTreeSearch();
+      return;
+    }
+
+    tagTreeSearchActive = true;
+    tagTreeSearchLoading = true;
+    tagTreeSearchError = false;
+    tagTreeSearchRoots = [];
+    tagTreeSearchExpanded = new Map();
+    renderTagTree();
+
+    const controller = new AbortController();
+    tagTreeSearchController = controller;
+    try {
+      const data = await requestGraphQl(
+        TAG_TREE_SEARCH_QUERY,
+        { query: text },
+        controller.signal,
+      );
+      if (token !== tagTreeSearchToken) {
+        return;
+      }
+      tagTreeSearchRoots = buildTagSearchTree(data.tagTreeSearch || []);
+    } catch (error) {
+      if (error.name === "AbortError" || token !== tagTreeSearchToken) {
+        return;
+      }
+      tagTreeSearchError = true;
+    } finally {
+      if (token === tagTreeSearchToken) {
+        tagTreeSearchLoading = false;
+        tagTreeSearchController = null;
+        renderTagTree();
+      }
+    }
+  }
+
+  function scheduleTagTreeSearch() {
+    clearTimeout(tagTreeSearchTimer);
+    tagTreeSearchClear.hidden = tagTreeSearch.value === "";
+    if (tagTreeSearch.value.trim() === "") {
+      exitTagTreeSearch();
+      return;
+    }
+    tagTreeSearchTimer = window.setTimeout(runTagTreeSearch, TAG_TREE_SEARCH_DELAY);
+  }
+
+  function setTagTreeStatus(text, options = {}) {
+    tagTreeStatus.replaceChildren();
+    tagTreeStatus.hidden = false;
+    tagTreeStatus.classList.toggle("error", Boolean(options.error));
+    tagTreeStatus.textContent = text;
+    if (options.retry) {
+      const retry = document.createElement("button");
+      retry.type = "button";
+      retry.className = "tag-tree-retry";
+      retry.textContent = "重试";
+      retry.addEventListener("click", options.retry);
+      tagTreeStatus.append(" ", retry);
+    }
+  }
+
+  function createTagTreeNote(text, depth, options = {}) {
+    const note = document.createElement("div");
+    note.className = "tag-tree-note";
+    note.style.setProperty("--tree-depth", String(depth));
+    note.classList.toggle("error", Boolean(options.error));
+    note.textContent = text;
+    if (options.retry) {
+      const retry = document.createElement("button");
+      retry.type = "button";
+      retry.textContent = "重试";
+      retry.addEventListener("click", options.retry);
+      note.append(" ", retry);
+    }
+    return note;
+  }
+
+  function handleTagTreeActivate(node, event) {
+    if (event.altKey) {
+      const kind = event.shiftKey ? "exclude" : "include";
+      const list = kind === "include" ? includeTags : excludeTags;
+      const exists = list.some((tag) => tag.id === node.id);
+      if (exists) {
+        removeStageTag(node.id, kind);
+      } else {
+        addStageTag({ id: node.id, name: node.name, path: node.path }, kind);
+      }
+      return;
+    }
+    selectedTagId = selectedTagId === node.id ? "" : node.id;
+    updateTagEditButton();
+    renderTagTree();
+  }
+
+  function handleTagTreeKeydown(node, event, config) {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      handleTagTreeActivate(node, event);
+      return;
+    }
+    if (event.key === "ArrowRight" && config.hasChildren && !config.expanded) {
+      event.preventDefault();
+      config.onToggle();
+      return;
+    }
+    if (event.key === "ArrowLeft" && config.hasChildren && config.expanded) {
+      event.preventDefault();
+      config.onToggle();
+    }
+  }
+
+  function createTagTreeRow(node, depth, config) {
+    const row = document.createElement("div");
+    row.className = "tag-tree-row";
+    row.dataset.tagId = node.id;
+    row.style.setProperty("--tree-depth", String(depth));
+    row.setAttribute("role", "treeitem");
+    row.setAttribute("aria-level", String(depth + 1));
+    row.classList.toggle("selected", selectedTagId === node.id);
+    if (config.hasChildren) {
+      row.setAttribute("aria-expanded", config.expanded ? "true" : "false");
+    }
+
+    if (config.hasChildren) {
+      const arrow = document.createElement("button");
+      arrow.type = "button";
+      arrow.className = "tag-tree-arrow";
+      arrow.setAttribute("aria-label", config.expanded ? "收起子标签" : "展开子标签");
+      arrow.textContent = config.expanded ? "▾" : "▸";
+      arrow.addEventListener("click", (event) => {
+        event.stopPropagation();
+        config.onToggle();
+      });
+      row.append(arrow);
+    } else {
+      const spacer = document.createElement("span");
+      spacer.className = "tag-tree-arrow-spacer";
+      spacer.setAttribute("aria-hidden", "true");
+      row.append(spacer);
+    }
+
+    const label = document.createElement("button");
+    label.type = "button";
+    label.className = "tag-tree-label";
+    label.dataset.tagId = node.id;
+    label.title = node.path;
+    const name = document.createElement("span");
+    name.className = "tag-tree-name";
+    name.textContent = node.name;
+    label.append(name);
+    if (config.alias) {
+      const alias = document.createElement("span");
+      alias.className = "tag-tree-alias";
+      alias.textContent = config.alias;
+      label.append(alias);
+    }
+    label.addEventListener("click", (event) => {
+      handleTagTreeActivate(node, event);
+    });
+    label.addEventListener("keydown", (event) => {
+      handleTagTreeKeydown(node, event, config);
+    });
+    row.append(label);
+    return row;
+  }
+
+  function appendLazyTagBranch(fragment, id, depth) {
+    const node = tagNodeCache.get(id);
+    if (!node) {
+      return;
+    }
+    const row = createTagTreeRow(node, depth, {
+      hasChildren: node.hasChildren,
+      expanded: node.expanded,
+      alias: "",
+      onToggle: () => toggleTagNode(node),
+    });
+    fragment.append(row);
+    if (!node.expanded) {
+      return;
+    }
+
+    const group = document.createElement("div");
+    group.setAttribute("role", "group");
+    if (node.loading) {
+      group.append(createTagTreeNote("加载中…", depth + 1));
+    } else if (node.error) {
+      group.append(
+        createTagTreeNote("加载失败", depth + 1, {
+          error: true,
+          retry: () => loadTagChildren(node.id, true),
+        }),
+      );
+    } else if (node.childrenLoaded && node.children.length === 0) {
+      group.append(createTagTreeNote("没有子标签", depth + 1));
+    } else {
+      for (const childId of node.children) {
+        appendLazyTagBranch(group, childId, depth + 1);
+      }
+    }
+    fragment.append(group);
+  }
+
+  function toggleSearchTagView(view) {
+    const expanded = tagTreeSearchExpanded.get(view.id) !== false;
+    tagTreeSearchExpanded.set(view.id, !expanded);
+    renderTagTree();
+  }
+
+  function appendSearchTagBranch(fragment, view, depth) {
+    const node = tagNodeCache.get(view.id);
+    if (!node) {
+      return;
+    }
+    const expanded = tagTreeSearchExpanded.get(view.id) !== false;
+    const hasChildren = view.children.length > 0;
+    const row = createTagTreeRow(node, depth, {
+      hasChildren,
+      expanded,
+      alias: view.alias,
+      onToggle: () => toggleSearchTagView(view),
+    });
+    fragment.append(row);
+    if (!hasChildren || !expanded) {
+      return;
+    }
+    const group = document.createElement("div");
+    group.setAttribute("role", "group");
+    for (const child of view.children) {
+      appendSearchTagBranch(group, child, depth + 1);
+    }
+    fragment.append(group);
+  }
+
+  function renderTagTree() {
+    tagTree.replaceChildren();
+    tagTreeStatus.hidden = true;
+    tagTreeStatus.classList.remove("error");
+    tagTreeStatus.replaceChildren();
+
+    if (tagTreeSearchActive) {
+      if (tagTreeSearchLoading) {
+        setTagTreeStatus("搜索中…");
+        return;
+      }
+      if (tagTreeSearchError) {
+        setTagTreeStatus("搜索失败", {
+          error: true,
+          retry: () => runTagTreeSearch(),
+        });
+        return;
+      }
+      if (tagTreeSearchRoots.length === 0) {
+        setTagTreeStatus("没有匹配的标签");
+        return;
+      }
+      const fragment = document.createDocumentFragment();
+      for (const view of tagTreeSearchRoots) {
+        appendSearchTagBranch(fragment, view, 0);
+      }
+      tagTree.append(fragment);
+      return;
+    }
+
+    if (!tagTreeRootsLoaded) {
+      if (tagTreeRootsError) {
+        setTagTreeStatus("标签树加载失败", {
+          error: true,
+          retry: () => loadTagRoots(),
+        });
+      } else {
+        setTagTreeStatus("加载中…");
+      }
+      return;
+    }
+    if (tagTreeRootIds.length === 0) {
+      setTagTreeStatus("没有标签");
+      return;
+    }
+    const fragment = document.createDocumentFragment();
+    for (const id of tagTreeRootIds) {
+      appendLazyTagBranch(fragment, id, 0);
+    }
+    tagTree.append(fragment);
+  }
+
+  function updateTagEditButton() {
+    const node = selectedTagId ? tagNodeCache.get(selectedTagId) : null;
+    tagEditButton.title = node ? `编辑标签：${node.path}` : "添加顶层标签";
+  }
+
+  function setTagDrawerOpen(open) {
+    if (tagDrawerOpen === open) {
+      return;
+    }
+    tagDrawerOpen = open;
+    document.body.classList.toggle("tag-drawer-open", open);
+    tagDrawerHandle.setAttribute("aria-expanded", open ? "true" : "false");
+    tagDrawerPanel.inert = !open;
+    if (open) {
+      if (!tagTreeRootsLoaded && !tagTreeRootsLoading) {
+        loadTagRoots();
+      } else {
+        renderTagTree();
+      }
+    }
+    if (layoutAuto) {
+      syncLayoutSettings();
+    }
+    if (window.innerWidth >= 900) {
+      window.setTimeout(relayout, 240);
+    }
+  }
+
+  function tagPathFor(name, parentId, parentNode, fallbackNode) {
+    if (!parentId) {
+      return name;
+    }
+    const parent = parentNode || tagNodeCache.get(parentId);
+    if (parent && parent.path) {
+      return `${parent.path}::${name}`;
+    }
+    if (
+      fallbackNode &&
+      fallbackNode.parentId === parentId &&
+      fallbackNode.path
+    ) {
+      const parts = fallbackNode.path.split("::");
+      parts[parts.length - 1] = name;
+      return parts.join("::");
+    }
+    return name;
+  }
+
+  function syncStageTagPaths(saved, oldPath, newPath) {
+    for (const list of [includeTags, excludeTags]) {
+      for (const tag of list) {
+        if (tag.id === saved.id) {
+          tag.name = saved.name;
+          tag.path = newPath;
+        } else if (oldPath && tag.path && tag.path.startsWith(`${oldPath}::`)) {
+          tag.path = `${newPath}${tag.path.slice(oldPath.length)}`;
+        }
+      }
+    }
+    renderStaging();
+    syncStateToUrl();
+  }
+
+  async function findTagTreeMatch(id, name) {
+    const data = await requestGraphQl(TAG_TREE_SEARCH_QUERY, { query: name });
+    return (data.tagTreeSearch || []).find((match) => match.node.id === id);
+  }
+
+  async function refreshTagTreeAfterSave(saved) {
+    resetTagTree();
+    await loadTagRoots();
+    try {
+      const match = await findTagTreeMatch(saved.id, saved.name);
+      if (match) {
+        const chain = [...(match.ancestors || []), match.node];
+        for (let index = 0; index < chain.length - 1; index += 1) {
+          rememberTagNode(chain[index]);
+          await loadTagChildren(chain[index].id, true);
+        }
+        rememberTagNode(match.node);
+      }
+    } catch {
+      // 树刷新失败时保留已加载的根节点，不影响后续手动展开。
+    }
+    if (tagTreeSearchActive) {
+      await runTagTreeSearch();
+    }
+    if (tagNodeCache.has(saved.id)) {
+      selectedTagId = saved.id;
+    }
+    updateTagEditButton();
+    renderTagTree();
+  }
+
+  function isTagEditorSelfOrDescendant(path) {
+    const node = tagEditorTagId ? tagNodeCache.get(tagEditorTagId) : null;
+    if (!node || !path) {
+      return false;
+    }
+    return path === node.path || path.startsWith(`${node.path}::`);
+  }
+
+  function showTagEditorError(message) {
+    tagEditorError.textContent = message;
+    tagEditorError.hidden = false;
+  }
+
+  function clearTagEditorError() {
+    tagEditorError.textContent = "";
+    tagEditorError.hidden = true;
+  }
+
+  function renderTagEditorAliases() {
+    tagEditorAliases.replaceChildren();
+    for (const alias of tagEditorAliasesValue) {
+      const chip = document.createElement("span");
+      chip.className = "tag-editor-alias";
+      const text = document.createElement("span");
+      text.textContent = alias;
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "tag-editor-alias-remove";
+      remove.setAttribute("aria-label", `删除别名 ${alias}`);
+      remove.textContent = "×";
+      remove.addEventListener("click", () => {
+        tagEditorAliasesValue = tagEditorAliasesValue.filter(
+          (value) => value !== alias,
+        );
+        renderTagEditorAliases();
+        clearTagEditorError();
+      });
+      chip.append(text, remove);
+      tagEditorAliases.append(chip);
+    }
+    tagEditorAliases.hidden = tagEditorAliasesValue.length === 0;
+  }
+
+  function addTagEditorAliases(raw) {
+    const standard = tagEditorName.value.trim().toLowerCase();
+    for (const part of raw.split(/[,，]/)) {
+      const alias = part.trim();
+      if (!alias || alias.toLowerCase() === standard) {
+        continue;
+      }
+      if (
+        tagEditorAliasesValue.some(
+          (value) => value.toLowerCase() === alias.toLowerCase(),
+        )
+      ) {
+        continue;
+      }
+      tagEditorAliasesValue.push(alias);
+    }
+    renderTagEditorAliases();
+  }
+
+  function commitTagEditorAliasInput() {
+    if (!tagEditorAliasInput.value.trim()) {
+      return;
+    }
+    addTagEditorAliases(tagEditorAliasInput.value);
+    tagEditorAliasInput.value = "";
+    clearTagEditorError();
+  }
+
+  function renderTagEditor() {
+    tagEditorTitle.textContent =
+      tagEditorMode === "edit" ? "编辑标签" : "添加子标签";
+    tagEditorModeEdit.disabled = !tagEditorTagId;
+    tagEditorModeEdit.setAttribute(
+      "aria-selected",
+      tagEditorMode === "edit" ? "true" : "false",
+    );
+    tagEditorModeAdd.setAttribute(
+      "aria-selected",
+      tagEditorMode === "add" ? "true" : "false",
+    );
+
+    tagEditorParentDisplay.textContent = tagEditorParentNode
+      ? tagEditorParentNode.path
+      : "全局父节点";
+    tagEditorParentDisplay.title = tagEditorParentDisplay.textContent;
+    tagEditorParentDisplay.disabled = tagEditorMode === "add";
+    tagEditorParentClear.hidden =
+      tagEditorMode === "add" || tagEditorParentId === null;
+    tagEditorParentSearch.hidden = true;
+
+    renderTagEditorAliases();
+    tagEditorSave.disabled = tagEditorSaving;
+    tagEditorSave.textContent = tagEditorSaving ? "保存中…" : "保存";
+  }
+
+  function setTagEditorMode(mode) {
+    if (mode === "edit" && !tagEditorTagId) {
+      return;
+    }
+    tagEditorMode = mode;
+    tagEditorParentSearch.hidden = true;
+    tagEditorParentInput.value = "";
+    if (tagEditorParentSuggestWidget) {
+      tagEditorParentSuggestWidget.clearChosen();
+      tagEditorParentSuggestWidget.close();
+    }
+    if (mode === "add") {
+      tagEditorParentId = tagEditorTagId || null;
+      tagEditorParentNode = tagEditorParentId
+        ? tagNodeCache.get(tagEditorParentId)
+        : null;
+    } else {
+      tagEditorParentId = tagEditorOriginalParentId;
+      tagEditorParentNode = tagEditorParentId
+        ? tagNodeCache.get(tagEditorParentId)
+        : null;
+    }
+    clearTagEditorError();
+    renderTagEditor();
+  }
+
+  function openTagEditor() {
+    if (tagEditorOpen) {
+      return;
+    }
+    const selected = selectedTagId
+      ? tagNodeCache.get(selectedTagId)
+      : null;
+    tagEditorTagId = selected ? selected.id : "";
+    tagEditorMode = selected ? "edit" : "add";
+    tagEditorAliasesValue = selected ? [...selected.aliases] : [];
+    tagEditorOriginalParentId = selected ? selected.parentId : null;
+    tagEditorParentId =
+      tagEditorMode === "add"
+        ? selected
+          ? selected.id
+          : null
+        : selected
+          ? selected.parentId
+          : null;
+    tagEditorParentNode = tagEditorParentId
+      ? tagNodeCache.get(tagEditorParentId)
+      : null;
+    tagEditorName.value = selected ? selected.name : "";
+    tagEditorAliasInput.value = "";
+    if (tagEditorParentSuggestWidget) {
+      tagEditorParentSuggestWidget.clearChosen();
+      tagEditorParentSuggestWidget.close();
+    }
+    clearTagEditorError();
+    tagEditorOpen = true;
+    renderTagEditor();
+    tagEditor.showModal();
+    tagEditorName.focus();
+    tagEditorName.select();
+  }
+
+  function closeTagEditor() {
+    tagEditorOpen = false;
+    tagEditorSaving = false;
+    tagEditorParentSearch.hidden = true;
+    tagEditorParentInput.value = "";
+    if (tagEditorParentSuggestWidget) {
+      tagEditorParentSuggestWidget.clearChosen();
+      tagEditorParentSuggestWidget.close();
+    }
+    clearTagEditorError();
+    if (tagEditor.open) {
+      tagEditor.close();
+    }
+  }
+
+  function chooseTagEditorParent(tag) {
+    if (!tag) {
+      return;
+    }
+    if (isTagEditorSelfOrDescendant(tag.path)) {
+      showTagEditorError("不能把标签移动到自身或自己的后代下");
+      return;
+    }
+    tagEditorParentId = tag.id;
+    tagEditorParentNode =
+      tagNodeCache.get(tag.id) ||
+      rememberTagNode({
+        id: tag.id,
+        parentId: null,
+        name: tag.name,
+        aliases: [],
+        path: tag.path,
+        hasChildren: false,
+      });
+    tagEditorParentSearch.hidden = true;
+    tagEditorParentInput.value = "";
+    if (tagEditorParentSuggestWidget) {
+      tagEditorParentSuggestWidget.clearChosen();
+      tagEditorParentSuggestWidget.close();
+    }
+    clearTagEditorError();
+    renderTagEditor();
+  }
+
+  function openTagEditorParentSearch() {
+    if (tagEditorMode !== "edit" || !tagEditorTagId) {
+      return;
+    }
+    tagEditorParentSearch.hidden = false;
+    tagEditorParentInput.value = "";
+    if (tagEditorParentSuggestWidget) {
+      tagEditorParentSuggestWidget.clearChosen();
+      tagEditorParentSuggestWidget.close();
+    }
+    tagEditorParentInput.focus();
+  }
+
+  async function commitTagEditorParentInput() {
+    const normalized = TagSearch.trimPathSuffix(tagEditorParentInput.value);
+    if (!normalized) {
+      return;
+    }
+    try {
+      const tag = await TagSearch.resolveTagPath(normalized, null);
+      if (!tag) {
+        showTagEditorError(`找不到标签路径：${normalized}`);
+        return;
+      }
+      chooseTagEditorParent(tag);
+    } catch (error) {
+      showTagEditorError(error.message || "标签解析失败");
+    }
+  }
+
+  function clearTagEditorParent() {
+    tagEditorParentId = null;
+    tagEditorParentNode = null;
+    tagEditorParentSearch.hidden = true;
+    tagEditorParentInput.value = "";
+    clearTagEditorError();
+    renderTagEditor();
+  }
+
+  async function saveTagEditor() {
+    if (tagEditorSaving) {
+      return;
+    }
+    commitTagEditorAliasInput();
+    const name = tagEditorName.value.trim();
+    if (!name) {
+      showTagEditorError("请输入标签标准名");
+      tagEditorName.focus();
+      return;
+    }
+    if (
+      tagEditorAliasesValue.some(
+        (alias) => alias.toLowerCase() === name.toLowerCase(),
+      )
+    ) {
+      showTagEditorError("别名不能与标准名相同");
+      tagEditorAliasInput.focus();
+      return;
+    }
+
+    const oldNode = tagEditorTagId
+      ? tagNodeCache.get(tagEditorTagId)
+      : null;
+    const oldPath = oldNode ? oldNode.path : "";
+    const parentNode = tagEditorParentId
+      ? tagEditorParentNode || tagNodeCache.get(tagEditorParentId)
+      : null;
+
+    tagEditorSaving = true;
+    clearTagEditorError();
+    renderTagEditor();
+    try {
+      let saved = null;
+      if (tagEditorMode === "add") {
+        const data = await requestGraphQl(CREATE_TAG_MUTATION, {
+          input: {
+            name,
+            aliases: tagEditorAliasesValue,
+            parentId: tagEditorParentId,
+          },
+        });
+        saved = data.createTag;
+      } else {
+        const input = { name, aliases: tagEditorAliasesValue };
+        if (
+          tagEditorParentId === null &&
+          tagEditorOriginalParentId !== null
+        ) {
+          input.clearParent = true;
+        } else if (
+          tagEditorParentId &&
+          tagEditorParentId !== tagEditorOriginalParentId
+        ) {
+          input.parentId = tagEditorParentId;
+        }
+        const data = await requestGraphQl(UPDATE_TAG_MUTATION, {
+          id: tagEditorTagId,
+          input,
+        });
+        saved = data.updateTag;
+      }
+      if (!saved) {
+        throw new Error("保存失败");
+      }
+      const finalPath = tagPathFor(
+        saved.name,
+        tagEditorParentId,
+        parentNode,
+        oldNode,
+      );
+      closeTagEditor();
+      syncStageTagPaths(saved, oldPath, finalPath);
+      await refreshTagTreeAfterSave(saved);
+    } catch (error) {
+      showTagEditorError(error.message || "保存失败");
+    } finally {
+      tagEditorSaving = false;
+      if (tagEditorOpen) {
+        renderTagEditor();
+      }
+    }
+  }
+
   // ---------- URL ----------
 
   function appendTagParams(params, tags, idKey, nameKey, pathKey) {
@@ -526,8 +1553,10 @@
     if (!layoutAuto) {
       return Math.max(1, Math.min(8, Math.round(layoutManualColumns)));
     }
-    // 按视口宽度切换列数，保证 780px 起稳定为 4 列。
-    const width = window.innerWidth;
+    // 桌面抽屉会推挤内容，可用宽度要扣掉抽屉；窄屏抽屉是覆盖层，不扣。
+    const drawerWidth =
+      tagDrawerOpen && window.innerWidth >= 900 ? TAG_DRAWER_WIDTH : 0;
+    const width = window.innerWidth - drawerWidth;
     if (width < 480) {
       return 1;
     }
@@ -1641,7 +2670,11 @@
     setLayoutPanelOpen(false);
   });
   document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && !layoutPanel.hidden) {
+    if (
+      event.key === "Escape" &&
+      !event.defaultPrevented &&
+      !layoutPanel.hidden
+    ) {
       setLayoutPanelOpen(false);
     }
   });
@@ -1650,6 +2683,107 @@
       setLayoutPanelOpen(false);
     }
   });
+
+  function bindTagTreeUi() {
+    tagDrawerHandle.addEventListener("click", () =>
+      setTagDrawerOpen(!tagDrawerOpen),
+    );
+    tagDrawerClose.addEventListener("click", () => setTagDrawerOpen(false));
+    tagEditButton.addEventListener("click", openTagEditor);
+
+    tagTreeSearch.addEventListener("input", scheduleTagTreeSearch);
+    tagTreeSearchClear.addEventListener("click", () => {
+      tagTreeSearch.value = "";
+      tagTreeSearchClear.hidden = true;
+      clearTimeout(tagTreeSearchTimer);
+      tagTreeSearchText = "";
+      exitTagTreeSearch();
+      tagTreeSearch.focus();
+    });
+
+    tagEditorForm.addEventListener("submit", (event) => {
+      event.preventDefault();
+      saveTagEditor();
+    });
+    tagEditorSave.addEventListener("click", saveTagEditor);
+    tagEditorClose.addEventListener("click", closeTagEditor);
+    tagEditorCancel.addEventListener("click", closeTagEditor);
+    tagEditorModeEdit.addEventListener("click", () =>
+      setTagEditorMode("edit"),
+    );
+    tagEditorModeAdd.addEventListener("click", () =>
+      setTagEditorMode("add"),
+    );
+
+    tagEditorName.addEventListener("input", clearTagEditorError);
+    tagEditorName.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && !event.isComposing) {
+        event.preventDefault();
+        saveTagEditor();
+      }
+    });
+    tagEditorAliasInput.addEventListener("input", clearTagEditorError);
+    tagEditorAliasInput.addEventListener("keydown", (event) => {
+      if (
+        event.key === "Enter" ||
+        event.key === "," ||
+        event.key === "，"
+      ) {
+        event.preventDefault();
+        commitTagEditorAliasInput();
+        return;
+      }
+      if (
+        event.key === "Backspace" &&
+        tagEditorAliasInput.value === "" &&
+        tagEditorAliasesValue.length > 0
+      ) {
+        event.preventDefault();
+        tagEditorAliasesValue.pop();
+        renderTagEditorAliases();
+        clearTagEditorError();
+      }
+    });
+
+    tagEditorParentDisplay.addEventListener(
+      "click",
+      openTagEditorParentSearch,
+    );
+    tagEditorParentClear.addEventListener("click", clearTagEditorParent);
+    tagEditorParentSuggestWidget = TagSearch.create({
+      input: tagEditorParentInput,
+      list: tagEditorParentSuggest,
+      idPrefix: "tag-editor-parent",
+      filterItem: (item) => !isTagEditorSelfOrDescendant(item.tagPath),
+      onChoose: chooseTagEditorParent,
+      onEnter: () => commitTagEditorParentInput(),
+    });
+
+    tagEditor.addEventListener("cancel", (event) => {
+      event.preventDefault();
+      closeTagEditor();
+    });
+    tagEditor.addEventListener("click", (event) => {
+      if (event.target === tagEditor) {
+        closeTagEditor();
+      }
+    });
+
+    document.addEventListener("keydown", (event) => {
+      if (event.key !== "Escape" || event.defaultPrevented) {
+        return;
+      }
+      if (tagEditorOpen) {
+        event.preventDefault();
+        closeTagEditor();
+        return;
+      }
+      if (tagDrawerOpen) {
+        event.preventDefault();
+        setTagDrawerOpen(false);
+      }
+    });
+  }
 
   // ---------- 事件绑定与启动 ----------
 
@@ -1660,6 +2794,8 @@
     onEnter: () => addTagFromInput("include"),
     onShiftEnter: () => addTagFromInput("exclude"),
   });
+  bindTagTreeUi();
+  updateTagEditButton();
 
   window.addEventListener(
     "scroll",

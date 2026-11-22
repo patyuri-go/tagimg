@@ -147,6 +147,18 @@ struct ArtworkTagInfo {
   std::string path;
   // 别名，按名称升序。
   std::vector<std::string> aliases;
+  // 是否有直接子标签。
+  bool has_children = false;
+};
+
+// 一条标签树搜索结果，带用于渲染树状结构的祖先链。
+struct TagTreeMatchInfo {
+  ArtworkTagInfo node;
+  // 从根到父级，按根到父级排序。
+  std::vector<ArtworkTagInfo> ancestors;
+  // 命中的标准名或别名。
+  std::string matched_name;
+  bool matched_alias = false;
 };
 
 struct ArtworkArtistInfo {
@@ -482,6 +494,14 @@ public:
   // 按标准名或别名搜索标签，用于输入联想。
   [[nodiscard]] Result<std::vector<TagMatch>, TagimgRepositoryError>
   search_tags(const TagSearchQuery &query) const;
+
+  // 按父标签列出直接子标签；parent_id 为空表示列出所有顶层标签。
+  [[nodiscard]] Result<std::vector<ArtworkTagInfo>, TagimgRepositoryError>
+  list_tag_children(const std::optional<std::string> &parent_id) const;
+
+  // 搜索标签树；命中节点的 ancestors 是从根到父级的完整链。
+  [[nodiscard]] Result<std::vector<TagTreeMatchInfo>, TagimgRepositoryError>
+  search_tag_tree(const std::string &text) const;
 
   // 创建标签。同父下标准名冲突时返回 TagNameConflict，父标签不存在时
   // 返回 TagParentNotFound。
