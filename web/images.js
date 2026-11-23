@@ -1,3 +1,5 @@
+import { ImageLightbox } from "/lightbox.js";
+
 (() => {
   "use strict";
 
@@ -170,19 +172,6 @@
   const hoverPreview = document.getElementById("hover-preview");
   const hoverPreviewImage = hoverPreview.querySelector("img");
 
-  const lightbox = document.getElementById("image-lightbox");
-  const lightboxClose = document.getElementById("image-lightbox-close");
-  const lightboxCaption = document.getElementById("image-lightbox-caption");
-  const lightboxStage = document.getElementById("image-lightbox-stage");
-  const lightboxImage = document.getElementById("image-lightbox-image");
-  const lightboxError = document.getElementById("image-lightbox-error");
-  const lightboxPrev = document.getElementById("image-lightbox-prev");
-  const lightboxNext = document.getElementById("image-lightbox-next");
-  const lightboxArtworks = document.getElementById("image-lightbox-artworks");
-  const lightboxTags = document.getElementById("image-lightbox-tags");
-  const lightboxMeta = document.getElementById("image-lightbox-meta");
-  const lightboxSimilar = document.getElementById("image-lightbox-similar");
-
   const tagDrawer = document.getElementById("tag-drawer");
   const tagDrawerHandle = document.getElementById("tag-drawer-handle");
   const tagDrawerPanel = document.getElementById("tag-drawer-panel");
@@ -228,8 +217,6 @@
   const selectionCancel = document.getElementById("selection-cancel");
   const selectionSave = document.getElementById("selection-save");
 
-  const ZOOM_MIN = 1;
-  const ZOOM_MAX = 8;
   const TAG_DRAWER_WIDTH = 320;
   const TAG_TREE_SEARCH_DELAY = 200;
 
@@ -278,18 +265,6 @@
     scrollFrame: 0,
   };
 
-  const lightboxZoom = {
-    scale: 1,
-    x: 0,
-    y: 0,
-    dragging: false,
-    pointerId: null,
-    startX: 0,
-    startY: 0,
-    originX: 0,
-    originY: 0,
-  };
-
   const includeTags = [];
   const excludeTags = [];
   let includeMode = "ALL";
@@ -318,11 +293,6 @@
   let layoutAuto = true;
   let layoutManualColumns = 4;
 
-  let lightboxEntries = [];
-  let lightboxIndex = -1;
-  let lightboxToken = 0;
-  let lightboxPlaceholderSrc = "";
-
   const hoverState = {
     active: false,
     shown: false,
@@ -334,9 +304,8 @@
     delayTimer: 0,
     warmTimer: 0,
   };
-  // 悬停预览和灯箱各自缓存 regular 大图。
+  // 悬停预览缓存 regular 大图。
   const hoverRegularImages = new Map();
-  const lightboxRegularImages = new Map();
 
   function setStatus(text, kind) {
     const value = text || "";
@@ -2470,7 +2439,7 @@
       if (event.key !== "Escape" || event.defaultPrevented) {
         return;
       }
-      if (lightbox.open || tagEditorOpen) {
+      if (ImageLightbox.isOpen() || tagEditorOpen) {
         return;
       }
       if (selectionDrag.active) {
@@ -2515,8 +2484,8 @@
       allCards = [];
       columns = [];
       results.replaceChildren();
-      if (lightbox.open) {
-        lightbox.close();
+      if (ImageLightbox.isOpen()) {
+        ImageLightbox.close();
       }
     }
 
@@ -2590,25 +2559,25 @@
 
   // ---------- 灯箱 ----------
 
-  function appendMeta(term, value) {
+  function appendLightboxMeta(refs, term, value) {
     const dt = document.createElement("dt");
     dt.textContent = term;
     const dd = document.createElement("dd");
     dd.textContent = value;
-    lightboxMeta.appendChild(dt);
-    lightboxMeta.appendChild(dd);
+    refs.meta.append(dt, dd);
   }
 
-  function renderLightboxSidebar(item) {
-    lightboxSimilar.href = buildSimilarUrl(item.id);
-    lightboxArtworks.replaceChildren();
+  function renderLightboxSidebar(entry, refs) {
+    const item = entry.item || entry;
+    refs.similar.href = buildSimilarUrl(item.id);
+
     const artworks = Array.isArray(item.artworks) ? item.artworks : [];
     if (artworks.length === 0) {
       const link = document.createElement("a");
       link.className = "image-artwork-link";
       link.href = "/orphans.html";
       link.textContent = "游离图片";
-      lightboxArtworks.appendChild(link);
+      refs.artworks.appendChild(link);
     } else {
       for (const artwork of artworks) {
         const row = document.createElement("div");
@@ -2625,19 +2594,17 @@
           ? `发布 ${formatDate(artwork.publishedAt)}`
           : "未设置发布时间";
 
-        row.appendChild(link);
-        row.appendChild(meta);
-        lightboxArtworks.appendChild(row);
+        row.append(link, meta);
+        refs.artworks.appendChild(row);
       }
     }
 
-    lightboxTags.replaceChildren();
     const tags = Array.isArray(item.tags) ? item.tags : [];
     if (tags.length === 0) {
       const empty = document.createElement("span");
       empty.className = "image-tag-empty";
       empty.textContent = "无标签";
-      lightboxTags.appendChild(empty);
+      refs.tags.appendChild(empty);
     } else {
       const paths = pathMapOf(item);
       for (const tag of tags) {
@@ -2645,308 +2612,48 @@
         chip.className = "chip";
         chip.textContent = tag.name;
         chip.title = tagTooltip(tag, paths.get(tag.id));
-        lightboxTags.appendChild(chip);
+        refs.tags.appendChild(chip);
       }
     }
 
-    lightboxMeta.replaceChildren();
     const width = Number(item.width);
     const height = Number(item.height);
-    appendMeta(
+    appendLightboxMeta(
+      refs,
       "尺寸",
       width > 0 && height > 0 ? `${width} × ${height}` : "未知",
     );
     if (item.frameCount !== null && item.frameCount !== undefined) {
-      appendMeta("帧数", String(item.frameCount));
+      appendLightboxMeta(refs, "帧数", String(item.frameCount));
     }
-    appendMeta("创建时间", formatDate(item.createdAt) || "未知");
-    appendMeta("扫描时间", item.scanAt ? formatDate(item.scanAt) : "从未扫描");
-    appendMeta(
+    appendLightboxMeta(refs, "创建时间", formatDate(item.createdAt) || "未知");
+    appendLightboxMeta(
+      refs,
+      "扫描时间",
+      item.scanAt ? formatDate(item.scanAt) : "从未扫描",
+    );
+    appendLightboxMeta(
+      refs,
       "发布时间",
       item.publishedAt ? formatDate(item.publishedAt) : "未设置",
     );
-    appendMeta("图片 ID", item.id);
+    appendLightboxMeta(refs, "图片 ID", item.id);
   }
 
-  function lightboxViewportSize() {
-    const style = window.getComputedStyle(lightboxStage);
-    const paddingX =
-      (parseFloat(style.paddingLeft) || 0) +
-      (parseFloat(style.paddingRight) || 0);
-    const paddingY =
-      (parseFloat(style.paddingTop) || 0) +
-      (parseFloat(style.paddingBottom) || 0);
-    return {
-      width: Math.max(0, lightboxStage.clientWidth - paddingX),
-      height: Math.max(0, lightboxStage.clientHeight - paddingY),
-    };
-  }
-
-  function clampLightboxZoom() {
-    const viewport = lightboxViewportSize();
-    const imageWidth = lightboxImage.offsetWidth * lightboxZoom.scale;
-    const imageHeight = lightboxImage.offsetHeight * lightboxZoom.scale;
-    const maxX = Math.max(0, (imageWidth - viewport.width) / 2);
-    const maxY = Math.max(0, (imageHeight - viewport.height) / 2);
-    lightboxZoom.x = Math.min(maxX, Math.max(-maxX, lightboxZoom.x));
-    lightboxZoom.y = Math.min(maxY, Math.max(-maxY, lightboxZoom.y));
-  }
-
-  function applyLightboxZoom() {
-    lightboxImage.style.transform =
-      `translate(${lightboxZoom.x}px, ${lightboxZoom.y}px) ` +
-      `scale(${lightboxZoom.scale})`;
-    lightboxStage.classList.toggle(
-      "is-zoomed",
-      lightboxZoom.scale > ZOOM_MIN + 0.001,
-    );
-  }
-
-  function resetLightboxZoom() {
-    lightboxZoom.scale = ZOOM_MIN;
-    lightboxZoom.x = 0;
-    lightboxZoom.y = 0;
-    lightboxZoom.dragging = false;
-    lightboxZoom.pointerId = null;
-    lightboxImage.style.transform = "";
-    lightboxStage.classList.remove("is-zoomed", "is-dragging");
-  }
-
-  function zoomLightboxAt(clientX, clientY, factor) {
-    if (lightboxImage.hidden || lightboxImage.offsetWidth === 0) {
-      return;
-    }
-    const nextScale = Math.min(
-      ZOOM_MAX,
-      Math.max(ZOOM_MIN, lightboxZoom.scale * factor),
-    );
-    if (Math.abs(nextScale - lightboxZoom.scale) < 0.0001) {
-      return;
-    }
-    const rect = lightboxStage.getBoundingClientRect();
-    const offsetX = clientX - (rect.left + rect.width / 2);
-    const offsetY = clientY - (rect.top + rect.height / 2);
-    const ratio = nextScale / lightboxZoom.scale;
-    lightboxZoom.x = offsetX - (offsetX - lightboxZoom.x) * ratio;
-    lightboxZoom.y = offsetY - (offsetY - lightboxZoom.y) * ratio;
-    lightboxZoom.scale = nextScale;
-    if (nextScale <= ZOOM_MIN + 0.001) {
-      lightboxZoom.x = 0;
-      lightboxZoom.y = 0;
-    }
-    clampLightboxZoom();
-    applyLightboxZoom();
-  }
-
-  function renderLightbox() {
-    const item = lightboxEntries[lightboxIndex];
-    if (!item) {
-      return;
-    }
-    const imageId = item.id;
-    const token = (lightboxToken += 1);
-    resetLightboxZoom();
-    const total = lightboxEntries.length;
-    lightboxCaption.textContent = `第 ${lightboxIndex + 1} / ${total} 张`;
-    lightboxPrev.hidden = total <= 1;
-    lightboxNext.hidden = total <= 1;
-
-    lightboxError.hidden = true;
-    lightboxImage.hidden = false;
-    lightboxImage.alt =
-      artworkTitles(item).join("、") || `图片 ${lightboxIndex + 1}`;
-    lightboxImage.dataset.imageId = imageId;
-
-    // 先用列表里已经加载过的缩略图顶上，regular 到达后再替换。
-    const placeholderSrc = imageStreamUrl(imageId, "small");
-    lightboxPlaceholderSrc = placeholderSrc;
-    lightboxImage.src = placeholderSrc;
-
-    const loader = cachedRegularImage(lightboxRegularImages, imageId);
-    const applyRegular = () => {
-      if (
-        token !== lightboxToken ||
-        lightboxImage.dataset.imageId !== imageId ||
-        loader.naturalWidth <= 0
-      ) {
-        return;
-      }
-      lightboxImage.src = loader.currentSrc || loader.src;
-    };
-    if (loader.complete) {
-      applyRegular();
-    } else {
-      loader.addEventListener("load", applyRegular, { once: true });
-    }
-
-    renderLightboxSidebar(item);
-  }
+  ImageLightbox.init({ renderSidebar: renderLightboxSidebar });
 
   function openLightbox(index) {
     if (index < 0 || index >= allItems.length) {
       return;
     }
     exitHoverPreview();
-    lightboxEntries = allItems.slice();
-    lightboxIndex = index;
-    renderLightbox();
-    if (!lightbox.open) {
-      lightbox.showModal();
-      document.body.classList.add("lightbox-open");
-    }
-    lightboxClose.focus({ preventScroll: true });
+    const entries = allItems.map((item, position) => ({
+      id: item.id,
+      alt: artworkTitles(item).join("、") || `图片 ${position + 1}`,
+      item,
+    }));
+    ImageLightbox.open(entries, index);
   }
-
-  function moveLightbox(step) {
-    const total = lightboxEntries.length;
-    if (total <= 1) {
-      return;
-    }
-    lightboxIndex = (lightboxIndex + step + total) % total;
-    renderLightbox();
-  }
-
-  lightboxImage.addEventListener("load", () => {
-    lightboxError.hidden = true;
-    lightboxImage.hidden = false;
-    if (lightboxZoom.scale > ZOOM_MIN + 0.001) {
-      clampLightboxZoom();
-      applyLightboxZoom();
-    }
-  });
-
-  lightboxImage.addEventListener("error", () => {
-    const src = lightboxImage.getAttribute("src");
-    if (!src) {
-      return;
-    }
-    // regular 失败时退回已经缓存的缩略图，只有缩略图也失败才报错。
-    if (lightboxPlaceholderSrc && src !== lightboxPlaceholderSrc) {
-      lightboxImage.src = lightboxPlaceholderSrc;
-      return;
-    }
-    lightboxImage.hidden = true;
-    lightboxError.hidden = false;
-  });
-
-  lightboxClose.addEventListener("click", () => lightbox.close());
-  lightboxPrev.addEventListener("click", () => moveLightbox(-1));
-  lightboxNext.addEventListener("click", () => moveLightbox(1));
-
-  lightbox.addEventListener("click", (event) => {
-    if (event.target === lightbox) {
-      lightbox.close();
-    }
-  });
-
-  lightboxStage.addEventListener("click", (event) => {
-    if (event.target === lightboxStage) {
-      lightbox.close();
-    }
-  });
-
-  lightboxStage.addEventListener(
-    "wheel",
-    (event) => {
-      if (!lightbox.open || event.deltaY === 0) {
-        return;
-      }
-      event.preventDefault();
-      const factor = Math.exp(-event.deltaY * 0.0015);
-      zoomLightboxAt(event.clientX, event.clientY, factor);
-    },
-    { passive: false },
-  );
-
-  lightboxImage.addEventListener("dragstart", (event) => {
-    event.preventDefault();
-  });
-
-  lightboxImage.addEventListener("pointerdown", (event) => {
-    if (
-      !lightbox.open ||
-      event.button !== 0 ||
-      lightboxZoom.scale <= ZOOM_MIN + 0.001
-    ) {
-      return;
-    }
-    event.preventDefault();
-    lightboxZoom.dragging = true;
-    lightboxZoom.pointerId = event.pointerId;
-    lightboxZoom.startX = event.clientX;
-    lightboxZoom.startY = event.clientY;
-    lightboxZoom.originX = lightboxZoom.x;
-    lightboxZoom.originY = lightboxZoom.y;
-    lightboxStage.classList.add("is-dragging");
-    try {
-      lightboxImage.setPointerCapture(event.pointerId);
-    } catch {
-      // 某些浏览器在 pointerdown 里不能立即捕获，忽略即可。
-    }
-  });
-
-  lightboxImage.addEventListener("pointermove", (event) => {
-    if (
-      !lightboxZoom.dragging ||
-      event.pointerId !== lightboxZoom.pointerId
-    ) {
-      return;
-    }
-    event.preventDefault();
-    lightboxZoom.x =
-      lightboxZoom.originX + (event.clientX - lightboxZoom.startX);
-    lightboxZoom.y =
-      lightboxZoom.originY + (event.clientY - lightboxZoom.startY);
-    clampLightboxZoom();
-    applyLightboxZoom();
-  });
-
-  function endLightboxDrag(event) {
-    if (
-      !lightboxZoom.dragging ||
-      (event && event.pointerId !== lightboxZoom.pointerId)
-    ) {
-      return;
-    }
-    lightboxZoom.dragging = false;
-    lightboxZoom.pointerId = null;
-    lightboxStage.classList.remove("is-dragging");
-  }
-
-  lightboxImage.addEventListener("pointerup", endLightboxDrag);
-  lightboxImage.addEventListener("pointercancel", endLightboxDrag);
-  lightboxImage.addEventListener("lostpointercapture", endLightboxDrag);
-
-  lightbox.addEventListener("close", () => {
-    document.body.classList.remove("lightbox-open");
-    lightboxToken += 1;
-    lightboxPlaceholderSrc = "";
-    lightboxEntries = [];
-    lightboxIndex = -1;
-    resetLightboxZoom();
-    lightboxCaption.textContent = "";
-    lightboxImage.removeAttribute("src");
-    lightboxImage.removeAttribute("data-image-id");
-    lightboxImage.alt = "";
-    lightboxImage.hidden = false;
-    lightboxError.hidden = true;
-    lightboxArtworks.replaceChildren();
-    lightboxTags.replaceChildren();
-    lightboxMeta.replaceChildren();
-  });
-
-  document.addEventListener("keydown", (event) => {
-    if (!lightbox.open) {
-      return;
-    }
-    if (event.key === "ArrowLeft") {
-      event.preventDefault();
-      moveLightbox(-1);
-    } else if (event.key === "ArrowRight") {
-      event.preventDefault();
-      moveLightbox(1);
-    }
-  });
 
   // ---------- 悬停大图预览 ----------
 
@@ -3371,7 +3078,7 @@
       !selectionDrag.active &&
       !tagDrawerOpen &&
       !tagEditorOpen &&
-      !lightbox.open
+      !ImageLightbox.isOpen()
     ) {
       setLayoutPanelOpen(false);
     }
@@ -3477,7 +3184,7 @@
         return;
       }
       if (
-        lightbox.open ||
+        ImageLightbox.isOpen() ||
         selectedImageItems.size > 0 ||
         selectionDrag.active
       ) {

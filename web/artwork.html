@@ -10,6 +10,7 @@
       href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%234f46e5'/%3E%3Ctext x='16' y='22' font-size='16' text-anchor='middle' fill='white' font-family='sans-serif'%3ET%3C/text%3E%3C/svg%3E"
     />
     <link rel="stylesheet" href="/style.css" />
+    <link rel="stylesheet" href="/lightbox.css" />
     <link rel="stylesheet" href="/confirm-dialog.css" />
   </head>
   <body>
@@ -118,73 +119,8 @@
       </div>
     </main>
 
-    <dialog
-      id="image-lightbox"
-      class="dialog image-lightbox"
-      aria-labelledby="lightbox-caption"
-    >
-      <header class="dialog-head image-lightbox-head">
-        <h2 id="lightbox-caption" class="lightbox-caption"></h2>
-        <button
-          id="lightbox-close"
-          class="icon-button lightbox-close"
-          type="button"
-          aria-label="关闭图片浏览"
-        >
-          ×
-        </button>
-      </header>
-      <div class="image-lightbox-body">
-        <div id="lightbox-stage" class="image-lightbox-stage">
-          <img id="lightbox-image" class="lightbox-image" alt="" />
-          <p id="lightbox-error" class="lightbox-error" hidden>
-            图片无法加载
-          </p>
-          <button
-            id="lightbox-prev"
-            class="lightbox-nav lightbox-prev"
-            type="button"
-            aria-label="上一张图片"
-            title="上一张（←）"
-          >
-            ‹
-          </button>
-          <button
-            id="lightbox-next"
-            class="lightbox-nav lightbox-next"
-            type="button"
-            aria-label="下一张图片"
-            title="下一张（→）"
-          >
-            ›
-          </button>
-        </div>
-        <aside class="image-lightbox-side">
-          <a
-            id="lightbox-similar"
-            class="lightbox-similar-link"
-            href="/images.html"
-          >
-            查找相似图片
-          </a>
-          <section class="image-info-section">
-            <h3 class="image-info-title">所属作品</h3>
-            <div id="lightbox-artworks" class="image-lightbox-artworks"></div>
-          </section>
-          <section class="image-info-section">
-            <h3 class="image-info-title">标签</h3>
-            <div id="lightbox-tags" class="image-lightbox-tags"></div>
-          </section>
-          <section class="image-info-section">
-            <h3 class="image-info-title">详情</h3>
-            <dl id="lightbox-meta" class="image-meta"></dl>
-          </section>
-        </aside>
-      </div>
-    </dialog>
-
     <script src="/tag-search.js"></script>
     <script src="/confirm-dialog.js"></script>
-    <script src="/artwork.js"></script>
+    <script type="module" src="/artwork.js"></script>
   </body>
 </html>
