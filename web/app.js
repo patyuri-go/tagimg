@@ -111,6 +111,7 @@
   const includeStage = document.getElementById("include-stage");
   const excludeStageRow = document.getElementById("exclude-stage-row");
   const excludeStage = document.getElementById("exclude-stage");
+  const includeModeToggle = document.getElementById("include-mode-toggle");
 
   const addButton = document.getElementById("add-button");
   const addDialog = document.getElementById("add-dialog");
@@ -203,6 +204,7 @@
   // 暂存区，元素为 { id, name, path }。
   const includeTags = [];
   const excludeTags = [];
+  let includeMode = "ALL";
   const addTags = [];
 
   function setStatus(text, kind) {
@@ -297,6 +299,9 @@
       return;
     }
     list.splice(index, 1);
+    if (kind === "include" && includeTags.length === 0) {
+      includeMode = "ALL";
+    }
     renderStaging();
     syncTagsToUrl();
     clearArtworkSelection();
@@ -318,22 +323,46 @@
   }
 
   function renderStaging() {
+    if (includeTags.length === 0) {
+      includeMode = "ALL";
+    }
     fillStage(includeStage, includeTags, "include");
     fillStage(excludeStage, excludeTags, "exclude");
     includeStageRow.hidden = includeTags.length === 0;
     excludeStageRow.hidden = excludeTags.length === 0;
     tagStaging.hidden = includeTags.length === 0 && excludeTags.length === 0;
+    includeModeToggle.hidden = includeTags.length === 0;
+    includeModeToggle.textContent = includeMode;
+    includeModeToggle.title =
+      includeMode === "ALL"
+        ? "当前 ALL，点击切换为 ANY"
+        : "当前 ANY，点击切换为 ALL";
   }
 
-  // 从 URL 还原包含标签；详情页的标签链接带 tag/name/path 三个参数。
-  function restoreTagsFromUrl() {
-    const params = new URLSearchParams(window.location.search);
-    const ids = params.getAll("tag");
-    const names = params.getAll("name");
-    const paths = params.getAll("path");
+  includeModeToggle.addEventListener("click", () => {
+    includeMode = includeMode === "ALL" ? "ANY" : "ALL";
+    renderStaging();
+    syncTagsToUrl();
+    search(true);
+  });
+
+  function appendTagParams(params, tags, idKey, nameKey, pathKey) {
+    for (const tag of tags) {
+      params.append(idKey, tag.id);
+      params.append(nameKey, tag.name);
+      if (tag.path) {
+        params.append(pathKey, tag.path);
+      }
+    }
+  }
+
+  function restoreTagList(params, idKey, nameKey, pathKey, target) {
+    const ids = params.getAll(idKey);
+    const names = params.getAll(nameKey);
+    const paths = params.getAll(pathKey);
     for (let index = 0; index < ids.length; index += 1) {
       const id = (ids[index] || "").trim().toLowerCase();
-      if (!UUID_PATTERN.test(id)) {
+      if (!UUID_PATTERN.test(id) || target.some((tag) => tag.id === id)) {
         continue;
       }
       const path = paths[index] || "";
@@ -341,21 +370,50 @@
         (names[index] || "").trim() ||
         (path ? path.split("::").pop() : "") ||
         "标签";
-      if (!includeTags.some((tag) => tag.id === id)) {
-        includeTags.push({ id, name, path });
-      }
+      target.push({ id, name, path });
     }
   }
 
-  // 让 URL 始终反映包含暂存区，刷新或分享后仍能还原。
+  // 从 URL 还原包含/排除标签和包含模式。
+  function restoreTagsFromUrl() {
+    const params = new URLSearchParams(window.location.search);
+    restoreTagList(params, "tag", "name", "path", includeTags);
+    restoreTagList(
+      params,
+      "excludeTag",
+      "excludeName",
+      "excludePath",
+      excludeTags,
+    );
+
+    // 同一个标签不能既包含又不包含，URL 冲突时以排除为准。
+    for (const tag of excludeTags) {
+      const index = includeTags.findIndex((item) => item.id === tag.id);
+      if (index >= 0) {
+        includeTags.splice(index, 1);
+      }
+    }
+
+    const rawIncludeMode = (params.get("includeMode") || "")
+      .trim()
+      .toLowerCase();
+    includeMode =
+      rawIncludeMode === "any" && includeTags.length > 0 ? "ANY" : "ALL";
+  }
+
+  // 让 URL 始终反映包含/排除暂存区和包含模式。
   function syncTagsToUrl() {
     const params = new URLSearchParams();
-    for (const tag of includeTags) {
-      params.append("tag", tag.id);
-      params.append("name", tag.name);
-      if (tag.path) {
-        params.append("path", tag.path);
-      }
+    appendTagParams(params, includeTags, "tag", "name", "path");
+    appendTagParams(
+      params,
+      excludeTags,
+      "excludeTag",
+      "excludeName",
+      "excludePath",
+    );
+    if (includeMode === "ANY" && includeTags.length > 0) {
+      params.set("includeMode", "any");
     }
     const query = params.toString();
     const url = query
@@ -407,11 +465,12 @@
     }
     if (includeTags.length > 0) {
       filter.includeTagIds = includeTags.map((tag) => tag.id);
-      // 包含暂存区里的标签必须全部命中。
-      filter.includeMode = "ALL";
+      filter.includeMode = includeMode;
+      filter.expandIncludeTagDescendants = true;
     }
     if (excludeTags.length > 0) {
       filter.excludeTagIds = excludeTags.map((tag) => tag.id);
+      filter.expandExcludeTagDescendants = true;
     }
     return Object.keys(filter).length > 0 ? filter : null;
   }
@@ -2044,6 +2103,7 @@
   // 初次打开展示最近的 24 个作品；URL 带标签时先还原包含条件。
   restoreTagsFromUrl();
   renderStaging();
+  syncTagsToUrl();
   renderAddTags();
   updateAddMode();
   bindSelectionUi();

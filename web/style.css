@@ -492,6 +492,31 @@ a.brand {
   gap: 6px;
 }
 
+.tag-stage-mode {
+  flex: none;
+  margin-left: auto;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+}
+
+.tag-stage-mode:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.tag-stage-mode[hidden] {
+  display: none;
+}
+
 /* 弹窗里的添加模式 */
 .mode-options {
   display: flex;

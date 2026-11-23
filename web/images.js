@@ -146,6 +146,7 @@
   const excludeStageRow = document.getElementById("exclude-stage-row");
   const includeStage = document.getElementById("include-stage");
   const excludeStage = document.getElementById("exclude-stage");
+  const includeModeToggle = document.getElementById("include-mode-toggle");
   const statusLine = document.getElementById("image-status");
   const results = document.getElementById("image-results");
   const layoutTools = document.getElementById("layout-tools");
@@ -291,6 +292,7 @@
 
   const includeTags = [];
   const excludeTags = [];
+  let includeMode = "ALL";
 
   let order = "created";
   let sortText = "";
@@ -467,6 +469,9 @@
       return;
     }
     list.splice(index, 1);
+    if (kind === "include" && includeTags.length === 0) {
+      includeMode = "ALL";
+    }
     renderStaging();
     syncStateToUrl();
     clearSelection();
@@ -488,13 +493,29 @@
   }
 
   function renderStaging() {
+    if (includeTags.length === 0) {
+      includeMode = "ALL";
+    }
     fillStage(includeStage, includeTags, "include");
     fillStage(excludeStage, excludeTags, "exclude");
     includeStageRow.hidden = includeTags.length === 0;
     excludeStageRow.hidden = excludeTags.length === 0;
     tagStaging.hidden =
       includeTags.length === 0 && excludeTags.length === 0;
+    includeModeToggle.hidden = includeTags.length === 0;
+    includeModeToggle.textContent = includeMode;
+    includeModeToggle.title =
+      includeMode === "ALL"
+        ? "当前 ALL，点击切换为 ANY"
+        : "当前 ANY，点击切换为 ALL";
   }
+
+  includeModeToggle.addEventListener("click", () => {
+    includeMode = includeMode === "ALL" ? "ANY" : "ALL";
+    renderStaging();
+    syncStateToUrl();
+    search(true);
+  });
 
   async function addTagFromInput(kind) {
     const normalized = TagSearch.trimPathSuffix(tagInput.value);
@@ -1481,6 +1502,12 @@
       }
     }
 
+    const rawIncludeMode = (params.get("includeMode") || "")
+      .trim()
+      .toLowerCase();
+    includeMode =
+      rawIncludeMode === "any" && includeTags.length > 0 ? "ANY" : "ALL";
+
     const rawSimilar = (params.get("similar") || "").trim().toLowerCase();
     if (UUID_PATTERN.test(rawSimilar)) {
       referenceImageId = rawSimilar;
@@ -1510,6 +1537,9 @@
       "excludeName",
       "excludePath",
     );
+    if (includeMode === "ANY" && includeTags.length > 0) {
+      params.set("includeMode", "any");
+    }
     if (hasReferenceImage()) {
       params.set("similar", referenceImageId);
     } else {
@@ -1533,10 +1563,12 @@
     const filter = {};
     if (includeTags.length > 0) {
       filter.includeTagIds = includeTags.map((tag) => tag.id);
-      filter.includeMode = "ALL";
+      filter.includeMode = includeMode;
+      filter.expandIncludeTagDescendants = true;
     }
     if (excludeTags.length > 0) {
       filter.excludeTagIds = excludeTags.map((tag) => tag.id);
+      filter.expandExcludeTagDescendants = true;
     }
     return Object.keys(filter).length > 0 ? filter : null;
   }
