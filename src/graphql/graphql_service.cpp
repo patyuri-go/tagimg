@@ -27,6 +27,7 @@
 #include "graphql/ArtworkConnectionObject.h"
 #include "graphql/ArtworkObject.h"
 #include "graphql/DeleteArtworkResultObject.h"
+#include "graphql/DeleteImageResultObject.h"
 #include "graphql/ImageArtworkObject.h"
 #include "graphql/ImageConnectionObject.h"
 #include "graphql/ImageObject.h"
@@ -855,6 +856,26 @@ private:
   DeleteArtworkResult result_;
 };
 
+class DeleteImageResultModel {
+public:
+  explicit DeleteImageResultModel(DeleteImageResult result)
+      : result_(result) {
+  }
+
+  gql::service::AwaitableScalar<int> getDeletedCount() const {
+    return gql::service::AwaitableScalar<int>(
+        static_cast<int>(result_.deleted_count));
+  }
+
+  gql::service::AwaitableScalar<std::vector<IdType>> getMissingIds() const {
+    return gql::service::AwaitableScalar<std::vector<IdType>>(
+        to_id_list(result_.missing_ids));
+  }
+
+private:
+  DeleteImageResult result_;
+};
+
 [[noreturn]] void fail_repository(TagimgRepositoryError error) {
   switch (error) {
   case TagimgRepositoryError::InvalidArgument:
@@ -1477,6 +1498,43 @@ public:
         std::shared_ptr<gql::tagimg::object::DeleteArtworkResult>>(
         std::make_shared<gql::tagimg::object::DeleteArtworkResult>(
             std::make_shared<DeleteArtworkResultModel>(*result)));
+  }
+
+  gql::service::AwaitableObject<
+      std::shared_ptr<gql::tagimg::object::DeleteImageResult>>
+  applyDeleteImages(std::vector<IdType> ids) const {
+    if (ids.empty()) {
+      fail("INVALID_ARGUMENT", "ids must not be empty");
+    }
+
+    // 校验全部 ID 后再调用 repository，非法 UUID 不会删掉任何图片。
+    // 忽略大小写去重，保留首次出现的文本形式。
+    std::vector<std::string> text_ids;
+    text_ids.reserve(ids.size());
+    std::set<std::string> seen;
+    for (const IdType &id : ids) {
+      std::string text = id_text(id);
+      if (!is_uuid(text)) {
+        fail("INVALID_ARGUMENT", "ids must contain uuid strings");
+      }
+      std::string key = text;
+      std::transform(key.begin(), key.end(), key.begin(), [](unsigned char ch) {
+        return static_cast<char>(std::tolower(ch));
+      });
+      if (seen.insert(key).second) {
+        text_ids.push_back(std::move(text));
+      }
+    }
+
+    const auto result = repository_->delete_images(text_ids);
+    if (!result) {
+      fail_repository(result.error());
+    }
+
+    return gql::service::AwaitableObject<
+        std::shared_ptr<gql::tagimg::object::DeleteImageResult>>(
+        std::make_shared<gql::tagimg::object::DeleteImageResult>(
+            std::make_shared<DeleteImageResultModel>(*result)));
   }
 
   gql::service::AwaitableScalar<IdType>

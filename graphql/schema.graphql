@@ -277,6 +277,14 @@ type DeleteArtworkResult {
   newlyOrphanedImageCount: Int!
 }
 
+"删除图片的结果。"
+type DeleteImageResult {
+  "实际删除的图片数量；不存在的图片不计入。"
+  deletedCount: Int!
+  "请求中不存在、因此没有删除的图片 ID，按请求顺序返回。"
+  missingIds: [ID!]!
+}
+
 "已入库的作品。"
 type Artwork {
   "作品 ID。"
@@ -569,6 +577,17 @@ type Mutation {
   ids 不能为空；包含非法 UUID 时整个请求失败并回滚。
   """
   deleteArtworks(ids: [ID!]!): DeleteArtworkResult!
+
+  """
+  批量删除图片，单事务原子执行。
+
+  图片会从所有关联作品中移除，作品可能因此变空，但不会自动删除作品。
+  剩余图片在作品内的 position 不重排；受影响的作会刷新 updatedAt。
+  图片标签和 Chinese-CLIP 向量随图片级联删除；外部存储中的原图和本地
+  缓存不会被删除。不存在的图片 ID 会被忽略并放入 missingIds。
+  ids 不能为空；包含非法 UUID 时整个请求失败并回滚。
+  """
+  deleteImages(ids: [ID!]!): DeleteImageResult!
 
   """
   更新作品的标题、发布时间和标签，返回作品 ID。

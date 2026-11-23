@@ -1237,6 +1237,8 @@ void AddTypesToSchema(const std::shared_ptr<schema::Schema>& schema)
 	schema->AddType(R"gql(OrphanImage)gql"sv, typeOrphanImage);
 	auto typeDeleteArtworkResult = schema::ObjectType::Make(R"gql(DeleteArtworkResult)gql"sv, R"md(删除作品的结果。)md"sv);
 	schema->AddType(R"gql(DeleteArtworkResult)gql"sv, typeDeleteArtworkResult);
+	auto typeDeleteImageResult = schema::ObjectType::Make(R"gql(DeleteImageResult)gql"sv, R"md(删除图片的结果。)md"sv);
+	schema->AddType(R"gql(DeleteImageResult)gql"sv, typeDeleteImageResult);
 	auto typeArtwork = schema::ObjectType::Make(R"gql(Artwork)gql"sv, R"md(已入库的作品。)md"sv);
 	schema->AddType(R"gql(Artwork)gql"sv, typeArtwork);
 	auto typeImageArtwork = schema::ObjectType::Make(R"gql(ImageArtwork)gql"sv, R"md(图片所属的作品摘要。)md"sv);
@@ -1356,6 +1358,7 @@ void AddTypesToSchema(const std::shared_ptr<schema::Schema>& schema)
 	AddOrphanImageConnectionDetails(typeOrphanImageConnection, schema);
 	AddOrphanImageDetails(typeOrphanImage, schema);
 	AddDeleteArtworkResultDetails(typeDeleteArtworkResult, schema);
+	AddDeleteImageResultDetails(typeDeleteImageResult, schema);
 	AddArtworkDetails(typeArtwork, schema);
 	AddImageArtworkDetails(typeImageArtwork, schema);
 	AddImageDetails(typeImage, schema);

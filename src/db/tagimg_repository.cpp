@@ -114,6 +114,23 @@ WHERE i.id = ANY(CAST(:image_ids AS uuid[]))
   )
 )sql";
 
+// 图片删除会级联改变作品内容，因此先刷新受影响作品的更新时间。
+constexpr const char *kTouchArtworksForImagesSql = R"sql(
+UPDATE artworks
+SET updated_at = now()
+WHERE id IN (
+  SELECT artwork_id
+  FROM artwork_images
+  WHERE image_id = ANY(CAST(:image_ids AS uuid[]))
+)
+)sql";
+
+constexpr const char *kDeleteImagesSql = R"sql(
+DELETE FROM images
+WHERE id = ANY(CAST(:image_ids AS uuid[]))
+RETURNING id::text
+)sql";
+
 // 编辑作品：先锁行，确保同一作品的并发更新串行执行。
 constexpr const char *kLockArtworkSql = R"sql(
 SELECT id::text
@@ -2793,6 +2810,68 @@ TagimgRepository::delete_artworks(
       long long orphaned = 0;
       sql << kCountOrphanAmongSql, soci::use(image_array), soci::into(orphaned);
       result.newly_orphaned_image_count = static_cast<std::size_t>(orphaned);
+    }
+
+    transaction.commit();
+    return result;
+  } catch (const std::exception &) {
+    return TagimgRepositoryError::QueryFailed;
+  }
+}
+
+Result<DeleteImageResult, TagimgRepositoryError>
+TagimgRepository::delete_images(const std::vector<std::string> &image_ids) const {
+  if (image_ids.empty()) {
+    return TagimgRepositoryError::InvalidArgument;
+  }
+
+  // 先校验全部 ID，非法 UUID 不做任何删除。
+  std::vector<std::string> ids;
+  ids.reserve(image_ids.size());
+  std::set<std::string> seen;
+  for (const std::string &image_id : image_ids) {
+    if (!is_uuid(image_id)) {
+      return TagimgRepositoryError::InvalidArgument;
+    }
+    std::string key = ascii_lower(image_id);
+    if (seen.insert(key).second) {
+      ids.push_back(image_id);
+    }
+  }
+
+  if (!impl_ || !impl_->pool) {
+    return TagimgRepositoryError::ConnectionFailed;
+  }
+
+  try {
+    db_detail::PoolLease lease(*impl_->pool);
+    soci::session &sql = impl_->pool->at(lease.position());
+    soci::transaction transaction(sql);
+
+    const std::string image_array = uuid_array_literal(ids);
+
+    // 图片行删除后 artwork_images 会级联消失，先根据当前关联刷新作品。
+    sql << kTouchArtworksForImagesSql, soci::use(image_array);
+
+    std::vector<std::string> deleted_ids;
+    {
+      soci::rowset<soci::row> deleted_rows = (sql.prepare
+          << kDeleteImagesSql, soci::use(image_array));
+      for (const soci::row &row : deleted_rows) {
+        deleted_ids.push_back(row.get<std::string>(0));
+      }
+    }
+
+    DeleteImageResult result;
+    result.deleted_count = deleted_ids.size();
+    std::set<std::string> deleted_keys;
+    for (const std::string &deleted_id : deleted_ids) {
+      deleted_keys.insert(ascii_lower(deleted_id));
+    }
+    for (const std::string &image_id : ids) {
+      if (deleted_keys.find(ascii_lower(image_id)) == deleted_keys.end()) {
+        result.missing_ids.push_back(image_id);
+      }
     }
 
     transaction.commit();

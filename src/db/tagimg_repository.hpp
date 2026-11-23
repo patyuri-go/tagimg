@@ -383,6 +383,13 @@ struct DeleteArtworkResult {
   std::size_t newly_orphaned_image_count = 0;
 };
 
+struct DeleteImageResult {
+  // 实际删除的图片数量；不存在的图片不计入。
+  std::size_t deleted_count = 0;
+  // 请求中不存在、因此没有删除的图片 ID，按请求顺序返回。
+  std::vector<std::string> missing_ids;
+};
+
 // 作品写入事务。
 //
 // begin_artwork_update() 打开事务并锁定作品行，之后所有写入都在同一个
@@ -535,6 +542,12 @@ public:
   // 至少删除一个作品时 deleted=true。空数组返回 InvalidArgument。
   [[nodiscard]] Result<DeleteArtworkResult, TagimgRepositoryError>
   delete_artworks(const std::vector<std::string> &artwork_ids) const;
+
+  // 批量删除图片；图片标签、作品关联和 CLIP 向量级联清理。
+  // 所有删除在同一个事务里完成；受影响的作会刷新 updated_at。
+  // 不存在的图片 ID 忽略并放入 missing_ids；空数组返回 InvalidArgument。
+  [[nodiscard]] Result<DeleteImageResult, TagimgRepositoryError>
+  delete_images(const std::vector<std::string> &image_ids) const;
 
   // 打开作品写入事务；作品不存在时返回 std::nullopt。
   //

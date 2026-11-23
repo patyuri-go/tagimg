@@ -357,6 +357,7 @@ class ImageConnection;
 class OrphanImageConnection;
 class OrphanImage;
 class DeleteArtworkResult;
+class DeleteImageResult;
 class Artwork;
 class ImageArtwork;
 class Image;
@@ -396,6 +397,7 @@ void AddImageConnectionDetails(const std::shared_ptr<schema::ObjectType>& typeIm
 void AddOrphanImageConnectionDetails(const std::shared_ptr<schema::ObjectType>& typeOrphanImageConnection, const std::shared_ptr<schema::Schema>& schema);
 void AddOrphanImageDetails(const std::shared_ptr<schema::ObjectType>& typeOrphanImage, const std::shared_ptr<schema::Schema>& schema);
 void AddDeleteArtworkResultDetails(const std::shared_ptr<schema::ObjectType>& typeDeleteArtworkResult, const std::shared_ptr<schema::Schema>& schema);
+void AddDeleteImageResultDetails(const std::shared_ptr<schema::ObjectType>& typeDeleteImageResult, const std::shared_ptr<schema::Schema>& schema);
 void AddArtworkDetails(const std::shared_ptr<schema::ObjectType>& typeArtwork, const std::shared_ptr<schema::Schema>& schema);
 void AddImageArtworkDetails(const std::shared_ptr<schema::ObjectType>& typeImageArtwork, const std::shared_ptr<schema::Schema>& schema);
 void AddImageDetails(const std::shared_ptr<schema::ObjectType>& typeImage, const std::shared_ptr<schema::Schema>& schema);

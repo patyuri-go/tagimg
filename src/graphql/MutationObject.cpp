@@ -5,6 +5,7 @@
 
 #include "MutationObject.h"
 #include "DeleteArtworkResultObject.h"
+#include "DeleteImageResultObject.h"
 #include "TagObject.h"
 
 #include "graphqlservice/internal/Schema.h"
@@ -44,6 +45,7 @@ service::ResolverMap Mutation::getResolvers() const noexcept
 		{ R"gql(addArtwork)gql"sv, [this](service::ResolverParams&& params) { return resolveAddArtwork(std::move(params)); } },
 		{ R"gql(updateImages)gql"sv, [this](service::ResolverParams&& params) { return resolveUpdateImages(std::move(params)); } },
 		{ R"gql(deleteArtworks)gql"sv, [this](service::ResolverParams&& params) { return resolveDeleteArtwork(std::move(params)); } },
+		{ R"gql(deleteImages)gql"sv, [this](service::ResolverParams&& params) { return resolveDeleteImages(std::move(params)); } },
 		{ R"gql(rescanArtwork)gql"sv, [this](service::ResolverParams&& params) { return resolveRescanArtwork(std::move(params)); } },
 		{ R"gql(updateArtwork)gql"sv, [this](service::ResolverParams&& params) { return resolveUpdateArtwork(std::move(params)); } },
 		{ R"gql(addArtworkFromImages)gql"sv, [this](service::ResolverParams&& params) { return resolveAddArtworkFromImages(std::move(params)); } }
@@ -106,6 +108,18 @@ service::AwaitableResolver Mutation::resolveDeleteArtwork(service::ResolverParam
 	resolverLock.unlock();
 
 	return service::ModifiedResult<DeleteArtworkResult>::convert(std::move(result), std::move(params));
+}
+
+service::AwaitableResolver Mutation::resolveDeleteImages(service::ResolverParams&& params) const
+{
+	auto argIds = service::ModifiedArgument<response::IdType>::require<service::TypeModifier::List>("ids", params.arguments);
+	std::unique_lock resolverLock(_resolverMutex);
+	service::SelectionSetParams selectionSetParams { static_cast<const service::SelectionSetParams&>(params) };
+	auto directives = std::move(params.fieldDirectives);
+	auto result = _pimpl->applyDeleteImages(service::FieldParams { std::move(selectionSetParams), std::move(directives) }, std::move(argIds));
+	resolverLock.unlock();
+
+	return service::ModifiedResult<DeleteImageResult>::convert(std::move(result), std::move(params));
 }
 
 service::AwaitableResolver Mutation::resolveUpdateArtwork(service::ResolverParams&& params) const
@@ -195,6 +209,14 @@ rescan 为 true 时逐张重新扫描并合并扫描标签；任一图片失败�
 与其他未删除作品共用的图片保持关联。
 不存在的作品 ID 会被忽略；只要至少真正删除了一个作品，deleted 即为 true。
 ids 不能为空；包含非法 UUID 时整个请求失败并回滚。)md"sv, std::nullopt, schema->WrapType(introspection::TypeKind::NON_NULL, schema->LookupType(R"gql(DeleteArtworkResult)gql"sv)), {
+			schema::InputValue::Make(R"gql(ids)gql"sv, R"md()md"sv, schema->WrapType(introspection::TypeKind::LIST, schema->WrapType(introspection::TypeKind::NON_NULL, schema->LookupType(R"gql(ID)gql"sv))), R"gql()gql"sv)
+		}),
+		schema::Field::Make(R"gql(deleteImages)gql"sv, R"md(批量删除图片，单事务原子执行。
+
+图片会从所有关联作品中移除，作品可能因此变空；剩余图片的 position
+不重排，受影响作品的 updatedAt 会刷新。图片标签与 CLIP 向量级联清理。
+不存在的图片 ID 会被忽略并放入 missingIds；ids 不能为空；
+包含非法 UUID 时整个请求失败并回滚。外部原图与本地缓存不会删除。)md"sv, std::nullopt, schema->WrapType(introspection::TypeKind::NON_NULL, schema->LookupType(R"gql(DeleteImageResult)gql"sv)), {
 			schema::InputValue::Make(R"gql(ids)gql"sv, R"md()md"sv, schema->WrapType(introspection::TypeKind::LIST, schema->WrapType(introspection::TypeKind::NON_NULL, schema->LookupType(R"gql(ID)gql"sv))), R"gql()gql"sv)
 		}),
 		schema::Field::Make(R"gql(updateArtwork)gql"sv, R"md(更新作品的标题、发布时间和标签，返回作品 ID。

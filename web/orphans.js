@@ -31,12 +31,22 @@
     }
   `;
 
+  const DELETE_IMAGES_MUTATION = `
+    mutation DeleteImages($ids: [ID!]!) {
+      deleteImages(ids: $ids) {
+        deletedCount
+        missingIds
+      }
+    }
+  `;
+
   const grid = document.getElementById("orphan-grid");
   const status = document.getElementById("orphan-status");
   const notice = document.getElementById("orphan-notice");
   const empty = document.getElementById("orphan-empty");
   const scrollStatus = document.getElementById("orphan-scroll-status");
   const addButton = document.getElementById("orphan-add-button");
+  const deleteButton = document.getElementById("orphan-delete-button");
 
   const addDialog = document.getElementById("orphan-add-dialog");
   const addForm = document.getElementById("orphan-add-form");
@@ -71,6 +81,8 @@
   let loading = false;
   let total = null;
   let loadVersion = 0;
+  let deleting = false;
+  let confirming = false;
 
   // 标签联想与暂存区。
   const tags = [];
@@ -154,9 +166,17 @@
   }
 
   function updateAddButton() {
-    addButton.disabled = selected.size === 0;
+    addButton.disabled = selected.size === 0 || deleting;
     addButton.textContent =
       selected.size > 0 ? `添加 (${selected.size})` : "添加";
+    deleteButton.disabled = selected.size === 0 || deleting;
+    if (deleting) {
+      deleteButton.textContent = "删除中…";
+    } else if (selected.size > 0) {
+      deleteButton.textContent = `删除选中 (${selected.size})`;
+    } else {
+      deleteButton.textContent = "删除选中";
+    }
   }
 
   function refreshSelection() {
@@ -191,6 +211,102 @@
 
   function selectedItems() {
     return items.filter((item) => selected.has(item.id));
+  }
+
+  async function deleteSelected() {
+    if (deleting || selected.size === 0) {
+      return;
+    }
+
+    const removed = selectedItems();
+    const ids = removed.map((item) => item.id);
+    const count = ids.length;
+
+    let confirmed = false;
+    confirming = true;
+    try {
+      confirmed = await window.ConfirmDialog.open({
+        title: "删除图片",
+        message: `确定删除选中的 ${count} 张图片吗？\n\n图片将从数据库永久删除，无法恢复；外部存储中的原图文件不会被删除。`,
+        confirmText: "删除",
+        cancelText: "取消",
+        danger: true,
+      });
+    } catch (error) {
+      setNotice(error.message || "无法打开确认对话框", true);
+      return;
+    } finally {
+      confirming = false;
+    }
+    if (!confirmed) {
+      return;
+    }
+
+    deleting = true;
+    // 让正在返回的旧列表请求失效，避免删除后又被旧数据覆盖。
+    loadVersion += 1;
+    loading = false;
+    setScrollStatus("");
+    updateAddButton();
+
+    try {
+      const data = await graphql(DELETE_IMAGES_MUTATION, { ids });
+      const result = data.deleteImages;
+      if (!result) {
+        throw new Error("服务端没有返回删除结果");
+      }
+      const deletedCount = Number(result.deletedCount) || 0;
+      const missingIds = Array.isArray(result.missingIds)
+        ? result.missingIds
+        : [];
+
+      if (missingIds.length > 0) {
+        // 有图片在别处已被删除，列表偏移不再可靠，直接从服务端重载。
+        await resetAndLoad();
+        setNotice(
+          deletedCount > 0
+            ? `已删除 ${deletedCount} 张，${missingIds.length} 张已不存在`
+            : "选中的图片已不存在，列表已刷新",
+        );
+        return;
+      }
+
+      const idSet = new Set(ids);
+      for (let index = items.length - 1; index >= 0; index -= 1) {
+        if (idSet.has(items[index].id)) {
+          items.splice(index, 1);
+        }
+      }
+      for (const id of ids) {
+        const card = cards.get(id);
+        if (card) {
+          card.remove();
+          cards.delete(id);
+        }
+      }
+      selected.clear();
+
+      if (total !== null) {
+        total = Math.max(0, total - deletedCount);
+      }
+      nextOffset = Math.max(0, nextOffset - deletedCount);
+      empty.hidden = items.length > 0;
+      updateStatus();
+      updateAddButton();
+      setNotice(`已删除 ${deletedCount} 张图片`);
+
+      if (items.length === 0 && hasMore) {
+        await loadNextPage(true);
+      } else if (!hasMore) {
+        setScrollStatus(items.length > 0 ? "没有更多了" : "");
+      }
+    } catch (error) {
+      setNotice(error.message || "删除失败", true);
+    } finally {
+      deleting = false;
+      updateAddButton();
+      maybeLoadMore();
+    }
   }
 
   function makePlaceholder(text) {
@@ -297,7 +413,7 @@
   }
 
   function maybeLoadMore() {
-    if (loading || !hasMore) {
+    if (deleting || loading || !hasMore) {
       return;
     }
     const remaining =
@@ -309,8 +425,8 @@
     }
   }
 
-  async function loadNextPage() {
-    if (loading || !hasMore) {
+  async function loadNextPage(force = false) {
+    if (loading || !hasMore || (deleting && !force)) {
       return;
     }
     loading = true;
@@ -374,7 +490,7 @@
     setScrollStatus("");
     updateStatus();
     updateAddButton();
-    await loadNextPage();
+    await loadNextPage(true);
   }
 
   function renderTags() {
@@ -633,6 +749,7 @@
   }
 
   addButton.addEventListener("click", openAddDialog);
+  deleteButton.addEventListener("click", deleteSelected);
   addCancel.addEventListener("click", () => addDialog.close());
   addClose.addEventListener("click", () => addDialog.close());
   addDialog.addEventListener("click", (event) => {
@@ -642,6 +759,19 @@
     }
   });
   addForm.addEventListener("submit", submitAdd);
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape" || event.defaultPrevented) {
+      return;
+    }
+    if (addDialog.open || confirming || deleting) {
+      return;
+    }
+    if (selected.size > 0) {
+      event.preventDefault();
+      clearSelection();
+    }
+  });
 
   window.addEventListener("scroll", maybeLoadMore, { passive: true });
   window.addEventListener("resize", maybeLoadMore);

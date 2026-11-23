@@ -94,6 +94,14 @@ target_link_libraries(tagimg_delete_artworks_smoke PRIVATE
     tagimg_db
 )
 
+add_executable(tagimg_delete_images_smoke
+    tools/delete_images_smoke.cpp
+)
+target_link_libraries(tagimg_delete_images_smoke PRIVATE
+    tagimg_config
+    tagimg_db
+)
+
 add_library(tagimg_config STATIC
     src/common/config.cpp
 )
@@ -243,6 +251,7 @@ add_library(tagimg_graphql STATIC
     src/graphql/ArtworkConnectionObject.cpp
     src/graphql/ArtworkObject.cpp
     src/graphql/DeleteArtworkResultObject.cpp
+    src/graphql/DeleteImageResultObject.cpp
     src/graphql/ImageArtworkObject.cpp
     src/graphql/ImageConnectionObject.cpp
     src/graphql/ImageObject.cpp
