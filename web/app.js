@@ -64,6 +64,15 @@
     }
   `;
 
+  const DELETE_ARTWORKS_MUTATION = `
+    mutation DeleteArtworks($ids: [ID!]!) {
+      deleteArtworks(ids: $ids) {
+        deleted
+        newlyOrphanedImageCount
+      }
+    }
+  `;
+
   const UUID_PATTERN =
     /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   // 与服务端一致，只检查 RFC3339 的形状。
@@ -125,6 +134,14 @@
   const addTagSuggest = document.getElementById("add-tag-suggest");
   const addTagStage = document.getElementById("add-tag-stage");
 
+  const selectionCard = document.getElementById("artwork-selection-card");
+  const selectionCount = document.getElementById("artwork-selection-count");
+  const selectionClose = document.getElementById("artwork-selection-close");
+  const selectionHint = document.getElementById("artwork-selection-hint");
+  const selectionError = document.getElementById("artwork-selection-error");
+  const selectionCancel = document.getElementById("artwork-selection-cancel");
+  const selectionDelete = document.getElementById("artwork-selection-delete");
+
   // 无限滚动提前量：滚动到距底部这个距离时开始下一页。
   const LOAD_MORE_MARGIN = 400;
 
@@ -148,6 +165,24 @@
     radius: 14,
     columns: 4,
     height: 240,
+  };
+
+  // 多选状态按作品 id 保存完整 item，卡片滚出视口或重新渲染后仍能保留。
+  const artworkItems = new Map();
+  const selectedArtworkItems = new Map();
+  let selectionDeleting = false;
+  let suppressSelectionClick = false;
+  let suppressSelectionClickTimer = 0;
+  const selectionDrag = {
+    active: false,
+    pointerId: null,
+    startX: 0,
+    startY: 0,
+    lastX: 0,
+    lastY: 0,
+    moved: false,
+    scrollSpeed: 0,
+    scrollFrame: 0,
   };
 
   // 标签输入联想与路径解析统一放在 tag-search.js，主搜索框和弹窗各建一个实例。
@@ -251,6 +286,7 @@
     }
     renderStaging();
     syncTagsToUrl();
+    clearArtworkSelection();
     search(true);
   }
 
@@ -263,6 +299,7 @@
     list.splice(index, 1);
     renderStaging();
     syncTagsToUrl();
+    clearArtworkSelection();
     search(true);
   }
 
@@ -511,6 +548,9 @@
     image.loading = "lazy";
     image.decoding = "async";
     image.alt = item.title || "作品图片";
+    // 多选拖拽经过缩略图时不要启动浏览器原生的图片拖动。
+    image.draggable = false;
+    image.addEventListener("dragstart", (event) => event.preventDefault());
     image.addEventListener(
       "error",
       () => {
@@ -551,6 +591,9 @@
     const card = document.createElement("a");
     card.className = "card";
     card.href = `/artwork.html?id=${encodeURIComponent(item.id)}`;
+    card.dataset.artworkId = item.id;
+    // 多选拖拽时不要触发浏览器原生的链接拖动。
+    card.draggable = false;
 
     const body = document.createElement("div");
     body.className = "card-body";
@@ -622,6 +665,7 @@
     }
 
     card.append(thumb, body);
+    applyArtworkSelectionToCard(card);
     return card;
   }
 
@@ -771,6 +815,7 @@
       hasMore = false;
       allCards = [];
       columns = [];
+      artworkItems.clear();
       results.replaceChildren();
     }
 
@@ -786,6 +831,11 @@
       const data = await requestArtworks(filter, offset, controller.signal);
       if (inFlight !== controller) {
         return;
+      }
+
+      // 记录本页作品，供多选点击时从卡片 id 反查完整 item。
+      for (const item of data.items) {
+        artworkItems.set(item.id, item);
       }
 
       // 第一页还没有列时先建列；后续分页只追加，不重排旧卡片。
@@ -832,6 +882,450 @@
         inFlight = null;
       }
     }
+  }
+
+  // ---------- 作品多选与批量删除 ----------
+
+  function multiSelectEnabled() {
+    if (window.innerWidth < 900) {
+      return false;
+    }
+    if (
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(hover: none)").matches
+    ) {
+      return false;
+    }
+    return true;
+  }
+
+  function selectionLocked() {
+    return selectionDeleting;
+  }
+
+  function setSelectionError(message) {
+    selectionError.textContent = message || "";
+    selectionError.hidden = !message;
+  }
+
+  function applyArtworkSelectionToCard(card) {
+    if (!card || !card.dataset) {
+      return;
+    }
+    const id = card.dataset.artworkId;
+    card.classList.toggle(
+      "is-selected",
+      Boolean(id) && selectedArtworkItems.has(id),
+    );
+  }
+
+  function updateSelectionUi() {
+    const count = selectedArtworkItems.size;
+    selectionCount.textContent = String(count);
+    selectionCard.hidden = count === 0;
+
+    const locked = selectionLocked();
+    selectionClose.disabled = locked;
+    selectionCancel.disabled = locked;
+    selectionDelete.disabled = locked;
+    selectionDelete.textContent = locked ? "正在删除…" : "批量删除";
+    selectionHint.textContent = locked
+      ? "正在删除选中的作品…"
+      : "按住 Ctrl / Cmd 点击或拖拽可继续多选，Esc 取消。";
+  }
+
+  function setArtworkSelected(item, selected) {
+    if (!item) {
+      return;
+    }
+    if (selected) {
+      selectedArtworkItems.set(item.id, item);
+    } else {
+      selectedArtworkItems.delete(item.id);
+    }
+    for (const card of allCards) {
+      if (card.dataset && card.dataset.artworkId === item.id) {
+        card.classList.toggle("is-selected", selected);
+      }
+    }
+    updateSelectionUi();
+  }
+
+  function addArtworkSelection(item) {
+    if (!multiSelectEnabled() || selectionLocked() || !item) {
+      return;
+    }
+    if (!selectedArtworkItems.has(item.id)) {
+      setArtworkSelected(item, true);
+    }
+  }
+
+  function toggleArtworkSelection(item) {
+    if (!multiSelectEnabled() || selectionLocked() || !item) {
+      return;
+    }
+    setArtworkSelected(item, !selectedArtworkItems.has(item.id));
+  }
+
+  function clearArtworkSelection() {
+    finishSelectionDrag(false);
+    selectedArtworkItems.clear();
+    for (const card of allCards) {
+      card.classList.remove("is-selected");
+    }
+    setSelectionError("");
+    updateSelectionUi();
+  }
+
+  function selectArtworkAtPoint(x, y) {
+    let target = null;
+    if (typeof document.elementFromPoint === "function") {
+      target = document.elementFromPoint(x, y);
+    }
+    if (!target || typeof target.closest !== "function") {
+      return;
+    }
+    const card = target.closest(".card");
+    if (!card || !results.contains(card)) {
+      return;
+    }
+    const item = card.dataset.artworkId
+      ? artworkItems.get(card.dataset.artworkId)
+      : null;
+    if (item) {
+      addArtworkSelection(item);
+    }
+  }
+
+  function tickArtworkSelectionAutoScroll() {
+    if (!selectionDrag.active || !selectionDrag.scrollSpeed) {
+      selectionDrag.scrollFrame = 0;
+      return;
+    }
+    window.scrollBy(0, selectionDrag.scrollSpeed);
+    selectArtworkAtPoint(selectionDrag.lastX, selectionDrag.lastY);
+    selectionDrag.scrollFrame = window.requestAnimationFrame(
+      tickArtworkSelectionAutoScroll,
+    );
+  }
+
+  function updateArtworkSelectionAutoScroll(x, y) {
+    const margin = 72;
+    const maxSpeed = 45;
+    let speed = 0;
+    if (y < margin) {
+      speed = -maxSpeed * Math.min(1, (margin - y) / margin);
+    } else if (y > window.innerHeight - margin) {
+      speed =
+        maxSpeed *
+        Math.min(1, (y - (window.innerHeight - margin)) / margin);
+    }
+    selectionDrag.scrollSpeed = speed;
+
+    if (speed !== 0 && !selectionDrag.scrollFrame) {
+      selectionDrag.scrollFrame = window.requestAnimationFrame(
+        tickArtworkSelectionAutoScroll,
+      );
+    } else if (speed === 0 && selectionDrag.scrollFrame) {
+      window.cancelAnimationFrame(selectionDrag.scrollFrame);
+      selectionDrag.scrollFrame = 0;
+    }
+  }
+
+  function finishSelectionDrag(suppressClick) {
+    if (selectionDrag.scrollFrame) {
+      window.cancelAnimationFrame(selectionDrag.scrollFrame);
+      selectionDrag.scrollFrame = 0;
+    }
+    const wasMoved = selectionDrag.moved;
+    selectionDrag.active = false;
+    selectionDrag.pointerId = null;
+    selectionDrag.moved = false;
+    selectionDrag.scrollSpeed = 0;
+    document.body.classList.remove("selection-dragging");
+
+    if (!suppressClick || !wasMoved) {
+      return;
+    }
+    suppressSelectionClick = true;
+    window.clearTimeout(suppressSelectionClickTimer);
+    // 拖拽结束后的 click 要吞掉，但只吞这一次。
+    suppressSelectionClickTimer = window.setTimeout(() => {
+      suppressSelectionClick = false;
+    }, 0);
+  }
+
+  function beginSelectionDrag(event) {
+    if (!multiSelectEnabled() || selectionLocked()) {
+      return;
+    }
+    if (event.button !== 0 || event.pointerType === "touch") {
+      return;
+    }
+    if (!event.ctrlKey && !event.metaKey) {
+      return;
+    }
+
+    finishSelectionDrag(false);
+    selectionDrag.active = true;
+    selectionDrag.pointerId = event.pointerId;
+    selectionDrag.startX = event.clientX;
+    selectionDrag.startY = event.clientY;
+    selectionDrag.lastX = event.clientX;
+    selectionDrag.lastY = event.clientY;
+    selectionDrag.moved = false;
+    selectionDrag.scrollSpeed = 0;
+    document.body.classList.add("selection-dragging");
+    exitHoverPreview();
+  }
+
+  function handleArtworkCardClick(event) {
+    const card =
+      event.target && typeof event.target.closest === "function"
+        ? event.target.closest(".card")
+        : null;
+    if (!card || !results.contains(card)) {
+      return;
+    }
+
+    if (suppressSelectionClick) {
+      suppressSelectionClick = false;
+      window.clearTimeout(suppressSelectionClickTimer);
+      event.preventDefault();
+      return;
+    }
+
+    if (!multiSelectEnabled()) {
+      return;
+    }
+
+    const item = card.dataset.artworkId
+      ? artworkItems.get(card.dataset.artworkId)
+      : null;
+    if (!item) {
+      return;
+    }
+
+    if (
+      selectedArtworkItems.size > 0 ||
+      event.ctrlKey ||
+      event.metaKey
+    ) {
+      event.preventDefault();
+      toggleArtworkSelection(item);
+    }
+  }
+
+  async function requestDeleteArtworks(ids) {
+    const response = await fetch("/graphql", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        query: DELETE_ARTWORKS_MUTATION,
+        variables: { ids },
+      }),
+    });
+
+    let payload = null;
+    try {
+      payload = await response.json();
+    } catch {
+      payload = null;
+    }
+
+    if (!response.ok) {
+      const message =
+        payload && payload.errors && payload.errors.length
+          ? payload.errors[0].message
+          : `请求失败（HTTP ${response.status}）`;
+      throw new Error(message);
+    }
+    if (!payload) {
+      throw new Error("服务端返回的不是合法 JSON");
+    }
+    if (Array.isArray(payload.errors) && payload.errors.length > 0) {
+      throw new Error(payload.errors.map((item) => item.message).join("；"));
+    }
+
+    const data = payload.data && payload.data.deleteArtworks;
+    if (!data) {
+      throw new Error("响应缺少 deleteArtworks 数据");
+    }
+    return data;
+  }
+
+  async function deleteSelectedArtworks() {
+    if (selectionDeleting || selectedArtworkItems.size === 0) {
+      return;
+    }
+
+    const items = Array.from(selectedArtworkItems.values());
+    const count = items.length;
+    const confirmed = await window.ConfirmDialog.open({
+      title: "批量删除作品",
+      message:
+        `确定删除这 ${count} 个作品吗？\n` +
+        "作品会被永久删除，只属于它们的图片会变成游离图片；" +
+        "与其他作品共用的图片不受影响。",
+      confirmText: "删除",
+      cancelText: "取消",
+      danger: true,
+    });
+    if (!confirmed || selectedArtworkItems.size === 0) {
+      return;
+    }
+
+    selectionDeleting = true;
+    setSelectionError("");
+    updateSelectionUi();
+
+    try {
+      // 不存在的 ID 视为已删除；网络或数据库错误才保留选择。
+      await requestDeleteArtworks(items.map((item) => item.id));
+
+      let removed = 0;
+      for (const item of items) {
+        selectedArtworkItems.delete(item.id);
+        artworkItems.delete(item.id);
+
+        const index = allCards.findIndex(
+          (card) => card.dataset.artworkId === item.id,
+        );
+        if (index >= 0) {
+          const card = allCards[index];
+          allCards.splice(index, 1);
+          card.remove();
+          removed += 1;
+        }
+      }
+
+      // 已加载的卡片少了 removed 个，下一页起点要相应前移。
+      offset = Math.max(0, offset - removed);
+      selectionDeleting = false;
+      setSelectionError("");
+      updateSelectionUi();
+      if (removed > 0) {
+        relayout();
+      }
+      if (allCards.length === 0) {
+        if (hasMore) {
+          setStatus("加载中…");
+          setTimeout(maybeLoadMore, 0);
+        } else {
+          setStatus(currentFilter() ? "没有符合条件的作品" : "还没有作品");
+        }
+      } else {
+        // 保留“已删除 N 个作品”的提示；后续加载由滚动触发。
+        // 只有删空整页时才自动续页。
+        setStatus(`已删除 ${count} 个作品`);
+      }
+    } catch (error) {
+      selectionDeleting = false;
+      updateSelectionUi();
+      setSelectionError(error.message || "删除失败，请重试");
+    }
+  }
+
+  function bindSelectionUi() {
+    selectionClose.addEventListener("click", () => {
+      if (!selectionLocked()) {
+        clearArtworkSelection();
+      }
+    });
+    selectionCancel.addEventListener("click", () => {
+      if (!selectionLocked()) {
+        clearArtworkSelection();
+      }
+    });
+    selectionDelete.addEventListener("click", deleteSelectedArtworks);
+
+    results.addEventListener("pointerdown", beginSelectionDrag);
+
+    document.addEventListener(
+      "pointermove",
+      (event) => {
+        if (!selectionDrag.active) {
+          return;
+        }
+        if (event.pointerId !== selectionDrag.pointerId) {
+          return;
+        }
+
+        if (!selectionDrag.moved) {
+          const dx = event.clientX - selectionDrag.startX;
+          const dy = event.clientY - selectionDrag.startY;
+          if (Math.abs(dx) < 4 && Math.abs(dy) < 4) {
+            return;
+          }
+          selectionDrag.moved = true;
+          // 从起点开始涂，避免漏掉按下时所在的卡片。
+          selectArtworkAtPoint(selectionDrag.startX, selectionDrag.startY);
+        }
+
+        event.preventDefault();
+        selectionDrag.lastX = event.clientX;
+        selectionDrag.lastY = event.clientY;
+        selectArtworkAtPoint(event.clientX, event.clientY);
+        updateArtworkSelectionAutoScroll(event.clientX, event.clientY);
+      },
+      { passive: false },
+    );
+
+    document.addEventListener("pointerup", (event) => {
+      if (
+        !selectionDrag.active ||
+        event.pointerId !== selectionDrag.pointerId
+      ) {
+        return;
+      }
+      finishSelectionDrag(selectionDrag.moved);
+    });
+
+    document.addEventListener("pointercancel", (event) => {
+      if (
+        !selectionDrag.active ||
+        event.pointerId !== selectionDrag.pointerId
+      ) {
+        return;
+      }
+      finishSelectionDrag(false);
+    });
+
+    window.addEventListener("blur", () => finishSelectionDrag(false));
+
+    results.addEventListener("click", handleArtworkCardClick);
+
+    document.addEventListener("keydown", (event) => {
+      if (event.key !== "Escape") {
+        return;
+      }
+      if (addDialog.open || !layoutPanel.hidden) {
+        return;
+      }
+      // 其它模态框（例如批量删除确认）打开时，Esc 只关闭那个弹窗。
+      if (document.querySelector("dialog[open]")) {
+        return;
+      }
+      if (selectionDrag.active) {
+        finishSelectionDrag(selectionDrag.moved);
+        event.preventDefault();
+        return;
+      }
+      if (selectionLocked()) {
+        event.preventDefault();
+        return;
+      }
+      if (selectedArtworkItems.size > 0) {
+        clearArtworkSelection();
+        event.preventDefault();
+      }
+    });
+
+    window.addEventListener("resize", () => {
+      if (!multiSelectEnabled() && selectedArtworkItems.size > 0) {
+        clearArtworkSelection();
+      }
+    });
   }
 
   function delay(ms) {
@@ -1128,11 +1622,13 @@
   form.addEventListener("submit", (event) => {
     event.preventDefault();
     clearTimeout(debounceTimer);
+    clearArtworkSelection();
     search(true);
   });
 
   input.addEventListener("input", () => {
     clearTimeout(debounceTimer);
+    clearArtworkSelection();
     debounceTimer = setTimeout(() => search(true), 300);
   });
 
@@ -1153,6 +1649,7 @@
     sortText = next;
     syncSortInput();
     clearTimeout(debounceTimer);
+    clearArtworkSelection();
     search(true);
   }
 
@@ -1454,6 +1951,9 @@
   }
 
   results.addEventListener("pointermove", (event) => {
+    if (selectionDrag.active) {
+      return;
+    }
     if (event.pointerType === "touch") {
       exitHoverPreview();
       return;
@@ -1546,5 +2046,6 @@
   renderStaging();
   renderAddTags();
   updateAddMode();
+  bindSelectionUi();
   search(true);
 })();

@@ -1444,13 +1444,31 @@ public:
 
   gql::service::AwaitableObject<
       std::shared_ptr<gql::tagimg::object::DeleteArtworkResult>>
-  applyDeleteArtwork(IdType id) const {
-    const std::string text = id_text(id);
-    if (!is_uuid(text)) {
-      fail("INVALID_ARGUMENT", "id must be a uuid string");
+  applyDeleteArtwork(std::vector<IdType> ids) const {
+    if (ids.empty()) {
+      fail("INVALID_ARGUMENT", "ids must not be empty");
     }
 
-    const auto result = repository_->delete_artwork(text);
+    // 校验全部 ID 后再调用 repository，非法 UUID 不会删掉任何作品。
+    // 忽略大小写去重，保留首次出现的文本形式。
+    std::vector<std::string> text_ids;
+    text_ids.reserve(ids.size());
+    std::set<std::string> seen;
+    for (const IdType &id : ids) {
+      std::string text = id_text(id);
+      if (!is_uuid(text)) {
+        fail("INVALID_ARGUMENT", "ids must contain uuid strings");
+      }
+      std::string key = text;
+      std::transform(key.begin(), key.end(), key.begin(), [](unsigned char ch) {
+        return static_cast<char>(std::tolower(ch));
+      });
+      if (seen.insert(key).second) {
+        text_ids.push_back(std::move(text));
+      }
+    }
+
+    const auto result = repository_->delete_artworks(text_ids);
     if (!result) {
       fail_repository(result.error());
     }

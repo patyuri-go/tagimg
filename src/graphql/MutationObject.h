@@ -10,6 +10,8 @@
 
 #include "TagimgSchema.h"
 
+#include <vector>
+
 namespace graphql::tagimg::object {
 namespace methods::MutationHas {
 
@@ -50,15 +52,15 @@ concept applyRescanArtwork = requires (TImpl impl, response::IdType artworkIdArg
 };
 
 template <class TImpl>
-concept applyDeleteArtworkWithParams = requires (TImpl impl, service::FieldParams params, response::IdType idArg)
+concept applyDeleteArtworksWithParams = requires (TImpl impl, service::FieldParams params, std::vector<response::IdType> idsArg)
 {
-	{ service::AwaitableObject<std::shared_ptr<DeleteArtworkResult>> { impl.applyDeleteArtwork(std::move(params), std::move(idArg)) } };
+	{ service::AwaitableObject<std::shared_ptr<DeleteArtworkResult>> { impl.applyDeleteArtwork(std::move(params), std::move(idsArg)) } };
 };
 
 template <class TImpl>
-concept applyDeleteArtwork = requires (TImpl impl, response::IdType idArg)
+concept applyDeleteArtworks = requires (TImpl impl, std::vector<response::IdType> idsArg)
 {
-	{ service::AwaitableObject<std::shared_ptr<DeleteArtworkResult>> { impl.applyDeleteArtwork(std::move(idArg)) } };
+	{ service::AwaitableObject<std::shared_ptr<DeleteArtworkResult>> { impl.applyDeleteArtwork(std::move(idsArg)) } };
 };
 
 template <class TImpl>
@@ -148,7 +150,7 @@ private:
 		[[nodiscard("unnecessary call")]] virtual service::AwaitableScalar<response::IdType> applyAddArtwork(service::FieldParams&& params, AddArtworkInput&& inputArg) const = 0;
 		[[nodiscard("unnecessary call")]] virtual service::AwaitableScalar<response::IdType> applyAddArtworkFromImages(service::FieldParams&& params, AddArtworkFromImagesInput&& inputArg) const = 0;
 		[[nodiscard("unnecessary call")]] virtual service::AwaitableScalar<response::IdType> applyRescanArtwork(service::FieldParams&& params, response::IdType&& artworkIdArg) const = 0;
-		[[nodiscard("unnecessary call")]] virtual service::AwaitableObject<std::shared_ptr<DeleteArtworkResult>> applyDeleteArtwork(service::FieldParams&& params, response::IdType&& idArg) const = 0;
+		[[nodiscard("unnecessary call")]] virtual service::AwaitableObject<std::shared_ptr<DeleteArtworkResult>> applyDeleteArtwork(service::FieldParams&& params, std::vector<response::IdType>&& idsArg) const = 0;
 		[[nodiscard("unnecessary call")]] virtual service::AwaitableScalar<response::IdType> applyUpdateArtwork(service::FieldParams&& params, response::IdType&& idArg, UpdateArtworkInput&& inputArg) const = 0;
 		[[nodiscard("unnecessary call")]] virtual service::AwaitableObject<std::shared_ptr<Tag>> applyCreateTag(service::FieldParams&& params, CreateTagInput&& inputArg) const = 0;
 		[[nodiscard("unnecessary call")]] virtual service::AwaitableObject<std::shared_ptr<Tag>> applyUpdateTag(service::FieldParams&& params, response::IdType&& idArg, UpdateTagInput&& inputArg) const = 0;
@@ -203,16 +205,16 @@ private:
 			}
 		}
 
-		[[nodiscard("unnecessary call")]] service::AwaitableObject<std::shared_ptr<DeleteArtworkResult>> applyDeleteArtwork(service::FieldParams&& params, response::IdType&& idArg) const override
+		[[nodiscard("unnecessary call")]] service::AwaitableObject<std::shared_ptr<DeleteArtworkResult>> applyDeleteArtwork(service::FieldParams&& params, std::vector<response::IdType>&& idsArg) const override
 		{
-			if constexpr (methods::MutationHas::applyDeleteArtworkWithParams<T>)
+			if constexpr (methods::MutationHas::applyDeleteArtworksWithParams<T>)
 			{
-				return { _pimpl->applyDeleteArtwork(std::move(params), std::move(idArg)) };
+				return { _pimpl->applyDeleteArtwork(std::move(params), std::move(idsArg)) };
 			}
 			else
 			{
-				static_assert(methods::MutationHas::applyDeleteArtwork<T>, R"msg(Mutation::applyDeleteArtwork is not implemented)msg");
-				return { _pimpl->applyDeleteArtwork(std::move(idArg)) };
+				static_assert(methods::MutationHas::applyDeleteArtworks<T>, R"msg(Mutation::applyDeleteArtwork is not implemented)msg");
+				return { _pimpl->applyDeleteArtwork(std::move(idsArg)) };
 			}
 		}
 

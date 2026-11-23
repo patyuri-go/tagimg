@@ -530,10 +530,11 @@ public:
   [[nodiscard]] Result<ArtworkTagInfo, TagimgRepositoryError>
   update_tag(const std::string &tag_id, const TagUpdateInput &input) const;
 
-  // 删除一个作品；关联表级联清理，图片行保留。
-  // 作品不存在时 deleted=false，不视为错误。
+  // 批量删除作品；关联表级联清理，图片行保留。
+  // 所有删除在同一个事务里完成；不存在的作品 ID 忽略，
+  // 至少删除一个作品时 deleted=true。空数组返回 InvalidArgument。
   [[nodiscard]] Result<DeleteArtworkResult, TagimgRepositoryError>
-  delete_artwork(const std::string &artwork_id) const;
+  delete_artworks(const std::vector<std::string> &artwork_ids) const;
 
   // 打开作品写入事务；作品不存在时返回 std::nullopt。
   //

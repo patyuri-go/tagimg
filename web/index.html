@@ -10,6 +10,7 @@
       href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%234f46e5'/%3E%3Ctext x='16' y='22' font-size='16' text-anchor='middle' fill='white' font-family='sans-serif'%3ET%3C/text%3E%3C/svg%3E"
     />
     <link rel="stylesheet" href="/style.css" />
+    <link rel="stylesheet" href="/confirm-dialog.css" />
   </head>
   <body>
     <div id="layout-tools" class="layout-tools">
@@ -202,6 +203,49 @@
       ></section>
     </main>
 
+    <aside
+      id="artwork-selection-card"
+      class="selection-card artwork-selection-card"
+      aria-label="作品多选操作"
+      hidden
+    >
+      <header class="selection-card-head">
+        <h2 class="selection-card-title">
+          已选 <span id="artwork-selection-count">0</span> 个作品
+        </h2>
+        <button
+          id="artwork-selection-close"
+          class="icon-button"
+          type="button"
+          aria-label="取消选择"
+        >
+          ×
+        </button>
+      </header>
+      <div class="selection-card-body">
+        <p id="artwork-selection-hint" class="selection-hint">
+          按住 Ctrl / Cmd 点击或拖拽可继续多选，Esc 取消。
+        </p>
+        <p id="artwork-selection-error" class="form-error" hidden></p>
+      </div>
+      <footer class="selection-card-foot">
+        <button
+          id="artwork-selection-cancel"
+          class="button ghost"
+          type="button"
+        >
+          取消
+        </button>
+        <button
+          id="artwork-selection-delete"
+          class="button danger"
+          type="button"
+        >
+          批量删除
+        </button>
+      </footer>
+    </aside>
+
     <dialog id="add-dialog" class="dialog">
       <form id="add-form" class="dialog-form">
         <header class="dialog-head">
@@ -340,6 +384,7 @@
     </div>
 
     <script src="/tag-search.js"></script>
+    <script src="/confirm-dialog.js"></script>
     <script src="/app.js"></script>
   </body>
 </html>

@@ -90,16 +90,16 @@ FROM artists
 WHERE id = :artist_id
 )sql";
 
-// 删除前先记下这个作品的图片，删除后再统计其中有哪些失去了全部引用。
-constexpr const char *kArtworkImageIdsSql = R"sql(
-SELECT image_id::text
+// 删除前先记下这些作品的图片并集，删除后再统计其中有哪些失去了全部引用。
+constexpr const char *kArtworkImageIdsBatchSql = R"sql(
+SELECT DISTINCT image_id::text
 FROM artwork_images
-WHERE artwork_id = :artwork_id
+WHERE artwork_id = ANY(CAST(:artwork_ids AS uuid[]))
 )sql";
 
-constexpr const char *kDeleteArtworkSql = R"sql(
+constexpr const char *kDeleteArtworksSql = R"sql(
 DELETE FROM artworks
-WHERE id = :artwork_id
+WHERE id = ANY(CAST(:artwork_ids AS uuid[]))
 RETURNING id::text
 )sql";
 
@@ -2734,10 +2734,26 @@ TagimgRepository::update_tag(const std::string &tag_id,
 }
 
 Result<DeleteArtworkResult, TagimgRepositoryError>
-TagimgRepository::delete_artwork(const std::string &artwork_id) const {
-  if (!is_uuid(artwork_id)) {
+TagimgRepository::delete_artworks(
+    const std::vector<std::string> &artwork_ids) const {
+  if (artwork_ids.empty()) {
     return TagimgRepositoryError::InvalidArgument;
   }
+
+  // 先校验全部 ID，非法 UUID 不做任何删除。
+  std::vector<std::string> ids;
+  ids.reserve(artwork_ids.size());
+  std::set<std::string> seen;
+  for (const std::string &artwork_id : artwork_ids) {
+    if (!is_uuid(artwork_id)) {
+      return TagimgRepositoryError::InvalidArgument;
+    }
+    std::string key = ascii_lower(artwork_id);
+    if (seen.insert(key).second) {
+      ids.push_back(artwork_id);
+    }
+  }
+
   if (!impl_ || !impl_->pool) {
     return TagimgRepositoryError::ConnectionFailed;
   }
@@ -2747,31 +2763,32 @@ TagimgRepository::delete_artwork(const std::string &artwork_id) const {
     soci::session &sql = impl_->pool->at(lease.position());
     soci::transaction transaction(sql);
 
-    // 先记下这个作品的图片，删除后再判断哪些失去了全部引用。
+    const std::string artwork_array = uuid_array_literal(ids);
+
+    // 先记下这些作品的图片并集，删除后再判断哪些失去了全部引用。
     std::vector<std::string> image_ids;
-    std::string id_value = artwork_id;
     {
-      soci::rowset<soci::row> image_rows =
-          (sql.prepare << kArtworkImageIdsSql, soci::use(id_value));
+      soci::rowset<soci::row> image_rows = (sql.prepare
+          << kArtworkImageIdsBatchSql, soci::use(artwork_array));
       for (const soci::row &row : image_rows) {
         image_ids.push_back(row.get<std::string>(0));
       }
     }
 
     // rowset 用完即销毁，避免提交事务时还留着未关闭的游标。
-    bool deleted = false;
+    std::size_t deleted_count = 0;
     {
-      soci::rowset<soci::row> deleted_rows =
-          (sql.prepare << kDeleteArtworkSql, soci::use(id_value));
+      soci::rowset<soci::row> deleted_rows = (sql.prepare
+          << kDeleteArtworksSql, soci::use(artwork_array));
       for (const soci::row &row : deleted_rows) {
         (void)row;
-        deleted = true;
+        ++deleted_count;
       }
     }
 
     DeleteArtworkResult result;
-    result.deleted = deleted;
-    if (deleted && !image_ids.empty()) {
+    result.deleted = deleted_count > 0;
+    if (result.deleted && !image_ids.empty()) {
       const std::string image_array = uuid_array_literal(image_ids);
       long long orphaned = 0;
       sql << kCountOrphanAmongSql, soci::use(image_array), soci::into(orphaned);

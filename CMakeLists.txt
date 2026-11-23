@@ -86,6 +86,14 @@ target_link_libraries(tagimg_rescan_db_smoke PRIVATE
     tagimg_db
 )
 
+add_executable(tagimg_delete_artworks_smoke
+    tools/delete_artworks_smoke.cpp
+)
+target_link_libraries(tagimg_delete_artworks_smoke PRIVATE
+    tagimg_config
+    tagimg_db
+)
+
 add_library(tagimg_config STATIC
     src/common/config.cpp
 )

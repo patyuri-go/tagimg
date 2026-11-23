@@ -1,0 +1,10 @@
+/* 可复用确认弹窗：只补充内容排版，外观沿用 .dialog / .button。 */
+.confirm-dialog .dialog-body {
+  padding: 12px 20px 8px;
+}
+
+.confirm-dialog-message {
+  margin: 0;
+  line-height: 1.7;
+  white-space: pre-line;
+}

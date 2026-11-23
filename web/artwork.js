@@ -47,8 +47,8 @@
   `;
 
   const DELETE_MUTATION = `
-    mutation DeleteArtwork($id: ID!) {
-      deleteArtwork(id: $id) {
+    mutation DeleteArtworks($ids: [ID!]!) {
+      deleteArtworks(ids: $ids) {
         deleted
         newlyOrphanedImageCount
       }
@@ -1199,11 +1199,16 @@
     if (deleting || saving || !currentArtworkId) {
       return;
     }
-    if (
-      !window.confirm(
-        "确定删除这个作品吗？\n作品会被永久删除，只属于它的图片会变成游离图片。",
-      )
-    ) {
+    const confirmed = await window.ConfirmDialog.open({
+      title: "删除作品",
+      message:
+        "确定删除这个作品吗？\n" +
+        "作品会被永久删除，只属于它的图片会变成游离图片。",
+      confirmText: "删除",
+      cancelText: "取消",
+      danger: true,
+    });
+    if (!confirmed) {
       return;
     }
 
@@ -1219,7 +1224,7 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           query: DELETE_MUTATION,
-          variables: { id: currentArtworkId },
+          variables: { ids: [currentArtworkId] },
         }),
       });
       if (!response.ok) {
@@ -1243,7 +1248,7 @@
       return;
     }
 
-    const result = payload.data && payload.data.deleteArtwork;
+    const result = payload.data && payload.data.deleteArtworks;
     if (!result || !result.deleted) {
       // 作品已被其他人删掉：按已删除处理，避免按钮停在禁用状态。
       finishDelete("作品不存在或已被删除", "error");

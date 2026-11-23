@@ -2457,6 +2457,38 @@ body.tag-drawer-open .tag-drawer-handle {
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.28);
 }
 
+/* 作品列表多选：选中边框和左上角勾选，避开右上角的分数徽标。 */
+#results .card.is-selected {
+  border-color: var(--accent);
+  box-shadow:
+    0 0 0 2px color-mix(in srgb, var(--accent) 55%, transparent),
+    var(--shadow);
+}
+
+#results .card.is-selected::after {
+  content: "✓";
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--accent-text);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
+  pointer-events: none;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.28);
+}
+
+body.selection-dragging #results .card {
+  cursor: crosshair;
+}
+
 body.selection-dragging {
   user-select: none;
 }
