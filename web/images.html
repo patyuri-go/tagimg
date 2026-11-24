@@ -11,6 +11,7 @@
     />
     <link rel="stylesheet" href="/style.css" />
     <link rel="stylesheet" href="/lightbox.css" />
+    <link rel="stylesheet" href="/confirm-dialog.css" />
   </head>
   <body class="images-page">
     <div id="layout-tools" class="layout-tools">
@@ -268,6 +269,217 @@
       </div>
     </aside>
 
+    <button
+      id="workbench-handle"
+      class="workbench-handle"
+      type="button"
+      aria-controls="workbench-panel"
+      aria-expanded="false"
+    >
+      <span>打标</span>
+    </button>
+    <aside
+      id="workbench-panel"
+      class="workbench-panel"
+      aria-label="批量打标工作台"
+      inert
+    >
+      <header class="workbench-head">
+        <h2 class="workbench-title">批量打标工作台</h2>
+        <button
+          id="workbench-close"
+          class="icon-button"
+          type="button"
+          aria-label="关闭工作台"
+        >
+          ×
+        </button>
+      </header>
+      <div class="workbench-cards">
+        <section class="workbench-card" data-card="1">
+          <header class="workbench-card-head">
+            <span class="workbench-card-dot"></span>
+            <span class="workbench-card-title">卡片 1</span>
+            <span class="workbench-card-count">0 张</span>
+          </header>
+          <div class="workbench-card-search" hidden>
+            <input
+              id="workbench-tag-1"
+              type="text"
+              autocomplete="off"
+              spellcheck="false"
+              aria-label="搜索卡片 1 的标签"
+              placeholder="输入标签名或路径…"
+            />
+            <ul
+              id="workbench-suggest-1"
+              class="tag-suggest"
+              role="listbox"
+              hidden
+            ></ul>
+          </div>
+          <div id="workbench-stage-1" class="workbench-card-staging"></div>
+          <p
+            id="workbench-error-1"
+            class="workbench-card-error form-error"
+            role="alert"
+            hidden
+          ></p>
+          <button
+            class="workbench-card-add"
+            type="button"
+            aria-label="为卡片 1 添加标签"
+            aria-expanded="false"
+          >
+            +
+          </button>
+        </section>
+
+        <section class="workbench-card" data-card="2">
+          <header class="workbench-card-head">
+            <span class="workbench-card-dot"></span>
+            <span class="workbench-card-title">卡片 2</span>
+            <span class="workbench-card-count">0 张</span>
+          </header>
+          <div class="workbench-card-search" hidden>
+            <input
+              id="workbench-tag-2"
+              type="text"
+              autocomplete="off"
+              spellcheck="false"
+              aria-label="搜索卡片 2 的标签"
+              placeholder="输入标签名或路径…"
+            />
+            <ul
+              id="workbench-suggest-2"
+              class="tag-suggest"
+              role="listbox"
+              hidden
+            ></ul>
+          </div>
+          <div id="workbench-stage-2" class="workbench-card-staging"></div>
+          <p
+            id="workbench-error-2"
+            class="workbench-card-error form-error"
+            role="alert"
+            hidden
+          ></p>
+          <button
+            class="workbench-card-add"
+            type="button"
+            aria-label="为卡片 2 添加标签"
+            aria-expanded="false"
+          >
+            +
+          </button>
+        </section>
+
+        <section class="workbench-card" data-card="3">
+          <header class="workbench-card-head">
+            <span class="workbench-card-dot"></span>
+            <span class="workbench-card-title">卡片 3</span>
+            <span class="workbench-card-count">0 张</span>
+          </header>
+          <div class="workbench-card-search" hidden>
+            <input
+              id="workbench-tag-3"
+              type="text"
+              autocomplete="off"
+              spellcheck="false"
+              aria-label="搜索卡片 3 的标签"
+              placeholder="输入标签名或路径…"
+            />
+            <ul
+              id="workbench-suggest-3"
+              class="tag-suggest"
+              role="listbox"
+              hidden
+            ></ul>
+          </div>
+          <div id="workbench-stage-3" class="workbench-card-staging"></div>
+          <p
+            id="workbench-error-3"
+            class="workbench-card-error form-error"
+            role="alert"
+            hidden
+          ></p>
+          <button
+            class="workbench-card-add"
+            type="button"
+            aria-label="为卡片 3 添加标签"
+            aria-expanded="false"
+          >
+            +
+          </button>
+        </section>
+
+        <section class="workbench-card" data-card="4">
+          <header class="workbench-card-head">
+            <span class="workbench-card-dot"></span>
+            <span class="workbench-card-title">卡片 4</span>
+            <span class="workbench-card-count">0 张</span>
+          </header>
+          <div class="workbench-card-search" hidden>
+            <input
+              id="workbench-tag-4"
+              type="text"
+              autocomplete="off"
+              spellcheck="false"
+              aria-label="搜索卡片 4 的标签"
+              placeholder="输入标签名或路径…"
+            />
+            <ul
+              id="workbench-suggest-4"
+              class="tag-suggest"
+              role="listbox"
+              hidden
+            ></ul>
+          </div>
+          <div id="workbench-stage-4" class="workbench-card-staging"></div>
+          <p
+            id="workbench-error-4"
+            class="workbench-card-error form-error"
+            role="alert"
+            hidden
+          ></p>
+          <button
+            class="workbench-card-add"
+            type="button"
+            aria-label="为卡片 4 添加标签"
+            aria-expanded="false"
+          >
+            +
+          </button>
+        </section>
+      </div>
+      <footer class="workbench-foot">
+        <div class="workbench-dot-size">
+          <label for="workbench-dot-size">圆点大小</label>
+          <input
+            id="workbench-dot-size"
+            type="range"
+            min="6"
+            max="80"
+            step="1"
+            value="10"
+            aria-label="标记圆点大小"
+          />
+          <output id="workbench-dot-size-value" for="workbench-dot-size"
+            >10px</output
+          >
+        </div>
+        <p id="workbench-status" class="workbench-status" role="status" hidden></p>
+        <button
+          id="workbench-apply"
+          class="button primary"
+          type="button"
+          disabled
+        >
+          应用
+        </button>
+      </footer>
+    </aside>
+
     <dialog
       id="tag-editor"
       class="dialog tag-editor"
@@ -465,6 +677,7 @@
       <img alt="" decoding="async" />
     </div>
 
+    <script src="/confirm-dialog.js"></script>
     <script type="module" src="/images.js"></script>
   </body>
 </html>

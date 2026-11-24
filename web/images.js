@@ -218,7 +218,18 @@ import { createTagSearch } from "/tag-search.js";
   const selectionCancel = document.getElementById("selection-cancel");
   const selectionSave = document.getElementById("selection-save");
 
+  const workbenchHandle = document.getElementById("workbench-handle");
+  const workbenchPanel = document.getElementById("workbench-panel");
+  const workbenchClose = document.getElementById("workbench-close");
+  const workbenchStatus = document.getElementById("workbench-status");
+  const workbenchApply = document.getElementById("workbench-apply");
+  const workbenchDotSize = document.getElementById("workbench-dot-size");
+  const workbenchDotSizeValue = document.getElementById(
+    "workbench-dot-size-value",
+  );
+
   const TAG_DRAWER_WIDTH = 320;
+  const WORKBENCH_WIDTH = 360;
   const TAG_TREE_SEARCH_DELAY = 200;
 
   let tagNodeCache = new Map();
@@ -257,6 +268,40 @@ import { createTagSearch } from "/tag-search.js";
   const selectionDrag = {
     active: false,
     pointerId: null,
+    startX: 0,
+    startY: 0,
+    lastX: 0,
+    lastY: 0,
+    moved: false,
+    scrollSpeed: 0,
+    scrollFrame: 0,
+  };
+
+  const WORKBENCH_CARDS = [
+    { index: 1, dotClass: "workbench-dot-blue" },
+    { index: 2, dotClass: "workbench-dot-amber" },
+    { index: 3, dotClass: "workbench-dot-purple" },
+    { index: 4, dotClass: "workbench-dot-cyan" },
+  ];
+  const workbench = {
+    open: false,
+    applying: false,
+    closing: false,
+    cards: WORKBENCH_CARDS.map((meta) => ({
+      ...meta,
+      images: new Set(),
+      additions: [],
+      removals: [],
+      widget: null,
+      searchOpen: false,
+      elements: null,
+    })),
+  };
+  const workbenchDrag = {
+    active: false,
+    pointerId: null,
+    card: null,
+    imageId: "",
     startX: 0,
     startY: 0,
     lastX: 0,
@@ -1549,8 +1594,10 @@ import { createTagSearch } from "/tag-search.js";
     }
     // 桌面抽屉会推挤内容，可用宽度要扣掉抽屉；窄屏抽屉是覆盖层，不扣。
     const drawerWidth =
-      tagDrawerOpen && window.innerWidth >= 900 ? TAG_DRAWER_WIDTH : 0;
-    const width = window.innerWidth - drawerWidth;
+      (tagDrawerOpen ? TAG_DRAWER_WIDTH : 0) +
+      (workbench.open ? WORKBENCH_WIDTH : 0);
+    const width =
+      window.innerWidth - (window.innerWidth >= 900 ? drawerWidth : 0);
     if (width < 480) {
       return 1;
     }
@@ -1795,12 +1842,16 @@ import { createTagSearch } from "/tag-search.js";
     card.appendChild(button);
     card.appendChild(body);
     applySelectionToCard(card);
+    syncWorkbenchImage(card);
     return card;
   }
 
   // ---------- 多选批量标签 ----------
 
   function multiSelectEnabled() {
+    if (workbench.open) {
+      return false;
+    }
     if (window.innerWidth < 900) {
       return false;
     }
@@ -2189,6 +2240,14 @@ import { createTagSearch } from "/tag-search.js";
       event.preventDefault();
       return;
     }
+    if (workbench.open) {
+      if (event.ctrlKey || event.metaKey || event.altKey) {
+        event.preventDefault();
+        return;
+      }
+      openLightbox(index);
+      return;
+    }
     if (!multiSelectEnabled()) {
       openLightbox(index);
       return;
@@ -2283,6 +2342,9 @@ import { createTagSearch } from "/tag-search.js";
   }
 
   function beginSelectionDrag(event) {
+    if (workbench.open) {
+      return;
+    }
     if (
       !multiSelectEnabled() ||
       event.button !== 0 ||
@@ -3143,6 +3205,670 @@ import { createTagSearch } from "/tag-search.js";
     });
   }
 
+  // ---------- 批量打标工作台 ----------
+
+  function initWorkbenchCards() {
+    for (const card of workbench.cards) {
+      const root = workbenchPanel.querySelector(
+        `.workbench-card[data-card="${card.index}"]`,
+      );
+      if (!root) {
+        continue;
+      }
+      card.elements = {
+        root,
+        count: root.querySelector(".workbench-card-count"),
+        search: root.querySelector(".workbench-card-search"),
+        input: document.getElementById(`workbench-tag-${card.index}`),
+        list: document.getElementById(`workbench-suggest-${card.index}`),
+        stage: document.getElementById(`workbench-stage-${card.index}`),
+        error: document.getElementById(`workbench-error-${card.index}`),
+        add: root.querySelector(".workbench-card-add"),
+      };
+    }
+  }
+
+  function workbenchHasState() {
+    return workbench.cards.some(
+      (card) =>
+        card.images.size > 0 ||
+        card.additions.length > 0 ||
+        card.removals.length > 0,
+    );
+  }
+
+  function workbenchHasStagedTags() {
+    return workbench.cards.some(
+      (card) => card.additions.length > 0 || card.removals.length > 0,
+    );
+  }
+
+  function setWorkbenchCardError(card, text) {
+    card.error = String(text || "");
+    if (card.elements && card.elements.error) {
+      card.elements.error.textContent = card.error;
+      card.elements.error.hidden = card.error === "";
+    }
+  }
+
+  function syncWorkbenchDotSize() {
+    if (!workbenchDotSize || !workbenchDotSizeValue) {
+      return;
+    }
+    const min = Number(workbenchDotSize.min) || 6;
+    const max = Number(workbenchDotSize.max) || 24;
+    const raw = Number(workbenchDotSize.value);
+    const size = Math.max(min, Math.min(max, Number.isFinite(raw) ? raw : 10));
+    document.body.style.setProperty("--workbench-dot-size", `${size}px`);
+    workbenchDotSizeValue.textContent = `${size}px`;
+  }
+
+  function updateWorkbenchUi() {
+    const hasStaged = workbenchHasStagedTags();
+    workbenchApply.disabled = workbench.applying || !hasStaged;
+    workbenchApply.textContent = workbench.applying ? "应用中…" : "应用";
+    workbenchClose.disabled = workbench.applying || workbench.closing;
+    workbenchHandle.setAttribute("aria-expanded", String(workbench.open));
+    for (const card of workbench.cards) {
+      if (!card.elements) {
+        continue;
+      }
+      card.elements.count.textContent = `${card.images.size} 张`;
+      card.elements.add.setAttribute(
+        "aria-expanded",
+        String(card.searchOpen),
+      );
+    }
+  }
+
+  function syncWorkbenchCard(card) {
+    if (!card.elements) {
+      return;
+    }
+    const fragment = document.createDocumentFragment();
+    for (const tag of card.additions) {
+      const chip = document.createElement("button");
+      chip.type = "button";
+      chip.className = "workbench-chip workbench-chip-add";
+      chip.textContent = tag.name;
+      chip.title = `${tag.path || tag.name}\n点击移出暂存区`;
+      chip.addEventListener("click", () =>
+        unstageWorkbenchTag(card, tag.id),
+      );
+      fragment.appendChild(chip);
+    }
+    for (const tag of card.removals) {
+      const chip = document.createElement("button");
+      chip.type = "button";
+      chip.className = "workbench-chip workbench-chip-remove";
+      chip.textContent = tag.name;
+      chip.title = `${tag.path || tag.name}\n点击移出暂存区`;
+      chip.addEventListener("click", () =>
+        unstageWorkbenchTag(card, tag.id),
+      );
+      fragment.appendChild(chip);
+    }
+    card.elements.stage.replaceChildren(fragment);
+    updateWorkbenchUi();
+  }
+
+  function syncWorkbenchImage(cardElement) {
+    const imageId = cardElement.dataset.imageId || "";
+    const thumb = cardElement.querySelector(".thumb");
+    if (!thumb) {
+      return;
+    }
+    const old = thumb.querySelector(".workbench-dots");
+    if (old) {
+      old.remove();
+    }
+    if (!workbench.open || !imageId) {
+      return;
+    }
+    const members = workbench.cards.filter((card) =>
+      card.images.has(imageId),
+    );
+    if (members.length === 0) {
+      return;
+    }
+    const dots = document.createElement("div");
+    dots.className = "workbench-dots";
+    for (const card of members) {
+      const dot = document.createElement("span");
+      dot.className = `workbench-dot ${card.dotClass}`;
+      dot.title = `卡片 ${card.index}`;
+      dots.appendChild(dot);
+    }
+    thumb.appendChild(dots);
+  }
+
+  function syncAllWorkbenchImages() {
+    for (const card of allCards) {
+      syncWorkbenchImage(card);
+    }
+  }
+
+  function syncWorkbenchImagesForId(imageId) {
+    if (!imageId) {
+      return;
+    }
+    for (const card of allCards) {
+      if (card.dataset.imageId === imageId) {
+        syncWorkbenchImage(card);
+        break;
+      }
+    }
+  }
+
+  function toggleWorkbenchMembership(card, imageId) {
+    if (!card || !imageId) {
+      return;
+    }
+    if (card.images.has(imageId)) {
+      card.images.delete(imageId);
+    } else {
+      card.images.add(imageId);
+    }
+    syncWorkbenchCard(card);
+    syncWorkbenchImagesForId(imageId);
+  }
+
+  function addWorkbenchMembership(card, imageId) {
+    if (!card || !imageId || card.images.has(imageId)) {
+      return;
+    }
+    card.images.add(imageId);
+    syncWorkbenchCard(card);
+    syncWorkbenchImagesForId(imageId);
+  }
+
+  function stageWorkbenchTag(card, tag, kind) {
+    if (!tag || !tag.id) {
+      return false;
+    }
+    const target = kind === "remove" ? card.removals : card.additions;
+    const other = kind === "remove" ? card.additions : card.removals;
+    const otherIndex = other.findIndex((item) => item.id === tag.id);
+    if (otherIndex >= 0) {
+      other.splice(otherIndex, 1);
+    }
+    if (!target.some((item) => item.id === tag.id)) {
+      target.push({
+        id: tag.id,
+        name: tag.name,
+        path: tag.path || tag.name,
+      });
+    }
+    setWorkbenchCardError(card, "");
+    syncWorkbenchCard(card);
+    return true;
+  }
+
+  function unstageWorkbenchTag(card, tagId) {
+    let changed = false;
+    for (const list of [card.additions, card.removals]) {
+      const index = list.findIndex((item) => item.id === tagId);
+      if (index >= 0) {
+        list.splice(index, 1);
+        changed = true;
+      }
+    }
+    if (changed) {
+      syncWorkbenchCard(card);
+    }
+  }
+
+  function closeWorkbenchSearch(card) {
+    if (!card.searchOpen) {
+      return;
+    }
+    card.searchOpen = false;
+    if (card.elements) {
+      card.elements.search.hidden = true;
+      card.elements.input.value = "";
+    }
+    if (card.widget) {
+      card.widget.clearChosen();
+      card.widget.close();
+    }
+    syncWorkbenchCard(card);
+  }
+
+  function closeAllWorkbenchSearches(except) {
+    for (const card of workbench.cards) {
+      if (card !== except) {
+        closeWorkbenchSearch(card);
+      }
+    }
+  }
+
+  function ensureWorkbenchWidget(card) {
+    if (card.widget) {
+      return card.widget;
+    }
+    card.widget = createTagSearch({
+      input: card.elements.input,
+      list: card.elements.list,
+      idPrefix: `workbench-card-${card.index}`,
+      onAdd: (tag) => stageWorkbenchTag(card, tag, "add"),
+      onRemove: (tag) => stageWorkbenchTag(card, tag, "remove"),
+      onError: (message) => setWorkbenchCardError(card, message),
+    });
+    return card.widget;
+  }
+
+  function toggleWorkbenchSearch(card) {
+    if (workbench.applying) {
+      return;
+    }
+    if (card.searchOpen) {
+      closeWorkbenchSearch(card);
+      return;
+    }
+    closeAllWorkbenchSearches(card);
+    ensureWorkbenchWidget(card);
+    card.searchOpen = true;
+    card.elements.search.hidden = false;
+    setWorkbenchCardError(card, "");
+    syncWorkbenchCard(card);
+    card.elements.input.focus();
+    card.elements.input.click();
+  }
+
+  function openWorkbench() {
+    if (workbench.open) {
+      return;
+    }
+    clearSelection();
+    workbench.open = true;
+    document.body.classList.add("workbench-open");
+    workbenchPanel.removeAttribute("inert");
+    workbenchStatus.textContent = "";
+    workbenchStatus.hidden = true;
+    workbenchStatus.classList.remove("error");
+    for (const card of workbench.cards) {
+      setWorkbenchCardError(card, "");
+      syncWorkbenchCard(card);
+    }
+    syncAllWorkbenchImages();
+    updateWorkbenchUi();
+    if (layoutAuto) {
+      syncLayoutSettings();
+    }
+    if (window.innerWidth >= 900) {
+      window.setTimeout(relayout, 240);
+    }
+  }
+
+  function discardWorkbenchState() {
+    for (const card of workbench.cards) {
+      card.images.clear();
+      card.additions.length = 0;
+      card.removals.length = 0;
+      setWorkbenchCardError(card, "");
+      closeWorkbenchSearch(card);
+      syncWorkbenchCard(card);
+    }
+    workbench.open = false;
+    workbench.applying = false;
+    workbench.closing = false;
+    document.body.classList.remove("workbench-open");
+    workbenchPanel.setAttribute("inert", "");
+    workbenchStatus.textContent = "";
+    workbenchStatus.hidden = true;
+    workbenchStatus.classList.remove("error");
+    syncAllWorkbenchImages();
+    updateWorkbenchUi();
+    if (layoutAuto) {
+      syncLayoutSettings();
+    }
+    if (window.innerWidth >= 900) {
+      window.setTimeout(relayout, 240);
+    }
+  }
+
+  async function closeWorkbench() {
+    if (!workbench.open || workbench.applying || workbench.closing) {
+      return;
+    }
+    if (!workbenchHasState()) {
+      discardWorkbenchState();
+      return;
+    }
+    if (
+      !window.ConfirmDialog ||
+      typeof window.ConfirmDialog.open !== "function"
+    ) {
+      discardWorkbenchState();
+      return;
+    }
+    workbench.closing = true;
+    updateWorkbenchUi();
+    let confirmed = false;
+    try {
+      confirmed = await window.ConfirmDialog.open({
+        title: "关闭工作台",
+        message: "关闭工作台将丢弃未应用的标签变更和图片归属，确定关闭吗？",
+        confirmText: "关闭",
+        cancelText: "取消",
+        danger: true,
+      });
+    } finally {
+      workbench.closing = false;
+    }
+    if (confirmed) {
+      discardWorkbenchState();
+    } else {
+      updateWorkbenchUi();
+    }
+  }
+
+  function workbenchCardForEvent(event) {
+    if (event.button === 0 && (event.ctrlKey || event.metaKey)) {
+      return workbench.cards[0];
+    }
+    if (event.button === 2 && (event.ctrlKey || event.metaKey)) {
+      return workbench.cards[1];
+    }
+    if (event.button === 0 && event.altKey) {
+      return workbench.cards[2];
+    }
+    if (event.button === 2 && event.altKey) {
+      return workbench.cards[3];
+    }
+    return null;
+  }
+
+  function workbenchImageAtPoint(x, y, event) {
+    let target = null;
+    if (typeof document.elementFromPoint === "function") {
+      target = document.elementFromPoint(x, y);
+    }
+    if (!target && event) {
+      target = event.target;
+    }
+    if (!target || typeof target.closest !== "function") {
+      return "";
+    }
+    const card = target.closest(".image-card");
+    if (!card || !results.contains(card)) {
+      return "";
+    }
+    return card.dataset.imageId || "";
+  }
+
+  function markWorkbenchClickSuppressed() {
+    suppressSelectionClick = true;
+    window.clearTimeout(suppressSelectionClickTimer);
+    suppressSelectionClickTimer = window.setTimeout(() => {
+      suppressSelectionClick = false;
+    }, 0);
+  }
+
+  function paintWorkbenchAtPoint(x, y) {
+    if (!workbenchDrag.active || !workbenchDrag.card) {
+      return;
+    }
+    const imageId = workbenchImageAtPoint(x, y);
+    if (imageId) {
+      addWorkbenchMembership(workbenchDrag.card, imageId);
+    }
+  }
+
+  function tickWorkbenchAutoScroll() {
+    workbenchDrag.scrollFrame = 0;
+    if (!workbenchDrag.active || !workbenchDrag.scrollSpeed) {
+      return;
+    }
+    window.scrollBy(0, workbenchDrag.scrollSpeed);
+    paintWorkbenchAtPoint(workbenchDrag.lastX, workbenchDrag.lastY);
+    workbenchDrag.scrollFrame =
+      window.requestAnimationFrame(tickWorkbenchAutoScroll);
+  }
+
+  function updateWorkbenchAutoScroll(y) {
+    if (!workbenchDrag.active) {
+      return;
+    }
+    const margin = 72;
+    let speed = 0;
+    if (y < margin) {
+      speed = -Math.ceil((margin - y) / 4);
+    } else if (y > window.innerHeight - margin) {
+      speed = Math.ceil((y - (window.innerHeight - margin)) / 4);
+    }
+    speed = Math.max(-45, Math.min(45, speed));
+    workbenchDrag.scrollSpeed = speed;
+    if (speed && !workbenchDrag.scrollFrame) {
+      workbenchDrag.scrollFrame =
+        window.requestAnimationFrame(tickWorkbenchAutoScroll);
+    } else if (!speed && workbenchDrag.scrollFrame) {
+      window.cancelAnimationFrame(workbenchDrag.scrollFrame);
+      workbenchDrag.scrollFrame = 0;
+    }
+  }
+
+  function finishWorkbenchDrag(toggle) {
+    if (!workbenchDrag.active) {
+      return;
+    }
+    if (workbenchDrag.scrollFrame) {
+      window.cancelAnimationFrame(workbenchDrag.scrollFrame);
+    }
+    const card = workbenchDrag.card;
+    const imageId = workbenchDrag.imageId;
+    const moved = workbenchDrag.moved;
+    workbenchDrag.active = false;
+    workbenchDrag.pointerId = null;
+    workbenchDrag.card = null;
+    workbenchDrag.imageId = "";
+    workbenchDrag.moved = false;
+    workbenchDrag.scrollSpeed = 0;
+    workbenchDrag.scrollFrame = 0;
+    document.body.classList.remove("workbench-dragging");
+    if (toggle && !moved) {
+      toggleWorkbenchMembership(card, imageId);
+    }
+    markWorkbenchClickSuppressed();
+  }
+
+  function beginWorkbenchDrag(event) {
+    if (
+      !workbench.open ||
+      workbench.applying ||
+      event.pointerType === "touch"
+    ) {
+      return;
+    }
+    const card = workbenchCardForEvent(event);
+    if (!card) {
+      return;
+    }
+    const imageId = workbenchImageAtPoint(
+      event.clientX,
+      event.clientY,
+      event,
+    );
+    if (!imageId) {
+      return;
+    }
+    event.preventDefault();
+    finishWorkbenchDrag(false);
+    workbenchDrag.active = true;
+    workbenchDrag.pointerId =
+      typeof event.pointerId === "number" ? event.pointerId : null;
+    workbenchDrag.card = card;
+    workbenchDrag.imageId = imageId;
+    workbenchDrag.startX = event.clientX;
+    workbenchDrag.startY = event.clientY;
+    workbenchDrag.lastX = event.clientX;
+    workbenchDrag.lastY = event.clientY;
+    workbenchDrag.moved = false;
+    exitHoverPreview();
+  }
+
+  function moveWorkbenchDrag(event) {
+    if (
+      !workbenchDrag.active ||
+      (workbenchDrag.pointerId !== null &&
+        event.pointerId !== workbenchDrag.pointerId)
+    ) {
+      return;
+    }
+    workbenchDrag.lastX = event.clientX;
+    workbenchDrag.lastY = event.clientY;
+    if (!workbenchDrag.moved) {
+      const distance =
+        Math.abs(event.clientX - workbenchDrag.startX) +
+        Math.abs(event.clientY - workbenchDrag.startY);
+      if (distance < 4) {
+        return;
+      }
+      workbenchDrag.moved = true;
+      document.body.classList.add("workbench-dragging");
+      addWorkbenchMembership(workbenchDrag.card, workbenchDrag.imageId);
+    }
+    event.preventDefault();
+    paintWorkbenchAtPoint(event.clientX, event.clientY);
+    updateWorkbenchAutoScroll(event.clientY);
+  }
+
+  function endWorkbenchDrag(event) {
+    if (
+      !workbenchDrag.active ||
+      (workbenchDrag.pointerId !== null &&
+        event.pointerId !== workbenchDrag.pointerId)
+    ) {
+      return;
+    }
+    finishWorkbenchDrag(true);
+  }
+
+  function cancelWorkbenchDrag(event) {
+    if (
+      !workbenchDrag.active ||
+      (workbenchDrag.pointerId !== null &&
+        event.pointerId !== workbenchDrag.pointerId)
+    ) {
+      return;
+    }
+    finishWorkbenchDrag(false);
+    markWorkbenchClickSuppressed();
+  }
+
+  async function applyWorkbench() {
+    if (workbench.applying || !workbenchHasStagedTags()) {
+      return;
+    }
+    workbench.applying = true;
+    workbenchStatus.textContent = "";
+    workbenchStatus.hidden = true;
+    workbenchStatus.classList.remove("error");
+    for (const card of workbench.cards) {
+      setWorkbenchCardError(card, "");
+    }
+    updateWorkbenchUi();
+
+    const summary = [];
+    let failed = false;
+    for (const card of workbench.cards) {
+      if (
+        card.images.size === 0 ||
+        (card.additions.length === 0 && card.removals.length === 0)
+      ) {
+        continue;
+      }
+      const imageIds = [...card.images];
+      const additions = card.additions.map((tag) => ({ ...tag }));
+      const removeIds = card.removals.map((tag) => tag.id);
+      try {
+        await requestGraphQl(UPDATE_IMAGES_MUTATION, {
+          input: {
+            imageIds,
+            addTagIds: additions.map((tag) => tag.id),
+            removeTagIds: removeIds,
+          },
+        });
+        applySelectionTagChangesLocally(imageIds, additions, removeIds);
+        card.images.clear();
+        card.additions.length = 0;
+        card.removals.length = 0;
+        setWorkbenchCardError(card, "");
+        syncWorkbenchCard(card);
+        summary.push(`卡片 ${card.index} 成功（${imageIds.length} 张）`);
+      } catch (error) {
+        failed = true;
+        const message =
+          error && error.message ? error.message : "应用失败";
+        setWorkbenchCardError(card, message);
+        syncWorkbenchCard(card);
+        summary.push(`卡片 ${card.index} 失败：${message}`);
+      }
+    }
+
+    workbench.applying = false;
+    if (includeTags.length > 0 || excludeTags.length > 0) {
+      search(true);
+    }
+    syncAllWorkbenchImages();
+    updateWorkbenchUi();
+    if (summary.length > 0) {
+      workbenchStatus.textContent = `${summary.join("；")}。`;
+      workbenchStatus.hidden = false;
+      workbenchStatus.classList.toggle("error", failed);
+    }
+  }
+
+  function suppressWorkbenchContextMenu(event) {
+    if (!workbench.open) {
+      return;
+    }
+    const target = event.target;
+    if (!target || typeof target.closest !== "function") {
+      return;
+    }
+    const card = target.closest(".image-card");
+    if (card && results.contains(card)) {
+      event.preventDefault();
+    }
+  }
+
+  function bindWorkbenchUi() {
+    initWorkbenchCards();
+    workbenchHandle.addEventListener("click", () => {
+      if (workbench.open) {
+        closeWorkbench();
+      } else {
+        openWorkbench();
+      }
+    });
+    workbenchClose.addEventListener("click", () => closeWorkbench());
+    workbenchApply.addEventListener("click", () => applyWorkbench());
+    if (workbenchDotSize) {
+      workbenchDotSize.addEventListener("input", syncWorkbenchDotSize);
+    }
+    syncWorkbenchDotSize();
+
+    for (const card of workbench.cards) {
+      if (!card.elements) {
+        continue;
+      }
+      card.elements.add.addEventListener("click", () =>
+        toggleWorkbenchSearch(card),
+      );
+    }
+
+    results.addEventListener("pointerdown", beginWorkbenchDrag);
+    results.addEventListener("contextmenu", suppressWorkbenchContextMenu);
+    document.addEventListener("pointermove", moveWorkbenchDrag, {
+      passive: false,
+    });
+    document.addEventListener("pointerup", endWorkbenchDrag);
+    document.addEventListener("pointercancel", cancelWorkbenchDrag);
+    window.addEventListener("blur", () => finishWorkbenchDrag(false));
+    updateWorkbenchUi();
+  }
+
   // ---------- 事件绑定与启动 ----------
 
   const tagSuggestWidget = createTagSearch({
@@ -3161,6 +3887,7 @@ import { createTagSearch } from "/tag-search.js";
   });
   bindTagTreeUi();
   bindSelectionUi();
+  bindWorkbenchUi();
   updateTagEditButton();
 
   window.addEventListener(
