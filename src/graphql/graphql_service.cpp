@@ -199,6 +199,20 @@ std::vector<std::string> id_list(const std::vector<IdType> &ids) {
   return output;
 }
 
+// UUID 文本比较忽略大小写；默认排除 ID 来自数据库，前端可能传大写。
+bool same_uuid(std::string_view left, std::string_view right) {
+  if (left.size() != right.size()) {
+    return false;
+  }
+  for (std::size_t index = 0; index < left.size(); ++index) {
+    if (std::tolower(static_cast<unsigned char>(left[index])) !=
+        std::tolower(static_cast<unsigned char>(right[index]))) {
+      return false;
+    }
+  }
+  return true;
+}
+
 AddRequest to_add_request(gql::tagimg::AddArtworkInput input) {
   AddRequest request;
   request.entity_ids = id_list(input.entityIds);
@@ -908,9 +922,11 @@ class Root {
 public:
   Root(std::shared_ptr<ServiceRuntime> runtime,
        std::shared_ptr<const TagimgRepository> repository,
-       std::shared_ptr<ClipEmbedder> clip_embedder)
+       std::shared_ptr<ClipEmbedder> clip_embedder,
+       std::vector<std::string> default_excluded_tag_ids)
       : runtime_(std::move(runtime)), repository_(std::move(repository)),
-        clip_embedder_(std::move(clip_embedder)) {
+        clip_embedder_(std::move(clip_embedder)),
+        default_excluded_tag_ids_(std::move(default_excluded_tag_ids)) {
     if (!runtime_ || !repository_ || !clip_embedder_) {
       throw std::invalid_argument(
           "Root requires ServiceRuntime, repository and ClipEmbedder");
@@ -1042,6 +1058,10 @@ public:
         query.expand_exclude_tag_descendants =
             *filter->expandExcludeTagDescendants;
       }
+    }
+
+    if (query.entity_ids.empty()) {
+      apply_default_exclusions(query.include_tag_ids, query.exclude_tag_ids);
     }
 
     const auto order_field =
@@ -1181,6 +1201,10 @@ public:
         query.expand_exclude_tag_descendants =
             *filter->expandExcludeTagDescendants;
       }
+    }
+
+    if (query.entity_ids.empty() && query.image_ids.empty()) {
+      apply_default_exclusions(query.include_tag_ids, query.exclude_tag_ids);
     }
 
     std::optional<std::string> reference_id;
@@ -1784,9 +1808,35 @@ public:
   }
 
 private:
+  // 默认排除只作用于浏览/搜索；按 ID 精确获取的查询应跳过。
+  // 只有默认标签被显式精确 include 时才不排除；子标签不覆盖父标签。
+  void apply_default_exclusions(
+      const std::vector<std::string> &include_tag_ids,
+      std::vector<std::string> &exclude_tag_ids) const {
+    for (const std::string &default_id : default_excluded_tag_ids_) {
+      const bool explicitly_included =
+          std::any_of(include_tag_ids.begin(), include_tag_ids.end(),
+                      [&default_id](const std::string &id) {
+                        return same_uuid(id, default_id);
+                      });
+      if (explicitly_included) {
+        continue;
+      }
+      const bool already_excluded =
+          std::any_of(exclude_tag_ids.begin(), exclude_tag_ids.end(),
+                      [&default_id](const std::string &id) {
+                        return same_uuid(id, default_id);
+                      });
+      if (!already_excluded) {
+        exclude_tag_ids.push_back(default_id);
+      }
+    }
+  }
+
   std::shared_ptr<ServiceRuntime> runtime_;
   std::shared_ptr<const TagimgRepository> repository_;
   std::shared_ptr<ClipEmbedder> clip_embedder_;
+  std::vector<std::string> default_excluded_tag_ids_;
 };
 
 Value make_map(MapType fields) {
@@ -1923,7 +1973,8 @@ struct GraphQLService::Impl
   Impl(std::shared_ptr<ServiceRuntime> runtime_ref,
        std::shared_ptr<const TagimgRepository> repository_ref,
        std::shared_ptr<ClipEmbedder> embedder_ref,
-       std::shared_ptr<ConnectionRegistry> registry_ref)
+       std::shared_ptr<ConnectionRegistry> registry_ref,
+       std::vector<std::string> default_excluded_tag_ids)
       : runtime(std::move(runtime_ref)), repository(std::move(repository_ref)),
         clip_embedder(std::move(embedder_ref)),
         registry(std::move(registry_ref)) {
@@ -1932,7 +1983,21 @@ struct GraphQLService::Impl
           "GraphQLService requires a ServiceRuntime, a repository and a "
           "ClipEmbedder");
     }
-    root = std::make_shared<Root>(runtime, repository, clip_embedder);
+    // 启动时解析出的 ID 已经唯一，这里再做一次大小写归一化并去重，
+    // 保证与前端的 include 列表比较时不受大小写影响。
+    std::vector<std::string> normalized;
+    normalized.reserve(default_excluded_tag_ids.size());
+    for (std::string &id : default_excluded_tag_ids) {
+      std::transform(id.begin(), id.end(), id.begin(), [](unsigned char byte) {
+        return static_cast<char>(std::tolower(byte));
+      });
+      if (std::find(normalized.begin(), normalized.end(), id) ==
+          normalized.end()) {
+        normalized.push_back(std::move(id));
+      }
+    }
+    root = std::make_shared<Root>(runtime, repository, clip_embedder,
+                                  std::move(normalized));
     query = std::make_shared<gql::tagimg::object::Query>(root);
     mutation = std::make_shared<gql::tagimg::object::Mutation>(root);
     operations = std::make_shared<gql::tagimg::Operations>(query, mutation);
@@ -2149,11 +2214,12 @@ GraphQLService::GraphQLService(
     std::shared_ptr<ServiceRuntime> runtime,
     std::shared_ptr<const TagimgRepository> tagimg_repository,
     std::shared_ptr<ClipEmbedder> clip_embedder,
-    std::shared_ptr<ConnectionRegistry> connection_registry)
-    : impl_(std::make_shared<Impl>(std::move(runtime),
-                                   std::move(tagimg_repository),
-                                   std::move(clip_embedder),
-                                   std::move(connection_registry))) {
+    std::shared_ptr<ConnectionRegistry> connection_registry,
+    std::vector<std::string> default_excluded_tag_ids)
+    : impl_(std::make_shared<Impl>(
+          std::move(runtime), std::move(tagimg_repository),
+          std::move(clip_embedder), std::move(connection_registry),
+          std::move(default_excluded_tag_ids))) {
 }
 
 GraphQLService::~GraphQLService() = default;

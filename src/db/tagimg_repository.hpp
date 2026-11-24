@@ -176,6 +176,20 @@ struct TagMatch {
   std::string path;
 };
 
+// 按完整路径解析标签的结果。
+enum class TagPathLookupStatus {
+  Found,
+  NotFound,
+  // 历史脏数据导致同一路径命中多个标签。
+  Ambiguous,
+};
+
+struct TagPathLookupResult {
+  TagPathLookupStatus status = TagPathLookupStatus::NotFound;
+  // 仅 status == Found 时有效。
+  std::string tag_id;
+};
+
 // 创建标签的条件。
 struct TagCreateInput {
   // 标准名，trim 后 1 到 255 个字符。
@@ -518,6 +532,11 @@ public:
   // 按标准名或别名搜索标签，用于输入联想。
   [[nodiscard]] Result<std::vector<TagMatch>, TagimgRepositoryError>
   search_tags(const TagSearchQuery &query) const;
+
+  // 按完整标准名路径精确查找标签；路径用 :: 连接，区分大小写。
+  // 路径不存在返回 NotFound；历史脏数据导致命中多个返回 Ambiguous。
+  [[nodiscard]] Result<TagPathLookupResult, TagimgRepositoryError>
+  find_tag_by_path(std::string_view path) const;
 
   // 按父标签列出直接子标签；parent_id 为空表示列出所有顶层标签。
   [[nodiscard]] Result<std::vector<ArtworkTagInfo>, TagimgRepositoryError>

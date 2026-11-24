@@ -46,6 +46,25 @@ WHERE n.type = 'standard'
 LIMIT 1
 )sql";
 
+// 按完整路径解析标签时使用：不加 LIMIT，便于发现历史脏数据里的重名。
+constexpr const char *kFindRootTagByExactNameSql = R"sql(
+SELECT t.id::text
+FROM tags t
+JOIN tag_name n ON n.tag_id = t.id
+WHERE n.type = 'standard'
+  AND n.name = :name
+  AND t.parent_id IS NULL
+)sql";
+
+constexpr const char *kFindChildTagByExactNameSql = R"sql(
+SELECT t.id::text
+FROM tags t
+JOIN tag_name n ON n.tag_id = t.id
+WHERE n.type = 'standard'
+  AND n.name = :name
+  AND t.parent_id = :parent_id
+)sql";
+
 constexpr const char *kCountImageSql = R"sql(
 SELECT count(*)
 FROM images
@@ -648,6 +667,28 @@ std::string ascii_lower(std::string_view text) {
     lowered.push_back(static_cast<char>(std::tolower(c)));
   }
   return lowered;
+}
+
+// 标签名不允许包含 ::，因此可以安全地按 :: 切分完整路径。
+std::optional<std::vector<std::string>>
+split_tag_path(std::string_view path) {
+  std::vector<std::string> segments;
+  std::size_t start = 0;
+  for (;;) {
+    const std::size_t end = path.find("::", start);
+    const std::string_view segment =
+        path.substr(start, end == std::string_view::npos
+                               ? std::string_view::npos
+                               : end - start);
+    if (segment.empty()) {
+      return std::nullopt;
+    }
+    segments.emplace_back(segment);
+    if (end == std::string_view::npos) {
+      return segments;
+    }
+    start = end + 2;
+  }
 }
 
 bool has_control_char(std::string_view text) {
@@ -2397,6 +2438,54 @@ ORDER BY c.rn)sql";
       }
     }
     return matches;
+  } catch (const std::exception &) {
+    return TagimgRepositoryError::QueryFailed;
+  }
+}
+
+Result<TagPathLookupResult, TagimgRepositoryError>
+TagimgRepository::find_tag_by_path(std::string_view path) const {
+  const auto segments = split_tag_path(path);
+  if (!segments || segments->empty()) {
+    return TagimgRepositoryError::InvalidArgument;
+  }
+  if (!impl_ || !impl_->pool) {
+    return TagimgRepositoryError::ConnectionFailed;
+  }
+
+  try {
+    db_detail::PoolLease lease(*impl_->pool);
+    soci::session &sql = impl_->pool->at(lease.position());
+
+    std::string parent_id;
+    for (std::size_t index = 0; index < segments->size(); ++index) {
+      std::vector<std::string> matches;
+      if (index == 0) {
+        soci::rowset<soci::row> rows =
+            (sql.prepare << kFindRootTagByExactNameSql,
+             soci::use((*segments)[index]));
+        for (const soci::row &row : rows) {
+          matches.push_back(row.get<std::string>(0));
+        }
+      } else {
+        soci::rowset<soci::row> rows =
+            (sql.prepare << kFindChildTagByExactNameSql,
+             soci::use((*segments)[index]), soci::use(parent_id));
+        for (const soci::row &row : rows) {
+          matches.push_back(row.get<std::string>(0));
+        }
+      }
+      if (matches.empty()) {
+        return TagPathLookupResult{TagPathLookupStatus::NotFound, {}};
+      }
+      if (matches.size() > 1) {
+        return TagPathLookupResult{TagPathLookupStatus::Ambiguous, {}};
+      }
+      parent_id = std::move(matches.front());
+    }
+
+    return TagPathLookupResult{TagPathLookupStatus::Found,
+                               std::move(parent_id)};
   } catch (const std::exception &) {
     return TagimgRepositoryError::QueryFailed;
   }

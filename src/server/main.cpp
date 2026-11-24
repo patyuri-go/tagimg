@@ -1,9 +1,11 @@
+#include <algorithm>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
 #include <memory>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include <drogon/drogon.h>
 
@@ -96,6 +98,48 @@ int main() {
     std::cerr << "tagimg database error: "
               << tagimg::to_string(tagimg_repository.error()) << '\n';
     return 2;
+  }
+
+  // 默认排除标签在启动时解析成 ID；之后改名/移动仍排除同一标签。
+  // 路径不存在或命中多个时只警告并跳过，不阻止服务启动。
+  std::vector<std::string> default_excluded_tag_ids;
+  for (const std::string &path : config->search.default_excluded_tag_paths) {
+    const auto lookup = (*tagimg_repository)->find_tag_by_path(path);
+    if (!lookup) {
+      std::cerr << "default excluded tag lookup failed for \"" << path
+                << "\": " << tagimg::to_string(lookup.error()) << '\n';
+      return 2;
+    }
+    switch (lookup->status) {
+    case tagimg::TagPathLookupStatus::Found:
+      std::cout << "default excluded tag: " << path << " -> "
+                << lookup->tag_id << '\n';
+      default_excluded_tag_ids.push_back(lookup->tag_id);
+      break;
+    case tagimg::TagPathLookupStatus::NotFound:
+      std::cerr << "warning: default excluded tag not found: " << path
+                << '\n';
+      break;
+    case tagimg::TagPathLookupStatus::Ambiguous:
+      std::cerr << "warning: default excluded tag path is ambiguous: " << path
+                << '\n';
+      break;
+    }
+  }
+  // 配置里可能重复写同一路径；按 ID 去重，保持首次出现的顺序。
+  std::vector<std::string> unique_default_excluded_tag_ids;
+  unique_default_excluded_tag_ids.reserve(default_excluded_tag_ids.size());
+  for (const std::string &id : default_excluded_tag_ids) {
+    if (std::find(unique_default_excluded_tag_ids.begin(),
+                  unique_default_excluded_tag_ids.end(),
+                  id) == unique_default_excluded_tag_ids.end()) {
+      unique_default_excluded_tag_ids.push_back(id);
+    }
+  }
+  default_excluded_tag_ids = std::move(unique_default_excluded_tag_ids);
+  if (!default_excluded_tag_ids.empty()) {
+    std::cout << "default excluded tags enabled: "
+              << default_excluded_tag_ids.size() << " tag(s)" << '\n';
   }
 
   // sidecar 必须声明在 service 之前：析构顺序相反，先停 worker 再杀 Python。
@@ -211,7 +255,8 @@ int main() {
 
   auto service = std::make_shared<tagimg::ApiService>(runtime);
   auto graphql_service = std::make_shared<tagimg::GraphQLService>(
-      runtime, tagimg_repository_shared, embedder, connection_registry);
+      runtime, tagimg_repository_shared, embedder, connection_registry,
+      default_excluded_tag_ids);
 
   drogon::app().registerHandler(
       "/api/v1",

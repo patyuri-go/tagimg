@@ -26,6 +26,44 @@ bool read_required_string(const Json &object, const char *key,
   return allow_empty || !output.empty();
 }
 
+std::string trim_ascii(std::string_view text) {
+  while (!text.empty() &&
+         std::isspace(static_cast<unsigned char>(text.front())) != 0) {
+    text.remove_prefix(1);
+  }
+  while (!text.empty() &&
+         std::isspace(static_cast<unsigned char>(text.back())) != 0) {
+    text.remove_suffix(1);
+  }
+  return std::string(text);
+}
+
+// 标签路径由标准名用 :: 连接；名称本身不允许包含 ::，所以空段一定是配置
+// 错误。完整路径可以只有一段（根本身）。
+bool valid_tag_path(std::string_view path) {
+  if (path.empty()) {
+    return false;
+  }
+  std::size_t start = 0;
+  for (;;) {
+    const std::size_t end = path.find("::", start);
+    const std::string_view segment =
+        path.substr(start, end == std::string_view::npos
+                               ? std::string_view::npos
+                               : end - start);
+    if (segment.empty()) {
+      return false;
+    }
+    if (end == std::string_view::npos) {
+      return true;
+    }
+    start = end + 2;
+    if (start == path.size()) {
+      return false;
+    }
+  }
+}
+
 // 解析 "2G" / "512MB" / 1024 这类容量写法。K/M/G/T 均按 1024 进制。
 std::optional<std::uint64_t> parse_readable_size(std::string_view text) {
   while (!text.empty() &&
@@ -557,6 +595,31 @@ Result<AppConfig, ConfigError> load_config(const std::filesystem::path &path) {
         base = std::filesystem::path(".");
       }
       config.cache.directory = base / config.cache.directory;
+    }
+  }
+
+  // search 段可省略；省略或空数组表示不启用默认排除。
+  const auto search = root.find("search");
+  if (search != root.end()) {
+    if (!search->is_object()) {
+      return ConfigError::InvalidField;
+    }
+    const auto paths = search->find("defaultExcludedTagPaths");
+    if (paths != search->end()) {
+      if (!paths->is_array()) {
+        return ConfigError::InvalidField;
+      }
+      for (const auto &entry : *paths) {
+        if (!entry.is_string()) {
+          return ConfigError::InvalidField;
+        }
+        std::string tag_path = trim_ascii(entry.get<std::string>());
+        if (!valid_tag_path(tag_path)) {
+          return ConfigError::InvalidField;
+        }
+        config.search.default_excluded_tag_paths.push_back(
+            std::move(tag_path));
+      }
     }
   }
 

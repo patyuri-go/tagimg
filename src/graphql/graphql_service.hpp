@@ -2,6 +2,8 @@
 
 #include <functional>
 #include <memory>
+#include <string>
+#include <vector>
 
 #include <drogon/HttpRequest.h>
 #include <drogon/HttpResponse.h>
@@ -25,7 +27,8 @@ public:
   GraphQLService(std::shared_ptr<ServiceRuntime> runtime,
                  std::shared_ptr<const TagimgRepository> tagimg_repository,
                  std::shared_ptr<ClipEmbedder> clip_embedder,
-                 std::shared_ptr<ConnectionRegistry> connection_registry = {});
+                 std::shared_ptr<ConnectionRegistry> connection_registry = {},
+                 std::vector<std::string> default_excluded_tag_ids = {});
 
   ~GraphQLService();
 

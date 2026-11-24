@@ -5,6 +5,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "common/result.hpp"
 #include "common/storage.hpp"
@@ -101,6 +102,13 @@ struct AiConfig {
   std::uint32_t clip_startup_timeout_seconds = 180;
 };
 
+// 搜索策略配置。search 段可以省略。
+struct SearchConfig {
+  // 默认排除的标签完整路径，使用标准名并以 :: 连接。
+  // 启动时解析成标签 ID；空数组表示不启用。
+  std::vector<std::string> default_excluded_tag_paths;
+};
+
 struct AppConfig {
   DatabaseConfig database;
   // 外部存储服务地址；图片内容与扫描下载都走这里。
@@ -111,6 +119,8 @@ struct AppConfig {
   ImageCacheConfig cache;
   // ai 段可以省略，省略时使用上面的默认参数。
   AiConfig ai;
+  // search 段可以省略，省略时不启用默认排除。
+  SearchConfig search;
 };
 
 enum class ConfigError {
