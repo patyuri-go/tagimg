@@ -1,4 +1,5 @@
 import { ImageLightbox } from "/lightbox.js";
+import { createTagSearch } from "/tag-search.js";
 
 (function () {
   "use strict";
@@ -118,11 +119,13 @@ import { ImageLightbox } from "/lightbox.js";
   let imageDetailsById = new Map();
   let imageDetailsToken = 0;
 
-  const tagSuggestWidget = TagSearch.create({
+  const tagSuggestWidget = createTagSearch({
     input: editTagInput,
     list: editTagSuggest,
     idPrefix: "edit-tag",
-    onEnter: () => addEditTag(),
+    onAdd: addEditTag,
+    onRemove: removeEditTag,
+    onError: (message) => setStatus(message, "error"),
   });
 
   function setStatus(text, kind) {
@@ -811,31 +814,11 @@ import { ImageLightbox } from "/lightbox.js";
     }
   }
 
-  // 回车：把输入框里的完整路径加入新增列表，或取消已有标签的删除标记。
-  async function addEditTag() {
-    const normalized = TagSearch.trimPathSuffix(editTagInput.value);
-    if (normalized === "") {
-      return;
+  // 回车：加入待添加列表，或取消已有标签的删除标记。
+  function addEditTag(tag) {
+    if (!tag || !tag.id) {
+      return false;
     }
-
-    const chosen = tagSuggestWidget.getChosen();
-    let tag = null;
-    if (chosen && normalized === chosen.path) {
-      tag = chosen;
-    } else {
-      try {
-        tag = await TagSearch.resolveTagPath(normalized, null);
-      } catch (error) {
-        setStatus(error.message || "标签解析失败", "error");
-        return;
-      }
-    }
-
-    if (!tag) {
-      setStatus(`找不到标签路径：${normalized}`, "error");
-      return;
-    }
-
     const existing =
       currentArtwork && Array.isArray(currentArtwork.tags)
         ? currentArtwork.tags.find((item) => item.id === tag.id)
@@ -849,15 +832,34 @@ import { ImageLightbox } from "/lightbox.js";
 
     setStatus("");
     renderTags();
-    // 保留完整路径并补上 ::，方便继续在它下面补全。
-    editTagInput.value = `${tag.path}::`;
-    tagSuggestWidget.clearChosen();
-    tagSuggestWidget.close();
-    editTagInput.focus();
-    editTagInput.setSelectionRange(
-      editTagInput.value.length,
-      editTagInput.value.length,
+    return true;
+  }
+
+  // Shift+回车：移除待添加标签，或给已有标签打上删除标记。
+  function removeEditTag(tag) {
+    if (!tag || !tag.id) {
+      return false;
+    }
+    const pendingIndex = pendingAdditions.findIndex(
+      (item) => item.id === tag.id,
     );
+    if (pendingIndex >= 0) {
+      pendingAdditions.splice(pendingIndex, 1);
+      setStatus("");
+      renderTags();
+      return true;
+    }
+
+    const existing =
+      currentArtwork && Array.isArray(currentArtwork.tags)
+        ? currentArtwork.tags.find((item) => item.id === tag.id)
+        : null;
+    if (existing) {
+      pendingRemovals.add(tag.id);
+      setStatus("");
+      renderTags();
+    }
+    return true;
   }
 
   async function saveEdits() {

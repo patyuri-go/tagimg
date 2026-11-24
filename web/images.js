@@ -1,4 +1,5 @@
 import { ImageLightbox } from "/lightbox.js";
+import { createTagSearch } from "/tag-search.js";
 
 (() => {
   "use strict";
@@ -485,38 +486,6 @@ import { ImageLightbox } from "/lightbox.js";
     syncStateToUrl();
     search(true);
   });
-
-  async function addTagFromInput(kind) {
-    const normalized = TagSearch.trimPathSuffix(tagInput.value);
-    if (normalized === "") {
-      return;
-    }
-
-    const chosen = tagSuggestWidget.getChosen();
-    let tag = null;
-    if (chosen && normalized === chosen.path) {
-      tag = chosen;
-    } else {
-      try {
-        tag = await TagSearch.resolveTagPath(normalized, null);
-      } catch (error) {
-        setStatus(error.message || "标签解析失败", "error");
-        return;
-      }
-    }
-
-    if (!tag) {
-      setStatus(`找不到标签路径：${normalized}`, "error");
-      return;
-    }
-
-    tagInput.value = `${tag.path}::`;
-    tagSuggestWidget.clearChosen();
-    tagSuggestWidget.close();
-    tagInput.focus();
-    tagInput.setSelectionRange(tagInput.value.length, tagInput.value.length);
-    addStageTag(tag, kind);
-  }
 
   async function requestGraphQl(query, variables, signal) {
     const response = await fetch("/graphql", {
@@ -1272,11 +1241,11 @@ import { ImageLightbox } from "/lightbox.js";
 
   function chooseTagEditorParent(tag) {
     if (!tag) {
-      return;
+      return false;
     }
     if (isTagEditorSelfOrDescendant(tag.path)) {
       showTagEditorError("不能把标签移动到自身或自己的后代下");
-      return;
+      return false;
     }
     tagEditorParentId = tag.id;
     tagEditorParentNode =
@@ -1297,6 +1266,7 @@ import { ImageLightbox } from "/lightbox.js";
     }
     clearTagEditorError();
     renderTagEditor();
+    return true;
   }
 
   function openTagEditorParentSearch() {
@@ -1310,23 +1280,6 @@ import { ImageLightbox } from "/lightbox.js";
       tagEditorParentSuggestWidget.close();
     }
     tagEditorParentInput.focus();
-  }
-
-  async function commitTagEditorParentInput() {
-    const normalized = TagSearch.trimPathSuffix(tagEditorParentInput.value);
-    if (!normalized) {
-      return;
-    }
-    try {
-      const tag = await TagSearch.resolveTagPath(normalized, null);
-      if (!tag) {
-        showTagEditorError(`找不到标签路径：${normalized}`);
-        return;
-      }
-      chooseTagEditorParent(tag);
-    } catch (error) {
-      showTagEditorError(error.message || "标签解析失败");
-    }
   }
 
   function clearTagEditorParent() {
@@ -2089,7 +2042,7 @@ import { ImageLightbox } from "/lightbox.js";
 
   function addSelectionTag(tag) {
     if (!tag || !tag.id || selectionSaving) {
-      return;
+      return false;
     }
     clearSelectionError();
     const commonIds = new Set(getSelectionCommonTags().map((item) => item.id));
@@ -2106,37 +2059,32 @@ import { ImageLightbox } from "/lightbox.js";
     }
     renderSelectionTags();
     updateSelectionUi();
+    return true;
   }
 
-  async function addSelectionTagFromInput() {
-    const normalized = TagSearch.trimPathSuffix(selectionTagInput.value);
-    if (normalized === "") {
-      return;
+  // Shift+回车：移除待添加标签，或给公共标签打上删除标记。
+  function removeSelectionTag(tag) {
+    if (!tag || !tag.id || selectionSaving) {
+      return false;
     }
-    let tag = null;
-    try {
-      const chosen = selectionTagSuggestWidget
-        ? selectionTagSuggestWidget.getChosen()
-        : null;
-      tag =
-        chosen && normalized === chosen.path
-          ? chosen
-          : await TagSearch.resolveTagPath(normalized);
-    } catch (error) {
-      setSelectionError(error.message || "标签查询失败");
-      return;
+    clearSelectionError();
+    const pendingIndex = selectionPendingAdditions.findIndex(
+      (item) => item.id === tag.id,
+    );
+    if (pendingIndex >= 0) {
+      selectionPendingAdditions.splice(pendingIndex, 1);
+      renderSelectionTags();
+      updateSelectionUi();
+      return true;
     }
-    if (!tag || !tag.id) {
-      setSelectionError("未找到该标签");
-      return;
+
+    const commonIds = new Set(getSelectionCommonTags().map((item) => item.id));
+    if (commonIds.has(tag.id)) {
+      selectionPendingRemovals.add(tag.id);
+      renderSelectionTags();
+      updateSelectionUi();
     }
-    addSelectionTag(tag);
-    selectionTagInput.value = `${tag.path}::`;
-    selectionTagInput.focus();
-    if (selectionTagSuggestWidget) {
-      selectionTagSuggestWidget.clearChosen();
-      selectionTagSuggestWidget.close();
-    }
+    return true;
   }
 
   function applySelectionTagChangesLocally(imageIds, additions, removeIds) {
@@ -2364,18 +2312,13 @@ import { ImageLightbox } from "/lightbox.js";
     selectionSave.addEventListener("click", saveSelection);
     selectionTagInput.addEventListener("input", clearSelectionError);
 
-    selectionTagSuggestWidget = TagSearch.create({
+    selectionTagSuggestWidget = createTagSearch({
       input: selectionTagInput,
       list: selectionTagSuggest,
       idPrefix: "selection-tag",
-      onEnter: () => addSelectionTagFromInput(),
-      onChoose: (tag) => {
-        addSelectionTag(tag);
-        selectionTagInput.value = "";
-        selectionTagSuggestWidget.clearChosen();
-        selectionTagSuggestWidget.close();
-        selectionTagInput.focus();
-      },
+      onAdd: addSelectionTag,
+      onRemove: removeSelectionTag,
+      onError: setSelectionError,
     });
 
     results.addEventListener("pointerdown", beginSelectionDrag);
@@ -3155,13 +3098,14 @@ import { ImageLightbox } from "/lightbox.js";
       openTagEditorParentSearch,
     );
     tagEditorParentClear.addEventListener("click", clearTagEditorParent);
-    tagEditorParentSuggestWidget = TagSearch.create({
+    tagEditorParentSuggestWidget = createTagSearch({
       input: tagEditorParentInput,
       list: tagEditorParentSuggest,
       idPrefix: "tag-editor-parent",
       filterItem: (item) => !isTagEditorSelfOrDescendant(item.tagPath),
       onChoose: chooseTagEditorParent,
-      onEnter: () => commitTagEditorParentInput(),
+      onAdd: chooseTagEditorParent,
+      onError: showTagEditorError,
     });
 
     tagEditor.addEventListener("cancel", (event) => {
@@ -3199,12 +3143,19 @@ import { ImageLightbox } from "/lightbox.js";
 
   // ---------- 事件绑定与启动 ----------
 
-  const tagSuggestWidget = TagSearch.create({
+  const tagSuggestWidget = createTagSearch({
     input: tagInput,
     list: tagSuggest,
     idPrefix: "image-tag",
-    onEnter: () => addTagFromInput("include"),
-    onShiftEnter: () => addTagFromInput("exclude"),
+    onAdd: (tag) => {
+      addStageTag(tag, "include");
+      return true;
+    },
+    onRemove: (tag) => {
+      addStageTag(tag, "exclude");
+      return true;
+    },
+    onError: (message) => setStatus(message, "error"),
   });
   bindTagTreeUi();
   bindSelectionUi();

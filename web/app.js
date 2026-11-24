@@ -1,3 +1,5 @@
+import { createTagSearch } from "/tag-search.js";
+
 (() => {
   "use strict";
 
@@ -187,18 +189,33 @@
   };
 
   // 标签输入联想与路径解析统一放在 tag-search.js，主搜索框和弹窗各建一个实例。
-  const tagSuggestWidget = TagSearch.create({
+  const tagSuggestWidget = createTagSearch({
     input: tagInput,
     list: tagSuggest,
     idPrefix: "tag",
-    onEnter: () => addTagFromInput("include"),
-    onShiftEnter: () => addTagFromInput("exclude"),
+    onAdd: (tag) => {
+      addStageTag(tag, "include");
+      return true;
+    },
+    onRemove: (tag) => {
+      addStageTag(tag, "exclude");
+      return true;
+    },
+    onError: (message) => setStatus(message, "error"),
   });
-  const addTagSuggestWidget = TagSearch.create({
+  const addTagSuggestWidget = createTagSearch({
     input: addTagInput,
     list: addTagSuggest,
     idPrefix: "add-tag",
-    onEnter: () => addTagFromDialogInput(),
+    onAdd: (tag) => {
+      addTagToDialog(tag);
+      return true;
+    },
+    onRemove: (tag) => {
+      removeTagFromDialog(tag);
+      return true;
+    },
+    onError: (message) => showAddError(message),
   });
 
   // 暂存区，元素为 { id, name, path }。
@@ -234,45 +251,27 @@
     addTagStage.hidden = addTags.length === 0;
   }
 
-  async function addTagFromDialogInput() {
-    const normalized = TagSearch.trimPathSuffix(addTagInput.value);
-    if (normalized === "") {
+  function addTagToDialog(tag) {
+    if (!tag || !tag.id) {
       return;
     }
     showAddError("");
-
-    const chosen = addTagSuggestWidget.getChosen();
-    let tag = null;
-    if (chosen && normalized === chosen.path) {
-      tag = chosen;
-    } else {
-      try {
-        tag = await TagSearch.resolveTagPath(normalized, null);
-      } catch (error) {
-        showAddError(error.message || "标签解析失败");
-        return;
-      }
-    }
-
-    if (!tag) {
-      showAddError(`找不到标签路径：${normalized}`);
-      return;
-    }
-
     if (!addTags.some((item) => item.id === tag.id)) {
       addTags.push({ id: tag.id, name: tag.name, path: tag.path });
     }
     renderAddTags();
+  }
 
-    // 与主搜索框一致：保留完整路径并补上 ::，方便继续补全。
-    addTagInput.value = `${tag.path}::`;
-    addTagSuggestWidget.clearChosen();
-    addTagSuggestWidget.close();
-    addTagInput.focus();
-    addTagInput.setSelectionRange(
-      addTagInput.value.length,
-      addTagInput.value.length,
-    );
+  function removeTagFromDialog(tag) {
+    if (!tag || !tag.id) {
+      return;
+    }
+    const index = addTags.findIndex((item) => item.id === tag.id);
+    if (index >= 0) {
+      addTags.splice(index, 1);
+      renderAddTags();
+    }
+    showAddError("");
   }
 
   // 暂存区：只显示标签名，点击移除；包含与不包含互斥，后加覆盖。
@@ -420,40 +419,6 @@
       ? `${window.location.pathname}?${query}`
       : window.location.pathname;
     window.history.replaceState(null, "", url);
-  }
-
-  // 回车：把输入框里的完整路径加入包含或排除暂存区。
-  async function addTagFromInput(kind) {
-    const normalized = TagSearch.trimPathSuffix(tagInput.value);
-    if (normalized === "") {
-      return;
-    }
-
-    const chosen = tagSuggestWidget.getChosen();
-    let tag = null;
-    if (chosen && normalized === chosen.path) {
-      tag = chosen;
-    } else {
-      try {
-        tag = await TagSearch.resolveTagPath(normalized, null);
-      } catch (error) {
-        setStatus(error.message || "标签解析失败", "error");
-        return;
-      }
-    }
-
-    if (!tag) {
-      setStatus(`找不到标签路径：${normalized}`, "error");
-      return;
-    }
-
-    // 保留完整路径并补上 ::，方便继续在它下面补全。
-    tagInput.value = `${tag.path}::`;
-    tagSuggestWidget.clearChosen();
-    tagSuggestWidget.close();
-    tagInput.focus();
-    tagInput.setSelectionRange(tagInput.value.length, tagInput.value.length);
-    addStageTag(tag, kind);
   }
 
   // 标题 + 暂存区标签共同组成作品过滤条件。

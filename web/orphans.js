@@ -1,3 +1,5 @@
+import { createTagSearch } from "/tag-search.js";
+
 (() => {
   "use strict";
 
@@ -86,11 +88,19 @@
 
   // 标签联想与暂存区。
   const tags = [];
-  const tagSuggestWidget = TagSearch.create({
+  const tagSuggestWidget = createTagSearch({
     input: tagInput,
     list: tagSuggest,
     idPrefix: "orphan-tag",
-    onEnter: () => addTagFromInput(),
+    onAdd: (tag) => {
+      addTagToDialog(tag);
+      return true;
+    },
+    onRemove: (tag) => {
+      removeTagFromDialog(tag);
+      return true;
+    },
+    onError: (message) => showAddError(message),
   });
 
   async function graphql(query, variables, signal) {
@@ -514,42 +524,27 @@
     tagStage.hidden = tags.length === 0;
   }
 
-  async function addTagFromInput() {
-    const normalized = TagSearch.trimPathSuffix(tagInput.value);
-    if (normalized === "") {
+  function addTagToDialog(tag) {
+    if (!tag || !tag.id) {
       return;
     }
     showAddError("");
-
-    const chosen = tagSuggestWidget.getChosen();
-    let tag = null;
-    if (chosen && normalized === chosen.path) {
-      tag = chosen;
-    } else {
-      try {
-        tag = await TagSearch.resolveTagPath(normalized, null);
-      } catch (error) {
-        showAddError(error.message || "标签解析失败");
-        return;
-      }
-    }
-
-    if (!tag) {
-      showAddError(`找不到标签路径：${normalized}`);
-      return;
-    }
-
     if (!tags.some((item) => item.id === tag.id)) {
       tags.push({ id: tag.id, name: tag.name, path: tag.path });
     }
     renderTags();
+  }
 
-    // 与主页一致：保留完整路径并补上 ::，方便继续往下补全。
-    tagInput.value = `${tag.path}::`;
-    tagSuggestWidget.clearChosen();
-    tagSuggestWidget.close();
-    tagInput.focus();
-    tagInput.setSelectionRange(tagInput.value.length, tagInput.value.length);
+  function removeTagFromDialog(tag) {
+    if (!tag || !tag.id) {
+      return;
+    }
+    const index = tags.findIndex((item) => item.id === tag.id);
+    if (index >= 0) {
+      tags.splice(index, 1);
+      renderTags();
+    }
+    showAddError("");
   }
 
   function showAddError(text) {
