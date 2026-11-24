@@ -447,7 +447,9 @@ import { createTagSearch } from "/tag-search.js";
       body: JSON.stringify({
         query: SEARCH_QUERY,
         variables: {
-          filter,
+          // 默认排除标签由后端注入；即使当前没有筛选条件，也要让后端
+          // 递归排除配置标签的整棵子树，而不是只排除标签本身。
+          filter: { ...(filter || {}), expandExcludeTagDescendants: true },
           limit: PAGE_SIZE,
           offset: fromOffset,
           // 未设置排序文本时传 null，交给 schema 的默认值 CREATED_AT。
